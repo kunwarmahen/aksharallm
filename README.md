@@ -117,6 +117,12 @@ aksharallm/
 │   └── infer/
 │       ├── generate.py   KV-cache sampling loop
 │       └── cli.py        interactive chat / completion
+├── scripts/
+│   ├── phase1.sh         Phase 1 end to end (data -> pretrain -> generate), ~30 min
+│   ├── phase2.sh         Phase 2: pre-flight, build data, smoke test, background launch
+│   ├── stop.sh           stop a background run cleanly, now or after N more steps
+│   ├── sessions.py       per-session summary of a run trained over many evenings
+│   └── postrain.sh       Phase 3: SFT then DPO
 ├── tests/                correctness tests (KV cache, causality, RoPE, mixing, DPO)
 └── docs/                 the guide above
 ```
@@ -142,6 +148,23 @@ flowchart LR
 ```
 
 Both use identical code. Only the config differs.
+
+Six days of compute needn't be six days of calendar. `scripts/phase2.sh` launches in the
+background and records its pid; `scripts/stop.sh` stops it cleanly — now, or after a set
+number of steps — and every stop saves at the exact current step, so re-running resumes with
+no loss spike:
+
+```bash
+scripts/phase2.sh                       # launch (pid -> checkpoints/<run>/train.pid)
+scripts/stop.sh small-code --status     # alive? at what step?
+scripts/stop.sh small-code --after 500  # do 500 more steps, then save and exit
+scripts/stop.sh small-code              # stop now, gracefully
+scripts/phase2.sh                       # resume where it left off
+scripts/sessions.py small-code          # compare the sessions afterwards
+```
+
+Each session gets its own `logs/<run>/train_<timestamp>.log` (never overwritten), and
+`train_<run>.log` symlinks to the newest one.
 
 ---
 

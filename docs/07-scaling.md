@@ -130,11 +130,23 @@ The header should print `blended training: MixedTokenDataset([… :0.85, … :0.
 ### 5. Launch
 
 ```bash
-nohup python -m aksharallm.train.pretrain configs/small-code.yaml > train.log 2>&1 &
-tail -f train.log
+mkdir -p logs/small-code
+LOG=logs/small-code/train_$(date '+%Y%m%d-%H%M%S').log     # one log per session, never reused
+nohup python -m aksharallm.train.pretrain configs/small-code.yaml > "$LOG" 2>&1 &
+echo $! > checkpoints/small-code/train.pid   # so any later shell can find this run
+ln -sfn "$LOG" train_small-code.log          # stable path to tail
+tail -f train_small-code.log
 ```
 
-`resume: auto` means you can kill it and restart with the identical command at any time.
+`resume: auto` means you can stop it and restart with the identical command at any time.
+Two habits that matter more than they look:
+
+- **Record the pid in a file.** You will want to stop this run from a different shell, days
+  later, when the launching terminal and its `$!` are long gone.
+- **Never reuse one log path.** `> train.log` on the second launch erases the first
+  session's log — the only record of how that session behaved.
+
+`scripts/phase2.sh` does both for you; the rest of this section is what it automates.
 
 ### 6. Watch it
 
@@ -157,9 +169,73 @@ data, validate the bin sizes, isolated smoke test, then background launch. Run i
 after Phase 1 works:
 
 ```bash
-scripts/phase2.sh            # blended base (prepare_blend + configs/small-code.yaml)
-PURE=1 scripts/phase2.sh     # non-blended FineWeb-Edu-only fallback (configs/small.yaml)
+scripts/phase2.sh                    # blended base (prepare_blend + configs/small-code.yaml)
+PURE=1 scripts/phase2.sh             # non-blended FineWeb-Edu-only fallback (configs/small.yaml)
+STOP_AFTER=2000 scripts/phase2.sh    # train 2000 steps tonight, then save and exit
 ```
+
+It records the pid in `checkpoints/<run>/train.pid` and a human-readable
+`checkpoints/<run>/run.meta` (pid, start time, config, log path, exact command), waits 5s to
+catch an immediate crash, and refuses to start if that run is already training — two
+trainers sharing one GPU and one checkpoint dir corrupt both.
+
+### One log per session
+
+A run trained over many evenings is many processes. Redirecting each launch to the same
+`train.log` with `>` **destroys the previous session's log** — exactly the record you need to
+answer "was last night slower than the night before?". So `phase2.sh` writes a timestamped
+log per session and points a stable symlink at the newest:
+
+```
+logs/small-code/train_20260725-083556.log     session 1 (kept)
+logs/small-code/train_20260726-211447.log     session 2 (kept)
+train_small-code.log -> logs/small-code/train_20260726-211447.log   (newest; tail -f this)
+```
+
+`checkpoints/<run>/sessions.log` appends one line per launch (time, pid, log path), and
+`checkpoints/<run>/train_log.jsonl` stays append-only across every session, now bracketed by
+`session_start` / `session_end` records — which is what makes sessions separable when you
+read it back:
+
+```bash
+scripts/sessions.py small-code           # one row per session
+scripts/sessions.py small-code --steps   # plus every step line, grouped by session
+```
+
+```
+#  started              steps       loss (ema)       best val  tok/s  wall   ended
+1  2026-07-25 08:35:56  0 -> 619    10.609 -> 4.186  -         26.9k  46m12s signal
+2  2026-07-26 21:14:47  620 -> 2100 4.186 -> 3.402   3.3901    27.0k  8h02m  reached stop step 2100
+```
+
+Session logs are plain text and tiny (a few hundred KB per day at `log_every: 50`). Keep
+them all; `logs/` is gitignored.
+
+### Stopping it
+
+```bash
+scripts/stop.sh                      # graceful stop of the default run; waits for the save
+scripts/stop.sh small-code --status  # is it alive, and at what step? changes nothing
+scripts/stop.sh small-code --after 500   # queue: 500 more steps, then save and exit
+scripts/stop.sh small-code --at 20000    # queue: stop on reaching step 20000
+FORCE=1 scripts/stop.sh small-code   # SIGKILL if the graceful stop hasn't landed in WAIT=300s
+```
+
+```mermaid
+flowchart LR
+    P[scripts/phase2.sh] -->|writes| PID[checkpoints/run/train.pid<br/>+ run.meta]
+    P -->|nohup| T[trainer]
+    S[scripts/stop.sh] -->|reads| PID
+    S -->|"empty STOP = now<br/>N in STOP = at step N"| STOP[checkpoints/run/STOP]
+    STOP --> T
+    T -->|save + exit 0| CK[ckpt_last.pt at the exact step]
+    CK -->|re-run phase2.sh| T
+```
+
+With no pid file (a run launched by hand, or started before this existed) `stop.sh` finds
+the process by its command line and adopts the pid into the file. A graceful stop removes
+the STOP file itself; `stop.sh` also clears a stale one, since a leftover STOP would end the
+*next* launch at step 0.
 
 ### Re-running (what happens if you run it again)
 
@@ -167,7 +243,7 @@ Re-running is the intended resume workflow — nothing is lost or duplicated:
 
 | you re-run… | what happens |
 |---|---|
-| `scripts/phase2.sh` | Sees `data/blend/*.bin` already exist → **skips** the 2–4h rebuild; smoke runs in `/tmp` (harmless); the real run **resumes** from `checkpoints/small-code/ckpt_last.pt`. |
+| `scripts/phase2.sh` | Sees `data/blend/*.bin` already exist → **skips** the 2–4h rebuild; smoke runs in `/tmp` (harmless); the real run **resumes** from `checkpoints/small-code/ckpt_last.pt`. Errors out instead if that run is still training. |
 | `python -m aksharallm.train.pretrain configs/small-code.yaml` | **Resumes** from the last checkpoint (`resume: auto`) — restores weights, optimizer state, and step. The loss curve continues with no spike. |
 | `python -m aksharallm.data.prepare_blend …` (manual) | Does **not** skip — re-tokenizes every source from scratch (~2–4h) and overwrites the bins. Safe but wasteful. The tokenizer is reused if it already exists. |
 

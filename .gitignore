@@ -8,6 +8,7 @@ __pycache__/
 # NOT also match the source package aksharallm/data/ (a bare "data/" matches any depth).
 /data/
 /checkpoints/
+/logs/
 /runs/
 /wandb/
 /out/
@@ -18,3 +19,4 @@ __pycache__/
 AGENTS.md
 PLAN.md
 .claude/
+train_*.log

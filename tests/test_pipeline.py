@@ -12,9 +12,11 @@ import numpy as np
 import pytest
 import torch
 
+from aksharallm.config import load_config
 from aksharallm.data.loader import MixedTokenDataset, TokenDataset
 from aksharallm.tokenizer.tokenizer import Tokenizer, train_bpe
 from aksharallm.train.dpo import dpo_loss
+from aksharallm.train.pretrain import fmt_dur, stop_file_target
 from aksharallm.train.schedule import get_lr
 
 CORPUS = [
@@ -291,3 +293,47 @@ def test_dpo_accuracy_counts_pairs_above_the_reference():
     ref = torch.tensor([-5.0, -5.0])
     _, acc, _ = dpo_loss(pi_c, pi_r, ref, ref.clone(), beta=0.1)
     assert acc.item() == pytest.approx(0.5)
+
+
+# ---- run timing and bounded stops ---------------------------------------------------
+
+def test_fmt_dur_uses_the_right_unit_at_each_scale():
+    assert fmt_dur(0.4) == "0.4s"
+    assert fmt_dur(45.25) == "45.2s"
+    assert fmt_dur(90) == "1m30s"
+    assert fmt_dur(3600) == "1h00m"
+    assert fmt_dur(3 * 86400 + 4 * 3600) == "3d04h"
+
+
+def test_fmt_dur_handles_a_negative_interval():
+    """Clock jumps (NTP, suspend/resume) can make a delta negative mid-run. Formatting it
+    must not crash a run that's days in."""
+    assert fmt_dur(-90) == "-1m30s"
+
+
+def test_empty_stop_file_means_stop_now(tmp_path):
+    p = tmp_path / "STOP"
+    p.write_text("")
+    assert stop_file_target(p) is None
+
+
+def test_stop_file_with_a_step_number_is_a_deferred_stop(tmp_path):
+    p = tmp_path / "STOP"
+    p.write_text("20000\n")
+    assert stop_file_target(p) == 20000
+
+
+def test_garbage_stop_file_is_treated_as_stop_now(tmp_path):
+    """An ambiguous STOP must fail towards stopping, never towards ignoring the request."""
+    p = tmp_path / "STOP"
+    p.write_text("soon-ish")
+    assert stop_file_target(p) is None
+
+
+def test_stop_after_and_stop_at_default_to_off_and_parse_from_overrides(tmp_path):
+    cfg_path = tmp_path / "c.yaml"
+    cfg_path.write_text("name: t\n")
+    assert load_config(cfg_path).train.stop_after is None
+    assert load_config(cfg_path).train.stop_at is None
+    cfg = load_config(cfg_path, ["train.stop_after=500", "train.stop_at=20000"])
+    assert (cfg.train.stop_after, cfg.train.stop_at) == (500, 20000)

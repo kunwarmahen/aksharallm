@@ -21,6 +21,7 @@ import sys
 import time
 from contextlib import nullcontext
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 
 import torch
@@ -38,6 +39,45 @@ def human(n: float) -> str:
             return f"{n:.2f}{unit}"
         n /= 1000
     return f"{n:.2f}P"
+
+
+def fmt_dur(seconds: float) -> str:
+    """Compact duration: 45.2s / 12m30s / 6h05m / 3d04h.
+
+    Multi-day runs are read at a glance from a log file days later, so every timing we
+    print goes through this: "2d04h" is instantly meaningful, "187214.6s" is not.
+    """
+    if seconds < 0:
+        return "-" + fmt_dur(-seconds)
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    d, h = divmod(h, 24)
+    if d:
+        return f"{d}d{h:02d}h"
+    if h:
+        return f"{h}h{m:02d}m"
+    return f"{m}m{s:02d}s"
+
+
+def stamp() -> str:
+    """Wall-clock HH:MM:SS, prefixed to every step line."""
+    return datetime.now().strftime("%H:%M:%S")
+
+
+def stop_file_target(path: Path) -> int | None:
+    """Read a step number out of the STOP file, if it holds one.
+
+    An empty STOP file means "stop now". A STOP file containing a number means "stop when
+    you reach that step" -- so a run that's already going can be given a bounded finish
+    (`echo 20000 > checkpoints/<run>/STOP`) without being restarted. Anything unreadable
+    or non-numeric is treated as "stop now": the safe reading of an ambiguous stop.
+    """
+    try:
+        return int(path.read_text().strip())
+    except (OSError, ValueError):
+        return None
 
 
 def save_checkpoint(path: Path, model, optimizer, cfg: Config, step: int, best_val: float, extra=None):
@@ -162,6 +202,19 @@ def main():
           f"({tokens_per_step * cfg.train.max_steps / train_ds.n_tokens:.2f} epochs)")
     print(f"lr           {cfg.optim.lr} {cfg.optim.schedule}, "
           f"{cfg.optim.warmup_steps} warmup -> {cfg.optim.lr * cfg.optim.min_lr_ratio:.2e}")
+    stop_at = cfg.train.stop_at
+    if cfg.train.stop_after is not None:
+        after = start_step + cfg.train.stop_after
+        stop_at = after if stop_at is None else min(stop_at, after)
+    if stop_at is not None:
+        if stop_at <= start_step:
+            raise ValueError(
+                f"stop_at/stop_after resolves to step {stop_at}, but this run starts at "
+                f"{start_step} -- there is nothing to do. Raise it or drop the flag."
+            )
+        print(f"stop         at step {stop_at:,} "
+              f"({stop_at - start_step:,} steps this run, then save and exit)")
+    print(f"started      {datetime.now():%Y-%m-%d %H:%M:%S}")
     print("=" * 78)
 
     if cfg.train.compile:
@@ -181,11 +234,14 @@ def main():
                    config=config_to_dict(cfg))
 
     # ---- graceful interruption ----------------------------------------------------
-    # A 6-day run needs to be stoppable without losing progress. Three ways to stop:
+    # A 6-day run needs to be stoppable without losing progress. Ways to stop:
     #   Ctrl-C, or `kill <pid>` (SIGTERM)  -> finishes the current step, then saves
     #   `touch <out_dir>/STOP`             -> same, but doesn't need the terminal
+    #   `echo N > <out_dir>/STOP`          -> keeps going, then stops at step N
+    #   train.stop_after / train.stop_at   -> the same bound, decided at launch
     # In every case we save ckpt_last.pt at the *exact* current step and exit cleanly, so
     # rerunning the same command with resume:auto picks up with zero lost work.
+    # (scripts/stop.sh drives all of these from the pid file phase2.sh writes.)
     stop = {"now": False}
 
     def _request_stop(signum, frame):
@@ -199,10 +255,26 @@ def main():
     signal.signal(signal.SIGTERM, _request_stop)
     stop_file = out_dir / "STOP"
 
+    # train_log.jsonl is append-only across sessions, so a run trained over many evenings
+    # ends up as one file. Bracketing each launch with session_start/session_end records is
+    # what makes those sessions separable afterwards -- otherwise you cannot tell a resume
+    # from a throughput change. scripts/sessions.py reads exactly these markers.
     logf = open(out_dir / "train_log.jsonl", "a")
     model.train()
-    t0 = time.time()
+    t0 = time.time()  # start of the current log window (reset after eval/sample/ckpt)
+    run_t0 = t0  # start of this invocation; never reset, so "up" is true wall-clock
+    prev_log_step = start_step - 1  # so the first window measures the steps it really covers
     running_loss = None
+
+    def log_session(event: str, **kw):
+        rec = {"event": event, "time": time.time(),
+               "iso": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "run": cfg.name, **kw}
+        logf.write(json.dumps(rec) + "\n")
+        logf.flush()
+
+    log_session("session_start", pid=os.getpid(), start_step=start_step,
+                max_steps=cfg.train.max_steps, stop_at=stop_at,
+                tokens_per_step=tokens_per_step)
 
     for step in range(start_step, cfg.train.max_steps):
         lr = get_lr(step, base_lr=cfg.optim.lr, warmup_steps=cfg.optim.warmup_steps,
@@ -238,18 +310,29 @@ def main():
             torch.cuda.synchronize() if device == "cuda" else None
             dt = time.time() - t0
             t0 = time.time()
-            steps_done = cfg.train.log_every if step > start_step else 1
+            # Steps actually covered by this window -- not `log_every`. On a resumed run the
+            # first window is a *partial* one (resume at 620, first log at 650 = 31 steps),
+            # and assuming a full window there inflates tok/s by 50/31 and reports the
+            # impossible "mfu 112%". Measure the window instead of assuming it.
+            steps_done = step - prev_log_step
+            prev_log_step = step
             tok_per_sec = tokens_per_step * steps_done / dt
             raw = model._orig_mod if hasattr(model, "_orig_mod") else model
             mfu = raw.estimate_mfu(tok_per_sec)
             mem = torch.cuda.max_memory_allocated() / 1e9 if device == "cuda" else 0
-            eta = (cfg.train.max_steps - step) * dt / steps_done / 3600
-            print(f"step {step:>6} | loss {loss_sum:.4f} (ema {running_loss:.4f}) | "
-                  f"ppl {math.exp(min(running_loss, 20)):>7.1f} | lr {lr:.2e} | "
-                  f"gnorm {grad_norm:.2f} | {tok_per_sec/1e3:.1f}k tok/s | "
-                  f"mfu {mfu*100:.1f}% | {mem:.1f}GB | eta {eta:.1f}h")
+            s_per_step = dt / steps_done
+            up = time.time() - run_t0
+            # ETA counts to whichever comes first: the budget, or a bounded stop.
+            eta = ((stop_at or cfg.train.max_steps) - step) * s_per_step
+            print(f"[{stamp()}] step {step:>6} | loss {loss_sum:.4f} "
+                  f"(ema {running_loss:.4f}) | ppl {math.exp(min(running_loss, 20)):>7.1f} | "
+                  f"lr {lr:.2e} | gnorm {grad_norm:.2f} | {tok_per_sec/1e3:.1f}k tok/s | "
+                  f"mfu {mfu*100:.1f}% | {mem:.1f}GB | {s_per_step:.2f}s/step | "
+                  f"up {fmt_dur(up)} | eta {fmt_dur(eta)}")
             rec = {"step": step, "loss": loss_sum, "ema": running_loss, "lr": lr,
-                   "grad_norm": float(grad_norm), "tok_per_sec": tok_per_sec, "mfu": mfu}
+                   "grad_norm": float(grad_norm), "tok_per_sec": tok_per_sec, "mfu": mfu,
+                   "time": time.time(), "s_per_step": s_per_step, "elapsed": up,
+                   "eta_s": eta}
             logf.write(json.dumps(rec) + "\n")
             logf.flush()
             if use_wandb:
@@ -258,10 +341,12 @@ def main():
 
         # ---- eval -----------------------------------------------------------------
         if step > 0 and step % cfg.train.eval_every == 0:
+            te = time.time()
             val_loss = evaluate(model, val_ds, cfg.train.batch_size,
                                 cfg.train.eval_batches, ctx)
             print(f"  >> val loss {val_loss:.4f}  ppl {math.exp(min(val_loss, 20)):.2f}"
-                  f"{'  * best' if val_loss < best_val else ''}")
+                  f"{'  * best' if val_loss < best_val else ''}"
+                  f"  ({fmt_dur(time.time() - te)})")
             logf.write(json.dumps({"step": step, "val_loss": val_loss}) + "\n")
             logf.flush()
             if use_wandb:
@@ -277,17 +362,39 @@ def main():
             t0 = time.time()
 
         if step > 0 and step % cfg.train.ckpt_every == 0:
+            tc = time.time()
             save_checkpoint(out_dir / "ckpt_last.pt", model, optimizer, cfg, step, best_val)
+            print(f"  >> saved ckpt_last.pt at step {step}  ({fmt_dur(time.time() - tc)})")
             t0 = time.time()
 
         # ---- honour a stop request ------------------------------------------------
-        if stop["now"] or stop_file.exists():
-            print(f"[stop] saving ckpt_last.pt at step {step} and exiting")
+        # Several ways in, one way out: save at the exact current step, then exit 0.
+        why = None
+        if stop["now"]:
+            why = "signal"
+        elif stop_file.exists():
+            target = stop_file_target(stop_file)
+            if target is None:
+                why = "STOP file"
+            elif step + 1 >= target:
+                why = f"STOP file asked for step {target}"
+            elif target != stop_at:
+                stop_at = target  # also re-aims the eta at the new finish line
+                print(f"[stop] STOP file asks to stop at step {target} "
+                      f"({target - step - 1} steps from now)")
+        if why is None and stop_at is not None and step + 1 >= stop_at:
+            why = f"reached stop step {stop_at}"
+        if why:
+            print(f"[stop] {why} -- saving ckpt_last.pt at step {step} and exiting")
             save_checkpoint(out_dir / "ckpt_last.pt", model, optimizer, cfg, step, best_val)
             if stop_file.exists():
                 stop_file.unlink()  # so the next run doesn't stop immediately
+            log_session("session_end", reason=why, last_step=step,
+                        steps=step - start_step + 1, elapsed=time.time() - run_t0)
             logf.close()
-            print(f"[stop] done. resume with the same command "
+            print(f"[stop] ran {step - start_step + 1} steps in "
+                  f"{fmt_dur(time.time() - run_t0)}, finished {datetime.now():%Y-%m-%d %H:%M:%S}")
+            print(f"[stop] resume with the same command "
                   f"(resume:auto picks up step {step + 1}).")
             return
 
@@ -299,7 +406,12 @@ def main():
     if val_loss < best_val:
         save_checkpoint(out_dir / "ckpt_best.pt", model, optimizer, cfg,
                         cfg.train.max_steps - 1, val_loss)
+    log_session("session_end", reason="max_steps", last_step=cfg.train.max_steps - 1,
+                steps=cfg.train.max_steps - start_step, elapsed=time.time() - run_t0,
+                final_val_loss=val_loss)
     logf.close()
+    print(f"ran {cfg.train.max_steps - start_step} steps in {fmt_dur(time.time() - run_t0)}, "
+          f"finished {datetime.now():%Y-%m-%d %H:%M:%S}")
     print(f"checkpoints in {out_dir}")
 
 

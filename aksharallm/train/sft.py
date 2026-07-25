@@ -17,6 +17,7 @@ import json
 import math
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -25,7 +26,7 @@ import torch
 from ..config import ModelConfig, config_to_dict, load_config
 from ..model.transformer import Transformer
 from ..tokenizer.tokenizer import Tokenizer
-from .pretrain import human, save_checkpoint
+from .pretrain import fmt_dur, human, save_checkpoint, stamp
 from .schedule import get_lr
 
 
@@ -146,7 +147,10 @@ def main():
     rng = np.random.default_rng(1234)
     best_val = float("inf")
     step = 0
-    t0 = time.time()
+    t0 = time.time()  # current log window
+    run_t0 = t0  # whole invocation
+    prev_log_step = -1
+    print(f"started {datetime.now():%Y-%m-%d %H:%M:%S}")
 
     for epoch in range(args.epochs):
         batches = train_ds.epoch_batches(args.batch_size, rng)
@@ -186,15 +190,23 @@ def main():
             if step % args.log_every == 0:
                 dt = time.time() - t0
                 t0 = time.time()
-                print(f"epoch {epoch} step {step:>5}/{max_steps} | loss {loss_sum:.4f} | "
-                      f"lr {lr:.2e} | gnorm {gnorm:.2f} | {dt:.1f}s")
+                s_per_step = dt / (step - prev_log_step)   # measured, not assumed
+                prev_log_step = step
+                up = time.time() - run_t0
+                print(f"[{stamp()}] epoch {epoch} step {step:>5}/{max_steps} | "
+                      f"loss {loss_sum:.4f} | lr {lr:.2e} | gnorm {gnorm:.2f} | "
+                      f"{s_per_step:.2f}s/step | up {fmt_dur(up)} | "
+                      f"eta {fmt_dur((max_steps - step) * s_per_step)}")
                 logf.write(json.dumps({"step": step, "epoch": epoch, "loss": loss_sum,
-                                       "lr": lr}) + "\n")
+                                       "lr": lr, "time": time.time(),
+                                       "s_per_step": s_per_step, "elapsed": up}) + "\n")
                 logf.flush()
 
             if step > 0 and step % args.eval_every == 0:
+                te = time.time()
                 vl = evaluate(model, val_ds, args.batch_size, 20, ctx)
-                print(f"  >> val {vl:.4f}{'  * best' if vl < best_val else ''}")
+                print(f"  >> val {vl:.4f}{'  * best' if vl < best_val else ''}"
+                      f"  ({fmt_dur(time.time() - te)})")
                 logf.write(json.dumps({"step": step, "val_loss": vl}) + "\n")
                 logf.flush()
                 if vl < best_val:
@@ -211,6 +223,8 @@ def main():
     save_checkpoint(out_dir / "sft_last.pt", model, optimizer, cfg_obj, step, min(best_val, vl))
     if vl < best_val:
         save_checkpoint(out_dir / "sft_best.pt", model, optimizer, cfg_obj, step, vl)
+    print(f"ran {step} steps in {fmt_dur(time.time() - run_t0)}, "
+          f"finished {datetime.now():%Y-%m-%d %H:%M:%S}")
     print(f"checkpoints in {out_dir}")
     print(f"\ntry it:  python -m aksharallm.infer.cli {out_dir}/sft_best.pt --mode chat")
     logf.close()

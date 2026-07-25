@@ -118,12 +118,51 @@ Check in this order:
    be >90%.
 4. TF32 enabled? `torch.backends.cuda.matmul.allow_tf32 = True`
 
+### MFU above 100% / tok/s spikes on the first line after a resume
+
+Instrumentation, not hardware — MFU over 100% is arithmetically impossible. `tok/s` divides
+by the number of steps in the log window, and the first window after a resume is partial
+(resume at 620, `log_every: 50`, first line at 650 = 31 steps, not 50). Fixed by measuring
+the window instead of assuming `log_every`; older logs still show the inflated first line.
+Ignore that one line and read the second.
+
 ### Throughput drops mid-run
 
 - **Thermal throttling.** `nvidia-smi -q -d TEMPERATURE`. A 3090 throttles around 83°C.
 - Another process on the GPU.
 - Disk thrashing if your token file doesn't fit in the page cache (rare; sequential-ish
   reads are cheap).
+
+Every step line is timestamped, so find *when* it changed rather than guessing: `grep -n
+'tok/s' train_<run>.log` and look at the clock beside the drop (03:00 → a nightly backup
+or cron job; a slow creep → heat). Across sessions, `scripts/sessions.py <run>` gives the
+mean tok/s per launch, which is the fastest way to see "last night was 20% slower".
+
+### A session's log disappeared
+
+Relaunching with `> train.log` truncates it. Use `scripts/phase2.sh`, which writes
+`logs/<run>/train_<timestamp>.log` per session and symlinks `train_<run>.log` to the newest;
+the numbers also survive in the append-only `checkpoints/<run>/train_log.jsonl`
+(`scripts/sessions.py <run>`).
+
+### The run vanished and I don't know why
+
+Read the end of that session's log. A clean stop always says why:
+
+```
+[stop] signal -- saving ckpt_last.pt at step 619 and exiting     # Ctrl-C, kill, or stop.sh
+[stop] STOP file asked for step 2000 -- saving ...               # a queued bounded stop
+[stop] reached stop step 2000 -- saving ...                      # train.stop_after/stop_at
+```
+
+No `[stop]` line at all means it died without warning — OOM (check `dmesg | tail`), a CUDA
+error (in the log above the last step line), or the machine rebooted. You lose at most the
+steps since the last `ckpt_every` save; relaunch and it resumes.
+
+### It stopped at step 0 immediately after launching
+
+A leftover `checkpoints/<run>/STOP` file. A clean stop deletes it, a `kill -9` does not.
+`rm checkpoints/<run>/STOP` (or `scripts/stop.sh <run>`, which clears stale ones).
 
 ### The first step takes forever
 
@@ -219,6 +258,7 @@ python -m aksharallm.train.pretrain configs/small.yaml \
     -o train.max_steps=50 -o train.out_dir=/tmp/aksharallm_smoke -o train.resume=null
 
 # 5. confirm resume works — run the REAL config twice; the second should say "resumed from ..."
+#    (cheapest version: STOP_AFTER=5 scripts/phase2.sh, twice — the second must start at 5)
 ```
 
 Five minutes here saves six days.

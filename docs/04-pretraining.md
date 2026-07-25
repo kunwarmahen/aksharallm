@@ -202,23 +202,25 @@ loss, for using).
 
 ### Stopping and resuming a long run
 
-A multi-day run needs to be interruptible. There are three clean ways to stop, and all of
-them save a checkpoint at the *exact* current step before exiting — zero lost work:
+A multi-day run needs to be interruptible. Every clean stop saves a checkpoint at the
+*exact* current step before exiting — zero lost work:
 
 ```bash
 # 1. Ctrl-C in the terminal running it
-# 2. kill a backgrounded run:
-kill <pid>
+# 2. a backgrounded run, by pid file (written by scripts/phase2.sh):
+scripts/stop.sh small-code        # graceful; waits for the save to finish
+kill $(cat checkpoints/small-code/train.pid)   # the same thing, by hand
 # 3. no terminal handy? drop a stop-file; it stops at the next step:
-touch checkpoints/small/STOP
+touch checkpoints/small-code/STOP
 ```
 
 You'll see:
 
 ```
 [stop] signal 15 received -- will save and exit after this step
-[stop] saving ckpt_last.pt at step 8421 and exiting
-[stop] done. resume with the same command (resume:auto picks up step 8422).
+[stop] signal -- saving ckpt_last.pt at step 8421 and exiting
+[stop] ran 3600 steps in 2d04h, finished 2026-07-25 09:15:05
+[stop] resume with the same command (resume:auto picks up step 8422).
 ```
 
 Then **rerun the identical command** to continue. Because the LR schedule is a pure
@@ -231,27 +233,87 @@ A second Ctrl-C forces an immediate exit (you lose only the current step). Pulli
 — power loss, `kill -9` — costs you at most the steps since the last periodic
 `ckpt_every` save (default every 500 steps ≈ 20 minutes at Phase 2 throughput).
 
+### Stopping after N more steps
+
+Waiting up to babysit a `kill` is the wrong way to train in chunks. Three ways to say
+"do this much, then put yourself away", all landing in the same save-and-exit path:
+
+| you want | how |
+|---|---|
+| this launch does N steps | `train.stop_after: N` (or `STOP_AFTER=N scripts/phase2.sh`) |
+| stop on reaching absolute step N | `train.stop_at: N` |
+| tell a run **already going** to finish at step N | `echo N > checkpoints/<run>/STOP` |
+
+The third is the useful one mid-run, and it's why the STOP file is *read* rather than just
+tested for existence: an empty STOP means "stop now", a STOP holding a number means "stop
+at that step". `scripts/stop.sh <run> --at N` and `--after N` write it for you (`--after`
+reads the current step out of `train_log.jsonl` and adds N). Anything non-numeric in the
+file is treated as "stop now" — an ambiguous stop request should stop, not be ignored.
+
+```mermaid
+flowchart TD
+    S[end of each step] --> A{signal?<br/>Ctrl-C / SIGTERM}
+    A -- yes --> Z[save ckpt_last.pt<br/>at this exact step<br/>exit 0]
+    A -- no --> B{STOP file?}
+    B -- "empty" --> Z
+    B -- "holds N" --> C{step+1 >= N?}
+    C -- yes --> Z
+    C -- "no" --> D[re-aim the eta at N<br/>keep training]
+    B -- no --> E{stop_after / stop_at<br/>reached?}
+    E -- yes --> Z
+    E -- no --> F[keep training]
+    Z --> R[rerun the same command:<br/>resume:auto continues<br/>with no loss spike]
+```
+
+Because a deferred stop exits through the *same* path as Ctrl-C, nothing about resume
+changes: a chunked run is still mathematically one continuous run.
+
 ---
 
 ## Reading the logs
 
 ```
-step   3120 | loss 1.6728 (ema 1.6767) | ppl   5.3 | lr 7.23e-04 |
-             gnorm 0.29 | 463.8k tok/s | mfu 50.9% | 3.6GB | eta 0.3h
+[09:15:05] step   3120 | loss 1.6728 (ema 1.6767) | ppl   5.3 | lr 7.23e-04 |
+           gnorm 0.29 | 463.8k tok/s | mfu 50.9% | 3.6GB | 0.53s/step |
+           up 2d04h | eta 18h30m
 ```
 
 | field | what to check |
 |---|---|
+| `[09:15:05]` | wall-clock time of the line. Answers "when did it stall?" days later. |
 | `loss` | should fall fast then slowly. Flat from step 0 = LR too low or a bug. |
 | `ema` | smoothed loss — the real trend |
 | `ppl` | `e^loss` |
 | `gnorm` | see the table above |
 | `tok/s` | should be *constant*. A drop means thermal throttling or another process. |
 | `mfu` | Model FLOPs Utilisation — see below |
-| `eta` | hours remaining |
+| `s/step` | seconds per step over this window — the raw number behind `tok/s` |
+| `up` | wall-clock time *this invocation* has been running (resets on resume) |
+| `eta` | time to `max_steps`, or to a bounded stop if one is set |
+
+Timestamps and durations are the difference between "the run got slower at some point" and
+"throughput halved at 03:12, which is when the nightly backup starts". The header prints
+`started <date time>`; the run's last line prints `ran N steps in <duration>, finished
+<date time>`; eval and checkpoint-save lines carry their own cost in parentheses, so you
+can see what fraction of a long run goes to something other than training:
+
+```
+  >> val loss 1.6512  ppl 5.21  * best  (48.3s)
+  >> saved ckpt_last.pt at step 3500  (31.7s)
+```
 
 Structured logs also go to `checkpoints/<run>/train_log.jsonl`, one JSON object per line,
-for plotting later. Set `wandb_project` in the config for live charts.
+for plotting later — each record carries `time` (unix seconds), `s_per_step`, `elapsed` and
+`eta_s` alongside the losses, so throughput-over-time is plottable after the fact. Set
+`wandb_project` in the config for live charts.
+
+That file is **append-only across sessions**: a run trained over ten evenings is ten
+processes writing to one log. Each launch brackets its records with `session_start` and
+`session_end` (with the reason it ended), which is the only reliable way to tell a resume
+from a slowdown when reading it back later. `scripts/sessions.py <run>` prints one row per
+session — steps covered, loss moved, mean tok/s, wall-clock, how it ended. The plain-text
+console log is kept per session too; see
+[docs/07-scaling.md](07-scaling.md) → "One log per session".
 
 ### MFU
 
@@ -270,6 +332,15 @@ computation, which grows with sequence length.)
 | < 20% | something is wrong — check `compile`, batch size, dtype |
 | 30–50% | healthy for a single consumer GPU |
 | > 55% | excellent |
+| > 100% | impossible — the throughput *window* is being mis-measured, not the GPU |
+
+That last row is worth dwelling on, because it happened here. `tok/s` is
+`tokens_per_step × steps_in_window / elapsed`, and the code used to assume every window was
+`log_every` steps long. On a **resumed** run the first window isn't: resume at step 620 with
+`log_every: 50` and the first log line lands at 650 after only 31 steps, so throughput was
+reported 50/31 = 1.6× too high — hence `mfu 112%`. The fix is to measure the window
+(`step - prev_log_step`) rather than assume it. If you ever see MFU above 100%, suspect your
+instrumentation before you believe your hardware.
 
 We hit **50%** on the 3090. If yours is much lower, the usual causes are: `compile` off,
 batch size too small (GPU starved), or fp32 instead of bf16.
