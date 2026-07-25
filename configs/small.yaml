@@ -1,0 +1,54 @@
+# Phase 2: the real base model.
+# ~300M params on 10B tokens of FineWeb-Edu. Roughly 6 days on an RTX 3090.
+#
+# Before starting:
+#   1. df -h        -- you need ~25 GB free for the token files
+#   2. python -m aksharallm.data.prepare fineweb-edu-10bt \
+#          --out-dir data/fineweb --vocab-size 32768 --max-train-tokens 10000000000
+#   3. smoke test:  -o train.max_steps=50
+#   4. tune train.batch_size up until it OOMs, then back off ~10%
+#
+# Resume after any interruption with the same command -- resume: auto picks up ckpt_last.pt.
+
+name: small
+
+model:
+  vocab_size: 32768       # must match the tokenizer
+  d_model: 1024
+  n_layers: 24
+  n_heads: 16
+  n_kv_heads: 4           # GQA: 4x smaller KV cache at inference
+  max_seq_len: 1024
+  tie_embeddings: true
+  dropout: 0.0            # we are data-limited, not overfitting
+
+data:
+  train_bin: data/fineweb/train.bin
+  val_bin: data/fineweb/val.bin
+  tokenizer: data/fineweb/tokenizer.json
+
+optim:
+  lr: 3.0e-4              # ~300M params -> 3e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 500
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/small
+  batch_size: 12          # TUNE THIS FIRST -- raise until OOM, then back off
+  grad_accum: 20          # 12 * 20 * 1024 = 245,760 tokens/step
+  seq_len: 1024
+  max_steps: 40000        # ~9.8B tokens
+  eval_every: 1000
+  eval_batches: 50
+  sample_every: 2000
+  ckpt_every: 500         # ~20 min apart: a crash costs you very little
+  log_every: 50
+  compile: true
+  seed: 1337
+  wandb_project: null     # set to a project name for live charts
+  resume: auto

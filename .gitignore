@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# artifacts — large, regenerable
+data/
+checkpoints/
+runs/
+wandb/
+out/
+*.bin
+*.pt
+*.safetensors
+AGENTS.md
+PLAN.md
+skills/**/*

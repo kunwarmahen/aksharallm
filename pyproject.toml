@@ -1,0 +1,34 @@
+[project]
+name = "aksharallm"
+version = "0.1.0"
+description = "An LLM built from scratch on a single RTX 3090"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "torch>=2.5",
+    "numpy>=1.26",
+    "tokenizers>=0.20",       # rust BPE trainer (plumbing)
+    "datasets>=3.0",          # HF dataset download/streaming (plumbing)
+    "huggingface-hub>=0.26",
+    "pyyaml>=6.0",
+    "tqdm>=4.66",
+    "rich>=13.0",
+    "wandb>=0.18",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.7"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["aksharallm"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
