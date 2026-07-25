@@ -116,8 +116,12 @@ Then set `grad_accum` so `batch_size × grad_accum × 1024 ≈ 250,000`.
 
 ### 4. Smoke test
 
+Isolate it to a throwaway dir with `resume=null`, so the 50-step smoke checkpoint doesn't
+land in `checkpoints/small-code/` and get picked up by the real run's `resume: auto`:
+
 ```bash
-python -m aksharallm.train.pretrain configs/small-code.yaml -o train.max_steps=50
+python -m aksharallm.train.pretrain configs/small-code.yaml \
+    -o train.max_steps=50 -o train.out_dir=/tmp/aksharallm_smoke -o train.resume=null
 ```
 
 Check: step-0 loss ≈ `ln(32768) = 10.4`, MFU > 35%, memory stable, `grad_norm` falling.

@@ -9,7 +9,9 @@
 #       --val-tokens 10000000 --max-train-tokens 10000000000
 # then paste the printed train_sources block over the one below (paths must match).
 #
-# Pre-flight: df -h (need ~25 GB), pytest, then a 50-step smoke test.
+# Pre-flight: df -h (need ~25 GB), pytest, then a 50-step smoke test in a throwaway dir:
+#   -o train.max_steps=50 -o train.out_dir=/tmp/aksharallm_smoke -o train.resume=null
+# (isolating it keeps the smoke checkpoint out of the real run's resume:auto path)
 
 name: small-code
 

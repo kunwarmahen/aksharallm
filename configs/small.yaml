@@ -5,7 +5,8 @@
 #   1. df -h        -- you need ~25 GB free for the token files
 #   2. python -m aksharallm.data.prepare fineweb-edu-10bt \
 #          --out-dir data/fineweb --vocab-size 32768 --max-train-tokens 10000000000
-#   3. smoke test:  -o train.max_steps=50
+#   3. smoke test (isolated so it can't pollute the real run's resume:auto checkpoint):
+#        -o train.max_steps=50 -o train.out_dir=/tmp/aksharallm_smoke -o train.resume=null
 #   4. tune train.batch_size up until it OOMs, then back off ~10%
 #
 # Resume after any interruption with the same command -- resume: auto picks up ckpt_last.pt.

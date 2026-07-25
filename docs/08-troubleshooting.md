@@ -214,10 +214,11 @@ import numpy as np
 d = np.memmap('data/fineweb/train.bin', dtype=np.uint16, mode='r')
 print('tokens:', len(d), 'max id:', d.max())"
 
-# 4. 50-step smoke test: check step-0 loss, MFU, memory
-python -m aksharallm.train.pretrain configs/small.yaml -o train.max_steps=50
+# 4. 50-step smoke test (throwaway dir so it can't pollute the real run's resume:auto)
+python -m aksharallm.train.pretrain configs/small.yaml \
+    -o train.max_steps=50 -o train.out_dir=/tmp/aksharallm_smoke -o train.resume=null
 
-# 5. confirm resume works — run it twice, second should say "resumed from ..."
+# 5. confirm resume works — run the REAL config twice; the second should say "resumed from ..."
 ```
 
 Five minutes here saves six days.
