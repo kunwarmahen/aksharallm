@@ -150,6 +150,30 @@ for l in open('checkpoints/small-code/train_log.jsonl'):
 
 Set `wandb_project` in the config for live charts instead.
 
+### The one-command wrapper
+
+`scripts/phase2.sh` does all six steps above — pre-flight (disk + tests), build the blended
+data, validate the bin sizes, isolated smoke test, then background launch. Run it *once*
+after Phase 1 works:
+
+```bash
+scripts/phase2.sh            # blended base (prepare_blend + configs/small-code.yaml)
+PURE=1 scripts/phase2.sh     # non-blended FineWeb-Edu-only fallback (configs/small.yaml)
+```
+
+### Re-running (what happens if you run it again)
+
+Re-running is the intended resume workflow — nothing is lost or duplicated:
+
+| you re-run… | what happens |
+|---|---|
+| `scripts/phase2.sh` | Sees `data/blend/*.bin` already exist → **skips** the 2–4h rebuild; smoke runs in `/tmp` (harmless); the real run **resumes** from `checkpoints/small-code/ckpt_last.pt`. |
+| `python -m aksharallm.train.pretrain configs/small-code.yaml` | **Resumes** from the last checkpoint (`resume: auto`) — restores weights, optimizer state, and step. The loss curve continues with no spike. |
+| `python -m aksharallm.data.prepare_blend …` (manual) | Does **not** skip — re-tokenizes every source from scratch (~2–4h) and overwrites the bins. Safe but wasteful. The tokenizer is reused if it already exists. |
+
+To deliberately **start over** instead of resuming, delete the run's checkpoint dir first:
+`rm -rf checkpoints/small-code/`.
+
 ---
 
 ## What to expect
