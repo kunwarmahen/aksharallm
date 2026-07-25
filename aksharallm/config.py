@@ -86,8 +86,10 @@ class TrainConfig:
     # Bounded stops. Neither ends the run: both save ckpt_last.pt and exit cleanly, so
     # re-running with resume:auto continues with no loss spike. Use them to train in
     # chunks ("give me 500 more steps tonight") instead of babysitting a kill.
-    stop_after: int | None = None  # stop after N steps *in this invocation*
-    stop_at: int | None = None  # stop on reaching this absolute step (like a temp max_steps)
+    # Both are INCLUSIVE -- the step you name is trained, logged and checkpointed, and the
+    # resume picks up the one after it.
+    stop_after: int | None = None  # do N steps in this invocation, then stop
+    stop_at: int | None = None  # finish this absolute step, then stop
 
 
 @dataclass

@@ -241,8 +241,18 @@ Waiting up to babysit a `kill` is the wrong way to train in chunks. Three ways t
 | you want | how |
 |---|---|
 | this launch does N steps | `train.stop_after: N` (or `STOP_AFTER=N scripts/phase2.sh`) |
-| stop on reaching absolute step N | `train.stop_at: N` |
+| finish absolute step N, then stop | `train.stop_at: N` |
 | tell a run **already going** to finish at step N | `echo N > checkpoints/<run>/STOP` |
+
+All three are **inclusive**: the step you name is trained, gets its log line, and is what
+lands in `ckpt_last.pt`; the resume starts at N+1. That is deliberately *not* `max_steps`
+semantics (`max_steps: N` makes the last step N-1) — if you asked to stop at 700 you want to
+see step 700, not 699.
+
+The final step is logged **whatever `log_every` is**. Stopping at 699 with `log_every: 50`
+would otherwise print no loss, throughput or gradient norm for the step you stopped on, and
+leave the JSONL's last data record 49 steps behind the checkpoint — the numbers you stopped
+to look at, missing.
 
 The third is the useful one mid-run, and it's why the STOP file is *read* rather than just
 tested for existence: an empty STOP means "stop now", a STOP holding a number means "stop
@@ -253,10 +263,10 @@ file is treated as "stop now" — an ambiguous stop request should stop, not be 
 ```mermaid
 flowchart TD
     S[end of each step] --> A{signal?<br/>Ctrl-C / SIGTERM}
-    A -- yes --> Z[save ckpt_last.pt<br/>at this exact step<br/>exit 0]
+    A -- yes --> Z[log this step<br/>save ckpt_last.pt at it<br/>exit 0]
     A -- no --> B{STOP file?}
     B -- "empty" --> Z
-    B -- "holds N" --> C{step+1 >= N?}
+    B -- "holds N" --> C{step >= N?}
     C -- yes --> Z
     C -- "no" --> D[re-aim the eta at N<br/>keep training]
     B -- no --> E{stop_after / stop_at<br/>reached?}

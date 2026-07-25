@@ -66,6 +66,26 @@ def stamp() -> str:
     return datetime.now().strftime("%H:%M:%S")
 
 
+def resolve_stop_step(start_step: int, stop_after: int | None,
+                      stop_at: int | None) -> int | None:
+    """The last step a bounded stop will train, or None for "run to max_steps".
+
+    Both bounds are INCLUSIVE: the step returned is trained, logged and checkpointed, and
+    the resume picks up the one after it. That is deliberately not `max_steps` semantics
+    (`max_steps=N` makes the last step N-1) -- asking to stop at step 700 and finding the
+    checkpoint at 699, with no step-700 line in the log, is a surprise every time.
+    """
+    if stop_after is not None:
+        after = start_step + stop_after - 1
+        stop_at = after if stop_at is None else min(stop_at, after)
+    if stop_at is not None and stop_at < start_step:
+        raise ValueError(
+            f"stop_at/stop_after resolves to step {stop_at}, but this run starts at "
+            f"{start_step} -- there is nothing to do. Raise it or drop the flag."
+        )
+    return stop_at
+
+
 def stop_file_target(path: Path) -> int | None:
     """Read a step number out of the STOP file, if it holds one.
 
@@ -202,18 +222,10 @@ def main():
           f"({tokens_per_step * cfg.train.max_steps / train_ds.n_tokens:.2f} epochs)")
     print(f"lr           {cfg.optim.lr} {cfg.optim.schedule}, "
           f"{cfg.optim.warmup_steps} warmup -> {cfg.optim.lr * cfg.optim.min_lr_ratio:.2e}")
-    stop_at = cfg.train.stop_at
-    if cfg.train.stop_after is not None:
-        after = start_step + cfg.train.stop_after
-        stop_at = after if stop_at is None else min(stop_at, after)
+    stop_at = resolve_stop_step(start_step, cfg.train.stop_after, cfg.train.stop_at)
     if stop_at is not None:
-        if stop_at <= start_step:
-            raise ValueError(
-                f"stop_at/stop_after resolves to step {stop_at}, but this run starts at "
-                f"{start_step} -- there is nothing to do. Raise it or drop the flag."
-            )
-        print(f"stop         at step {stop_at:,} "
-              f"({stop_at - start_step:,} steps this run, then save and exit)")
+        print(f"stop         after step {stop_at:,} "
+              f"({stop_at - start_step + 1:,} steps this run, then save and exit)")
     print(f"started      {datetime.now():%Y-%m-%d %H:%M:%S}")
     print("=" * 78)
 
@@ -305,8 +317,28 @@ def main():
 
         running_loss = loss_sum if running_loss is None else 0.9 * running_loss + 0.1 * loss_sum
 
+        # ---- is this the last step? -------------------------------------------------
+        # Decided *before* logging, so a bounded stop's final step always gets a log line
+        # even when it isn't a multiple of log_every. Stopping at 699 with log_every=50
+        # used to leave no loss or throughput reading at the step you stopped on.
+        why = None
+        if stop["now"]:
+            why = "signal"
+        elif stop_file.exists():
+            target = stop_file_target(stop_file)
+            if target is None:
+                why = "STOP file"
+            elif step >= target:
+                why = f"STOP file asked for step {target}"
+            elif target != stop_at:
+                stop_at = target  # also re-aims the eta at the new finish line
+                print(f"[stop] STOP file asks to stop after step {target} "
+                      f"({target - step} steps from now)")
+        if why is None and stop_at is not None and step >= stop_at:
+            why = f"reached stop step {stop_at}"
+
         # ---- logging --------------------------------------------------------------
-        if step % cfg.train.log_every == 0:
+        if step % cfg.train.log_every == 0 or why:
             torch.cuda.synchronize() if device == "cuda" else None
             dt = time.time() - t0
             t0 = time.time()
@@ -322,8 +354,10 @@ def main():
             mem = torch.cuda.max_memory_allocated() / 1e9 if device == "cuda" else 0
             s_per_step = dt / steps_done
             up = time.time() - run_t0
-            # ETA counts to whichever comes first: the budget, or a bounded stop.
-            eta = ((stop_at or cfg.train.max_steps) - step) * s_per_step
+            # ETA counts to whichever comes first: the budget, or a bounded stop. Both
+            # last-step numbers are inclusive (max_steps=N means the last step is N-1).
+            last_step = stop_at if stop_at is not None else cfg.train.max_steps - 1
+            eta = max(last_step - step, 0) * s_per_step
             print(f"[{stamp()}] step {step:>6} | loss {loss_sum:.4f} "
                   f"(ema {running_loss:.4f}) | ppl {math.exp(min(running_loss, 20)):>7.1f} | "
                   f"lr {lr:.2e} | gnorm {grad_norm:.2f} | {tok_per_sec/1e3:.1f}k tok/s | "
@@ -368,22 +402,8 @@ def main():
             t0 = time.time()
 
         # ---- honour a stop request ------------------------------------------------
-        # Several ways in, one way out: save at the exact current step, then exit 0.
-        why = None
-        if stop["now"]:
-            why = "signal"
-        elif stop_file.exists():
-            target = stop_file_target(stop_file)
-            if target is None:
-                why = "STOP file"
-            elif step + 1 >= target:
-                why = f"STOP file asked for step {target}"
-            elif target != stop_at:
-                stop_at = target  # also re-aims the eta at the new finish line
-                print(f"[stop] STOP file asks to stop at step {target} "
-                      f"({target - step - 1} steps from now)")
-        if why is None and stop_at is not None and step + 1 >= stop_at:
-            why = f"reached stop step {stop_at}"
+        # `why` was decided above, before the log line. Several ways in, one way out:
+        # save at the exact current step, then exit 0.
         if why:
             print(f"[stop] {why} -- saving ckpt_last.pt at step {step} and exiting")
             save_checkpoint(out_dir / "ckpt_last.pt", model, optimizer, cfg, step, best_val)

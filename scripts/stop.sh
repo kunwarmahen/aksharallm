@@ -8,8 +8,10 @@
 # Usage:
 #   scripts/stop.sh                    # stop the default run now (small-code; PURE=1 -> small)
 #   scripts/stop.sh small              # stop a named run  (== checkpoints/small)
-#   scripts/stop.sh small-code --at 20000   # let it run to step 20000, then save and exit
-#   scripts/stop.sh small-code --after 500  # let it do 500 more steps, then save and exit
+#   scripts/stop.sh small-code --at 20000   # finish step 20000, then save and exit
+#   scripts/stop.sh small-code --after 500  # do 500 more steps, then save and exit
+# Both are inclusive: the step you name is trained, logged and checkpointed; the resume
+# picks up the step after it.
 #   scripts/stop.sh --status           # is it running, and where is it? changes nothing
 #   WAIT=900 scripts/stop.sh           # wait longer for the save (default 300s)
 #   FORCE=1  scripts/stop.sh           # SIGKILL if still alive after WAIT (loses that step)
@@ -104,12 +106,13 @@ if [ -n "${AFTER:-}" ]; then
         exit 1
     fi
     AT=$((CUR + AFTER))
-    echo "last logged step is $CUR, so stopping at $AT."
+    echo "last logged step is $CUR, so finishing step $AT."
 fi
 
 if [ -n "$AT" ]; then
     echo "$AT" > "$STOP_FILE"
-    echo "queued: pid $PID will save ckpt_last.pt at step $AT and exit."
+    echo "queued: pid $PID will finish step $AT, save ckpt_last.pt at it, and exit"
+    echo "        (so the resume starts at $((AT + 1)))."
     echo "  cancel:  rm $STOP_FILE"
     echo "  watch:   tail -f $LOG_LINK"
     exit 0

@@ -16,7 +16,7 @@ from aksharallm.config import load_config
 from aksharallm.data.loader import MixedTokenDataset, TokenDataset
 from aksharallm.tokenizer.tokenizer import Tokenizer, train_bpe
 from aksharallm.train.dpo import dpo_loss
-from aksharallm.train.pretrain import fmt_dur, stop_file_target
+from aksharallm.train.pretrain import fmt_dur, resolve_stop_step, stop_file_target
 from aksharallm.train.schedule import get_lr
 
 CORPUS = [
@@ -328,6 +328,30 @@ def test_garbage_stop_file_is_treated_as_stop_now(tmp_path):
     p = tmp_path / "STOP"
     p.write_text("soon-ish")
     assert stop_file_target(p) is None
+
+
+@pytest.mark.parametrize("start,stop_after,stop_at,last_step", [
+    (0, 5, None, 4),        # a fresh run doing 5 steps ends on step 4
+    (620, 80, None, 699),   # 80 more steps from a resume at 620
+    (620, None, 700, 700),  # "stop at 700" trains step 700 -- inclusive, not max_steps-like
+    (620, 80, 650, 650),    # whichever bound comes first wins
+    (620, None, None, None),  # no bound -> run to max_steps
+])
+def test_bounded_stop_resolves_to_an_inclusive_last_step(start, stop_after, stop_at, last_step):
+    """`--at 700` leaving the checkpoint at 699, with no step-700 line in the log, is the
+    off-by-one this pins down."""
+    assert resolve_stop_step(start, stop_after, stop_at) == last_step
+
+
+def test_stop_after_gives_exactly_that_many_steps():
+    last = resolve_stop_step(620, 80, None)
+    assert last - 620 + 1 == 80
+
+
+def test_a_bound_already_behind_the_resume_point_is_an_error():
+    """Silently training one step (or zero) would look like a hang. Say so instead."""
+    with pytest.raises(ValueError, match="nothing to do"):
+        resolve_stop_step(620, None, 500)
 
 
 def test_stop_after_and_stop_at_default_to_off_and_parse_from_overrides(tmp_path):

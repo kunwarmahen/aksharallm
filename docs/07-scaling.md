@@ -217,7 +217,7 @@ them all; `logs/` is gitignored.
 scripts/stop.sh                      # graceful stop of the default run; waits for the save
 scripts/stop.sh small-code --status  # is it alive, and at what step? changes nothing
 scripts/stop.sh small-code --after 500   # queue: 500 more steps, then save and exit
-scripts/stop.sh small-code --at 20000    # queue: stop on reaching step 20000
+scripts/stop.sh small-code --at 20000    # queue: finish step 20000, then save and exit
 FORCE=1 scripts/stop.sh small-code   # SIGKILL if the graceful stop hasn't landed in WAIT=300s
 ```
 
@@ -231,6 +231,9 @@ flowchart LR
     T -->|save + exit 0| CK[ckpt_last.pt at the exact step]
     CK -->|re-run phase2.sh| T
 ```
+
+`--at N` and `--after N` are inclusive — step N is trained, logged and checkpointed, and the
+resume starts at N+1.
 
 With no pid file (a run launched by hand, or started before this existed) `stop.sh` finds
 the process by its command line and adopts the pid into the file. A graceful stop removes
