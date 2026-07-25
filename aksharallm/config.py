@@ -43,6 +43,13 @@ class DataConfig:
     train_bin: str = "data/tinystories/train.bin"
     val_bin: str = "data/tinystories/val.bin"
     tokenizer: str = "data/tinystories/tokenizer.json"
+    # Optional blended training: a list of {bin, weight} dicts. When set, training samples
+    # each batch from these files by weight (via MixedTokenDataset) and `train_bin` is
+    # ignored. `val_bin` is still a single file. Example:
+    #   train_sources:
+    #     - {bin: data/blend/fineweb.bin, weight: 0.85}
+    #     - {bin: data/blend/code.bin,    weight: 0.15}
+    train_sources: list | None = None
 
 
 @dataclass

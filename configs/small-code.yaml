@@ -1,0 +1,58 @@
+# Phase 2 (blended base): ~300M params, ~10B tokens of 85% FineWeb-Edu + 15% Python.
+# One run yields a base that both chats (after SFT/DPO) and codes (after Python
+# continued-pretraining). Roughly 6 days on a 3090, run over evenings with stop/resume.
+#
+# Build the data first:
+#   python -m aksharallm.data.prepare_blend \
+#       --out-dir data/blend --vocab-size 32768 \
+#       --source fineweb-edu-10bt:0.85 --source codeparrot-python:0.15 \
+#       --val-tokens 10000000 --max-train-tokens 10000000000
+# then paste the printed train_sources block over the one below (paths must match).
+#
+# Pre-flight: df -h (need ~25 GB), pytest, then a 50-step smoke test.
+
+name: small-code
+
+model:
+  vocab_size: 32768       # must match the blended tokenizer
+  d_model: 1024
+  n_layers: 24
+  n_heads: 16
+  n_kv_heads: 4           # GQA: 4x smaller KV cache at inference
+  max_seq_len: 1024
+  tie_embeddings: true
+  dropout: 0.0
+
+data:
+  # train_bin is ignored when train_sources is set.
+  val_bin: data/blend/val.bin
+  tokenizer: data/blend/tokenizer.json
+  train_sources:
+    - {bin: data/blend/fineweb-edu-10bt.bin, weight: 0.85}
+    - {bin: data/blend/codeparrot-python.bin, weight: 0.15}
+
+optim:
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 500
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/small-code
+  batch_size: 12          # TUNE FIRST: raise until OOM, back off ~10%
+  grad_accum: 20          # 12 * 20 * 1024 = 245,760 tokens/step
+  seq_len: 1024
+  max_steps: 40000        # ~9.8B tokens
+  eval_every: 1000
+  eval_batches: 50
+  sample_every: 2000
+  ckpt_every: 500
+  log_every: 50
+  compile: true
+  seed: 1337
+  wandb_project: null
+  resume: auto

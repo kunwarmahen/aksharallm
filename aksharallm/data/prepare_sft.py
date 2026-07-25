@@ -1,0 +1,162 @@
+"""Build a supervised fine-tuning dataset from a chat corpus.
+
+Pretraining and SFT differ in exactly one way: *which tokens count towards the loss*.
+
+  pretrain:  every token is a target. The model learns "what text looks like".
+  SFT:       only the assistant's tokens are targets. The user's turn is context the
+             model must condition on but must never be rewarded for predicting.
+
+So alongside the token stream we write a parallel mask stream:
+
+    tokens  <|im_start|>user \n What is 2+2? <|im_end|> <|im_start|>assistant \n Four <|im_end|>
+    mask         0      0   0  0   0  0  0  0     0          0          0     0   1   1
+                 \___________ context, no loss ___________/              \_ trained on _/
+
+Examples are *packed* end-to-end into fixed seq_len blocks rather than padded. Padding a
+1024-token window to hold a 60-token exchange wastes 94% of the compute; packing wastes
+none. The cost is that one window can contain the tail of one conversation and the head
+of the next, which the model sees as an <|im_end|> followed by a fresh <|im_start|> --
+exactly the boundary it needs to learn anyway.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+import numpy as np
+from tqdm import tqdm
+
+from ..tokenizer.tokenizer import Tokenizer
+
+# name -> (repo, config, split, converter)
+# Each converter turns a dataset row into a [{"role":..., "content":...}, ...] list.
+def _smoltalk(row):
+    return row["messages"]
+
+
+def _ultrachat(row):
+    return row["messages"]
+
+
+def _openhermes(row):
+    role_map = {"human": "user", "gpt": "assistant", "system": "system"}
+    out = []
+    for turn in row["conversations"]:
+        role = role_map.get(turn.get("from"), turn.get("from"))
+        if role in ("user", "assistant", "system"):
+            out.append({"role": role, "content": turn["value"]})
+    return out
+
+
+RECIPES = {
+    "smoltalk": ("HuggingFaceTB/smoltalk", "all", "train", _smoltalk),
+    "ultrachat": ("HuggingFaceH4/ultrachat_200k", None, "train_sft", _ultrachat),
+    "openhermes": ("teknium/OpenHermes-2.5", None, "train", _openhermes),
+}
+
+
+def is_valid(messages) -> bool:
+    """Reject rows that would teach the model nothing or teach it something wrong."""
+    if not messages or len(messages) < 2:
+        return False
+    if not any(m.get("role") == "assistant" and m.get("content", "").strip()
+               for m in messages):
+        return False  # nothing to train on
+    return all(m.get("role") in ("system", "user", "assistant") and m.get("content")
+               for m in messages)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Tokenize a chat dataset for SFT.")
+    ap.add_argument("recipe", choices=list(RECIPES))
+    ap.add_argument("--tokenizer", required=True)
+    ap.add_argument("--out-dir", required=True)
+    ap.add_argument("--seq-len", type=int, default=1024)
+    ap.add_argument("--max-examples", type=int, default=None)
+    ap.add_argument("--val-examples", type=int, default=2000)
+    args = ap.parse_args()
+
+    from datasets import load_dataset
+
+    repo, config, split, convert = RECIPES[args.recipe]
+    tok = Tokenizer(args.tokenizer)
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    ds = load_dataset(repo, name=config, split=split, streaming=True)
+
+    # Packing buffers: we accumulate tokens until we have seq_len of them, emit a block,
+    # and keep the remainder for the next block.
+    buf_tok: list[int] = []
+    buf_mask: list[int] = []
+    blocks_tok: list[np.ndarray] = []
+    blocks_mask: list[np.ndarray] = []
+
+    n_seen = n_used = n_skipped = 0
+    n_trainable = 0
+
+    pbar = tqdm(desc="packing", unit="ex")
+    for row in ds:
+        if args.max_examples is not None and n_used >= args.max_examples:
+            break
+        n_seen += 1
+        try:
+            messages = convert(row)
+        except (KeyError, TypeError):
+            n_skipped += 1
+            continue
+        if not is_valid(messages):
+            n_skipped += 1
+            continue
+
+        ids, mask = tok.render_chat(messages, add_generation_prompt=False)
+        if len(ids) > args.seq_len:
+            # A conversation longer than the window gets dropped rather than truncated:
+            # a truncated example ends mid-sentence and teaches the model to stop early.
+            n_skipped += 1
+            continue
+
+        buf_tok.extend(ids)
+        buf_mask.extend(mask)
+        n_used += 1
+        pbar.update(1)
+
+        while len(buf_tok) >= args.seq_len:
+            blocks_tok.append(np.asarray(buf_tok[:args.seq_len], dtype=np.uint16))
+            blocks_mask.append(np.asarray(buf_mask[:args.seq_len], dtype=np.uint8))
+            n_trainable += int(sum(buf_mask[:args.seq_len]))
+            buf_tok = buf_tok[args.seq_len:]
+            buf_mask = buf_mask[args.seq_len:]
+    pbar.close()
+
+    if not blocks_tok:
+        raise RuntimeError("no blocks produced -- check the tokenizer and dataset")
+
+    toks = np.stack(blocks_tok)     # (N, seq_len)
+    masks = np.stack(blocks_mask)   # (N, seq_len)
+
+    n_val = min(args.val_examples, max(1, len(toks) // 20))
+    rng = np.random.default_rng(0)
+    perm = rng.permutation(len(toks))
+    val_idx, train_idx = perm[:n_val], perm[n_val:]
+
+    np.save(out_dir / "train_tokens.npy", toks[train_idx])
+    np.save(out_dir / "train_mask.npy", masks[train_idx])
+    np.save(out_dir / "val_tokens.npy", toks[val_idx])
+    np.save(out_dir / "val_mask.npy", masks[val_idx])
+
+    total = toks.size
+    print(f"\nexamples: {n_used:,} used, {n_skipped:,} skipped (of {n_seen:,} seen)")
+    print(f"blocks:   {len(toks):,} x {args.seq_len} = {total:,} tokens")
+    print(f"trained on {n_trainable:,} tokens ({100*n_trainable/total:.1f}% of the total)")
+    print(f"split:    {len(train_idx):,} train / {len(val_idx):,} val blocks")
+    print(f"wrote to  {out_dir}")
+    sys.stdout.flush()
+    os._exit(0)  # see prepare.py: the streaming reader crashes on normal shutdown
+
+
+if __name__ == "__main__":
+    main()

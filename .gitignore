@@ -4,12 +4,13 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 
-# artifacts — large, regenerable
-data/
-checkpoints/
-runs/
-wandb/
-out/
+# artifacts — large, regenerable. Leading "/" anchors these to the repo root so they do
+# NOT also match the source package aksharallm/data/ (a bare "data/" matches any depth).
+/data/
+/checkpoints/
+/runs/
+/wandb/
+/out/
 *.bin
 *.pt
 *.safetensors

@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 import torch
 
-from aksharallm.data.loader import TokenDataset
+from aksharallm.data.loader import MixedTokenDataset, TokenDataset
 from aksharallm.tokenizer.tokenizer import Tokenizer, train_bpe
 from aksharallm.train.dpo import dpo_loss
 from aksharallm.train.schedule import get_lr
@@ -146,6 +146,82 @@ def test_eval_batches_are_deterministic(tmp_path):
 def test_loader_rejects_missing_file(tmp_path):
     with pytest.raises(FileNotFoundError):
         TokenDataset(tmp_path / "nope.bin", seq_len=8, device="cpu")
+
+
+# ---- mixed (blended) loader --------------------------------------------------------
+
+def _make_bin(path, value, n=4000):
+    """A bin filled with a single token value, so we can tell sources apart by content."""
+    np.full(n, value, dtype=np.uint16).tofile(path)
+
+
+def test_mixed_respects_weights_every_batch(tmp_path):
+    """The mix must be exact per batch, not just on average. Source A is all 10s, source B
+    all 20s, so we can count where each row came from."""
+    _make_bin(tmp_path / "a.bin", 10)
+    _make_bin(tmp_path / "b.bin", 20)
+    ds = MixedTokenDataset(
+        [{"bin": tmp_path / "a.bin", "weight": 0.75},
+         {"bin": tmp_path / "b.bin", "weight": 0.25}],
+        seq_len=8, device="cpu",
+    )
+    x, y = ds.get_batch(8)
+    assert x.shape == (8, 8)
+    from_a = int((x[:, 0] == 10).sum())
+    from_b = int((x[:, 0] == 20).sum())
+    assert from_a == 6 and from_b == 2  # exactly 0.75 / 0.25 of 8
+
+
+def test_mixed_weights_are_normalised(tmp_path):
+    _make_bin(tmp_path / "a.bin", 10)
+    _make_bin(tmp_path / "b.bin", 20)
+    # unnormalised 3:1 should behave the same as 0.75:0.25
+    ds = MixedTokenDataset(
+        [{"bin": tmp_path / "a.bin", "weight": 30},
+         {"bin": tmp_path / "b.bin", "weight": 10}],
+        seq_len=8, device="cpu",
+    )
+    assert ds.weights[0] == pytest.approx(0.75)
+    x, _ = ds.get_batch(8)
+    assert int((x[:, 0] == 10).sum()) == 6
+
+
+def test_mixed_largest_remainder_sums_to_batch_size(tmp_path):
+    _make_bin(tmp_path / "a.bin", 10)
+    _make_bin(tmp_path / "b.bin", 20)
+    _make_bin(tmp_path / "c.bin", 30)
+    ds = MixedTokenDataset(
+        [{"bin": tmp_path / "a.bin", "weight": 0.5},
+         {"bin": tmp_path / "b.bin", "weight": 0.3},
+         {"bin": tmp_path / "c.bin", "weight": 0.2}],
+        seq_len=4, device="cpu",
+    )
+    for bs in (1, 3, 7, 16, 100):
+        assert int(ds._counts(bs).sum()) == bs
+
+    # n_tokens is the sum across sources
+    assert ds.n_tokens == 3 * 4000
+
+
+def test_mixed_batch_is_shifted_and_typed(tmp_path):
+    _make_bin(tmp_path / "a.bin", 10)
+    _make_bin(tmp_path / "b.bin", 20)
+    ds = MixedTokenDataset(
+        [{"bin": tmp_path / "a.bin", "weight": 1},
+         {"bin": tmp_path / "b.bin", "weight": 1}],
+        seq_len=8, device="cpu",
+    )
+    x, y = ds.get_batch(6)
+    assert x.dtype == torch.int64 and y.dtype == torch.int64
+    assert torch.equal(x[:, 1:], y[:, :-1])  # the next-token shift holds through the mix
+
+
+def test_mixed_rejects_bad_input(tmp_path):
+    _make_bin(tmp_path / "a.bin", 10)
+    with pytest.raises(ValueError):
+        MixedTokenDataset([], seq_len=8, device="cpu")
+    with pytest.raises(ValueError):
+        MixedTokenDataset([{"bin": tmp_path / "a.bin", "weight": 0}], seq_len=8, device="cpu")
 
 
 # ---- LR schedule --------------------------------------------------------------------

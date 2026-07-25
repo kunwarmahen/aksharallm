@@ -167,6 +167,50 @@ at once) but the output still has to land somewhere.
 
 ---
 
+## Blending several corpora
+
+Real base models don't train on one source — they mix. Ours blends general web text with
+code (**85% FineWeb-Edu + 15% Python**), so one pretraining run produces a base that both
+chats and codes. There are two ways to combine sources, and we deliberately pick the second:
+
+```mermaid
+flowchart TD
+    subgraph interleave["❌ interleave on disk"]
+        A1[web tokens] --> M1[one mixed train.bin]
+        B1[code tokens] --> M1
+        M1 --> N1["ratio baked in;<br/>changing it = re-tokenize 20 GB"]
+    end
+    subgraph runtime["✅ mix at sample time"]
+        A2[web.bin] --> MIX[MixedTokenDataset]
+        B2[code.bin] --> MIX
+        MIX --> N2["each batch drawn 85/15;<br/>ratio is a config knob"]
+    end
+```
+
+`prepare_blend.py` tokenizes each source into its **own** `.bin`, and
+[`MixedTokenDataset`](../aksharallm/data/loader.py) draws each *batch* from them by weight —
+an **exact** 85/15 split every step, not merely on average. Because the ratio lives in the
+config (`data.train_sources`), not the files, you can retune it — or flip to a code-heavy
+mix for the Python-specialist phase — without re-tokenizing anything.
+
+```bash
+python -m aksharallm.data.prepare_blend --out-dir data/blend --vocab-size 32768 \
+    --source fineweb-edu-10bt:0.85 --source codeparrot-python:0.15 \
+    --val-tokens 10000000 --max-train-tokens 10000000000
+```
+
+> The tokenizer is trained on the **mix**, not on prose alone. This matters: a prose-only
+> BPE wastes tokens on Python's indentation, `camelCase`, and `__dunder__` names — see
+> [docs/02-tokenizer.md](02-tokenizer.md).
+
+Code datasets have their own gotcha: many on the Hub are **gated** (need a login) or ship a
+deprecated loader *script* the current `datasets` library refuses. We use
+`codeparrot/codeparrot-clean` (pure Python) and `bigcode/the-stack-smol-xl`
+(multi-language), both of which stream ungated. Always test a new one with a 5-line
+`load_dataset(..., streaming=True); next(iter(ds))` before wiring it in.
+
+---
+
 ## An implementation detail that cost real debugging time
 
 The tokenizer runs in a process pool. The obvious way to feed it is:

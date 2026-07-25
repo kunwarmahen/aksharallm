@@ -26,7 +26,7 @@ from pathlib import Path
 import torch
 
 from ..config import Config, config_to_dict, load_config
-from ..data.loader import TokenDataset
+from ..data.loader import MixedTokenDataset, TokenDataset
 from ..model.transformer import Transformer
 from ..tokenizer.tokenizer import Tokenizer
 from .schedule import get_lr
@@ -116,7 +116,11 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ---- data --------------------------------------------------------------------
-    train_ds = TokenDataset(cfg.data.train_bin, cfg.train.seq_len, device)
+    if cfg.data.train_sources:
+        train_ds = MixedTokenDataset(cfg.data.train_sources, cfg.train.seq_len, device)
+        print(f"blended training: {train_ds}")
+    else:
+        train_ds = TokenDataset(cfg.data.train_bin, cfg.train.seq_len, device)
     val_ds = TokenDataset(cfg.data.val_bin, cfg.train.seq_len, device)
     tok = Tokenizer(cfg.data.tokenizer)
     if tok.vocab_size != cfg.model.vocab_size:

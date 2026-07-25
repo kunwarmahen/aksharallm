@@ -95,19 +95,21 @@ Read these in order. They assume no prior knowledge of machine learning.
 aksharallm/
 ├── configs/              YAML run configs — the only thing that changes between runs
 │   ├── tiny.yaml         Phase 1: 13.8M params, TinyStories
-│   └── small.yaml        Phase 2: 300M params, FineWeb-Edu
+│   ├── small.yaml        Phase 2 (pure): 300M params, FineWeb-Edu only
+│   └── small-code.yaml   Phase 2 (blended): 300M, 85% FineWeb-Edu + 15% Python
 ├── aksharallm/
 │   ├── config.py         dataclass config loading + CLI overrides
 │   ├── tokenizer/        byte-level BPE training and the chat template
 │   ├── data/
 │   │   ├── prepare.py        pretraining corpus  -> uint16 token stream
+│   │   ├── prepare_blend.py  several corpora     -> blended tokenizer + per-source bins
 │   │   ├── prepare_sft.py    chat corpus         -> packed blocks + loss mask
 │   │   ├── prepare_dpo.py    preference corpus   -> (chosen, rejected) pairs
-│   │   └── loader.py         memmap batch sampling
+│   │   └── loader.py         memmap batch sampling (TokenDataset, MixedTokenDataset)
 │   ├── model/
 │   │   └── transformer.py    the whole architecture, ~300 lines
 │   ├── train/
-│   │   ├── pretrain.py       next-token prediction
+│   │   ├── pretrain.py       next-token prediction (single- or blended-source)
 │   │   ├── sft.py            instruction tuning
 │   │   ├── dpo.py            preference tuning
 │   │   └── schedule.py       learning-rate schedules
@@ -115,20 +117,32 @@ aksharallm/
 │   └── infer/
 │       ├── generate.py   KV-cache sampling loop
 │       └── cli.py        interactive chat / completion
-├── tests/                correctness tests (KV cache, causality, RoPE)
-└── docs/                 the guide above
+├── skills/               task playbooks (prepare, pretrain, post-train, eval, scale, debug)
+├── tests/                correctness tests (KV cache, causality, RoPE, mixing, DPO)
+├── docs/                 the guide above
+└── AGENTS.md             project brief: state, plan, gotchas
 ```
 
 ---
 
-## The two phases
+## The plan: one blended base → two models
 
 **Phase 1 — `configs/tiny.yaml`.** 13.8M params, TinyStories, ~25 minutes. The point is
 not the model; it's proving every stage of the pipeline works before you spend a week of
 GPU time. Always start here after changing anything.
 
-**Phase 2 — `configs/small.yaml`.** ~300M params, 10B tokens of FineWeb-Edu, roughly
-6 days on a 3090. This is a real base model. See [docs/07-scaling.md](docs/07-scaling.md).
+**Phase 2 — `configs/small-code.yaml`.** ~300M params, ~10B tokens of **85% FineWeb-Edu +
+15% Python**, roughly 6 days on a 3090. Blending code into pretraining means one run yields
+a base that both chats (after SFT/DPO) and codes (after Python continued-pretraining) — and
+code also improves general reasoning. See [docs/07-scaling.md](docs/07-scaling.md) and
+[skills/scale-and-specialize.md](skills/scale-and-specialize.md).
+(`configs/small.yaml` is the pure-FineWeb-Edu fallback.)
+
+```mermaid
+flowchart LR
+    B["blended base<br/>85% web + 15% Python"] --> C["general chat<br/>SFT + DPO"]
+    B --> P["Python specialist<br/>continued-pretrain + code SFT"]
+```
 
 Both use identical code. Only the config differs.
 

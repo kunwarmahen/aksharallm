@@ -4,17 +4,25 @@ Phase 1 proved the pipeline. Now build something real.
 
 ## The Phase 2 target
 
-`configs/small.yaml` — **~300M parameters, 10B tokens of FineWeb-Edu, ~6 days on a 3090.**
+`configs/small-code.yaml` — **~300M parameters, ~10B tokens of a blended corpus
+(85% FineWeb-Edu + 15% Python), ~6 days on a 3090.**
 
 | | value |
 |---|---|
 | d_model / layers / heads | 1024 / 24 / 16 (4 KV) |
 | context | 1024 |
-| vocab | 32,768 |
+| vocab | 32,768 (trained on the blend) |
+| data mix | 85% FineWeb-Edu / 15% Python |
 | tokens/step | 245,760 |
 | steps | 40,000 |
 | est. throughput | ~19k tok/s |
 | est. VRAM | ~20 GB |
+
+Why blended? One expensive run then yields **two** models — a general chat model (after
+SFT/DPO) and a Python specialist (after code-heavy continued pretraining) — and code in
+pretraining also improves general reasoning. `configs/small.yaml` (pure FineWeb-Edu) is the
+non-blended fallback. Full rationale and the mixing mechanics: the **Blended base** section
+below, and [skills/scale-and-specialize.md](../skills/scale-and-specialize.md).
 
 ---
 
@@ -72,31 +80,36 @@ df -h .
 You need **~25 GB free**. 10B tokens × 2 bytes = 20 GB, plus the tokenizer and headroom.
 This is usually the binding constraint, not VRAM.
 
-### 2. Prepare the data (~2–4 hours, network-bound)
+### 2. Prepare the blended data (~2–4 hours, network-bound)
+
+`prepare_blend` trains one tokenizer on the mix, tokenizes each source to its own `.bin`,
+writes a combined `val.bin`, and prints the config block to paste:
 
 ```bash
-python -m aksharallm.data.prepare fineweb-edu-10bt \
-    --out-dir data/fineweb \
-    --vocab-size 32768 \
-    --val-tokens 10000000 \
-    --max-train-tokens 10000000000
+python -m aksharallm.data.prepare_blend \
+    --out-dir data/blend --vocab-size 32768 \
+    --source fineweb-edu-10bt:0.85 --source codeparrot-python:0.15 \
+    --val-tokens 10000000 --max-train-tokens 10000000000
 ```
 
-Verify before proceeding:
+Paste the printed `train_sources:` block into `configs/small-code.yaml` (the default paths
+already match). Verify before proceeding:
 
 ```bash
-ls -la data/fineweb/          # train.bin should be ~20 GB
+ls -la data/blend/     # fineweb-edu-10bt.bin ~17 GB, codeparrot-python.bin ~3 GB
 ```
 
 > A truncated data file is the worst possible failure here — you'd train for six days on
-> a repeating 200 MB slice. Check the size.
+> a repeating slice. Check the sizes. (For a **pure** FineWeb-Edu base, use
+> `python -m aksharallm.data.prepare fineweb-edu-10bt --out-dir data/fineweb …` with
+> `configs/small.yaml` instead.)
 
 ### 3. Tune the batch size
 
 Raise `batch_size` until you OOM, then back off ~10%:
 
 ```bash
-python -m aksharallm.train.pretrain configs/small.yaml \
+python -m aksharallm.train.pretrain configs/small-code.yaml \
     -o train.max_steps=30 -o train.batch_size=16
 ```
 
@@ -105,15 +118,16 @@ Then set `grad_accum` so `batch_size × grad_accum × 1024 ≈ 250,000`.
 ### 4. Smoke test
 
 ```bash
-python -m aksharallm.train.pretrain configs/small.yaml -o train.max_steps=50
+python -m aksharallm.train.pretrain configs/small-code.yaml -o train.max_steps=50
 ```
 
 Check: step-0 loss ≈ `ln(32768) = 10.4`, MFU > 35%, memory stable, `grad_norm` falling.
+The header should print `blended training: MixedTokenDataset([… :0.85, … :0.15], …)`.
 
 ### 5. Launch
 
 ```bash
-nohup python -m aksharallm.train.pretrain configs/small.yaml > train.log 2>&1 &
+nohup python -m aksharallm.train.pretrain configs/small-code.yaml > train.log 2>&1 &
 tail -f train.log
 ```
 
@@ -125,7 +139,7 @@ tail -f train.log
 tail -f train.log
 python -c "
 import json
-for l in open('checkpoints/small/train_log.jsonl'):
+for l in open('checkpoints/small-code/train_log.jsonl'):
     d = json.loads(l)
     if 'val_loss' in d: print(d['step'], round(d['val_loss'], 4))
 "
@@ -151,45 +165,51 @@ Below ~3.0 on FineWeb-Edu is a genuinely useful base model at this scale.
 ## Then post-train it
 
 ```bash
-# SFT (~2 hours)
+# SFT (~2 hours) -- use the base's own (blended) tokenizer for all post-training
 python -m aksharallm.data.prepare_sft smoltalk \
-    --tokenizer data/fineweb/tokenizer.json --out-dir data/sft --seq-len 1024
+    --tokenizer data/blend/tokenizer.json --out-dir data/sft --seq-len 1024
 python -m aksharallm.train.sft \
-    --base checkpoints/small/ckpt_best.pt --data-dir data/sft \
-    --tokenizer data/fineweb/tokenizer.json --out-dir checkpoints/small-sft
+    --base checkpoints/small-code/ckpt_best.pt --data-dir data/sft \
+    --tokenizer data/blend/tokenizer.json --out-dir checkpoints/small-sft
 
 # DPO (~3 hours)
 python -m aksharallm.data.prepare_dpo ultrafeedback \
-    --tokenizer data/fineweb/tokenizer.json --out-dir data/dpo --seq-len 1024
+    --tokenizer data/blend/tokenizer.json --out-dir data/dpo --seq-len 1024
 python -m aksharallm.train.dpo \
     --sft checkpoints/small-sft/sft_best.pt --data-dir data/dpo \
-    --tokenizer data/fineweb/tokenizer.json --out-dir checkpoints/small-dpo
+    --tokenizer data/blend/tokenizer.json --out-dir checkpoints/small-dpo
 ```
 
 ---
 
-## Specialising for a task
+## Specialising: the Python model (Stage C)
 
-You said the domain is open. Once Phase 2 exists, specialising is cheap — and this is
-where a small model genuinely competes.
+The chosen target is a **Python specialist**. Because the base is already blended (15%
+Python), it starts with real code fluency — specialising is then cheap, and this is where a
+small model genuinely competes.
 
 ```mermaid
 flowchart LR
-    B[Phase 2 base] --> CP[continued pretraining<br/>on domain text]
-    CP --> SFT[SFT on domain instructions]
-    SFT --> M[specialist model]
+    B["blended base<br/>(15% Python already)"] --> CP["continued pretraining<br/>code-heavy mix, lower LR"]
+    CP --> SFT[SFT on code instructions]
+    SFT --> M[Python specialist]
+    M --> E["eval: HumanEval pass@1"]
 ```
 
-**Continued pretraining** — keep doing next-token prediction, but on your domain corpus
-(your documents, papers, codebase), at a *lower* LR (~10% of the original). A few hundred
-million domain tokens is plenty. Mix in ~10% general data to avoid forgetting everything
-else.
+**Continued pretraining** — keep doing next-token prediction, but on a **code-heavy** mix
+(e.g. 70% Python / 30% general, to avoid forgetting), at a *lower* LR (~10% of the base
+run's), for a few hundred million to ~1B tokens. Reuse `MixedTokenDataset` — just flip the
+weights toward code — starting from the base's `ckpt_best.pt`.
 
-**Then SFT** on instructions written in that domain.
+**Then SFT** on Python instruction data (function-writing, bug-fixing, explaining).
 
-A 300M model specialised on one domain routinely beats a general 7B model *on that
-domain*, while running ~20× faster. This is the realistic path to something genuinely
-useful from this repo.
+**Why it's worth it:** a 300M model specialised on Python routinely beats a general 7B
+model *on Python*, while running ~20× faster — and unlike most targets, the eval is
+**objective**: HumanEval/MBPP run the generated code against unit tests. That objective
+score is the realistic "genuinely useful" outcome for this repo.
+
+(For a *different* domain later, the same recipe applies — swap the corpus. For a small
+personal corpus, prefer RAG over pretraining; see below.)
 
 ---
 
