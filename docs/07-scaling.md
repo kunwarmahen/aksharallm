@@ -21,8 +21,7 @@ Phase 1 proved the pipeline. Now build something real.
 Why blended? One expensive run then yields **two** models — a general chat model (after
 SFT/DPO) and a Python specialist (after code-heavy continued pretraining) — and code in
 pretraining also improves general reasoning. `configs/small.yaml` (pure FineWeb-Edu) is the
-non-blended fallback. Full rationale and the mixing mechanics: the **Blended base** section
-below, and [skills/scale-and-specialize.md](../skills/scale-and-specialize.md).
+non-blended fallback. Full rationale and the mixing mechanics are in the sections below.
 
 ---
 

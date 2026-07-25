@@ -117,10 +117,8 @@ aksharallm/
 │   └── infer/
 │       ├── generate.py   KV-cache sampling loop
 │       └── cli.py        interactive chat / completion
-├── skills/               task playbooks (prepare, pretrain, post-train, eval, scale, debug)
 ├── tests/                correctness tests (KV cache, causality, RoPE, mixing, DPO)
-├── docs/                 the guide above
-└── AGENTS.md             project brief: state, plan, gotchas
+└── docs/                 the guide above
 ```
 
 ---
@@ -134,8 +132,7 @@ GPU time. Always start here after changing anything.
 **Phase 2 — `configs/small-code.yaml`.** ~300M params, ~10B tokens of **85% FineWeb-Edu +
 15% Python**, roughly 6 days on a 3090. Blending code into pretraining means one run yields
 a base that both chats (after SFT/DPO) and codes (after Python continued-pretraining) — and
-code also improves general reasoning. See [docs/07-scaling.md](docs/07-scaling.md) and
-[skills/scale-and-specialize.md](skills/scale-and-specialize.md).
+code also improves general reasoning. See [docs/07-scaling.md](docs/07-scaling.md).
 (`configs/small.yaml` is the pure-FineWeb-Edu fallback.)
 
 ```mermaid

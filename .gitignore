@@ -14,6 +14,7 @@ __pycache__/
 *.bin
 *.pt
 *.safetensors
+# local-only working files (not part of the presentable repo)
 AGENTS.md
 PLAN.md
-skills/**/*
+.claude/
