@@ -282,6 +282,10 @@ changes: a chunked run is still mathematically one continuous run.
 
 ## Reading the logs
 
+Everything below can also be read as curves in a browser — `scripts/portal.sh` plots exactly
+these fields out of `train_log.jsonl` (see `docs/07-scaling.md`). The text log stays the
+source of truth; the portal never writes to it.
+
 ```
 [09:15:05] step   3120 | loss 1.6728 (ema 1.6767) | ppl   5.3 | lr 7.23e-04 |
            gnorm 0.29 | 463.8k tok/s | mfu 50.9% | 3.6GB | 0.53s/step |

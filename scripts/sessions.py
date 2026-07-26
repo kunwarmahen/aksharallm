@@ -11,6 +11,9 @@ session die.
     scripts/sessions.py small-code
     scripts/sessions.py small-code --steps    # also print every step line, grouped
 
+The parsing lives in `aksharallm.train.runlog`, shared with the web portal
+(`scripts/portal.sh`), so this table and the browser can never disagree about a run.
+
 Sessions logged before the markers existed are still shown: a step number going backwards
 is a resume, which is enough to split them.
 """
@@ -18,96 +21,27 @@ is a resume, which is enough to split them.
 from __future__ import annotations
 
 import argparse
-import json
 from datetime import datetime
 from pathlib import Path
 
-
-def fmt_dur(seconds: float) -> str:
-    """Same compact form the training logs use (45.2s / 12m30s / 6h05m / 3d04h)."""
-    if seconds < 60:
-        return f"{seconds:.1f}s"
-    m, s = divmod(int(seconds), 60)
-    h, m = divmod(m, 60)
-    d, h = divmod(h, 24)
-    if d:
-        return f"{d}d{h:02d}h"
-    if h:
-        return f"{h}h{m:02d}m"
-    return f"{m}m{s:02d}s"
-
-
-def load_sessions(path: Path) -> list[dict]:
-    """Split the jsonl into sessions. Tolerates truncated/garbled lines -- a log that a
-    `kill -9` cut mid-write should still be readable."""
-    sessions: list[dict] = []
-    cur: dict | None = None
-
-    def new_session(**kw) -> dict:
-        s = {"start_iso": None, "pid": None, "steps": [], "vals": [], "end": None, **kw}
-        sessions.append(s)
-        return s
-
-    for line in path.read_text(errors="replace").splitlines():
-        try:
-            rec = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        event = rec.get("event")
-        if event == "session_start":
-            cur = new_session(start_iso=rec.get("iso"), pid=rec.get("pid"),
-                              start_step=rec.get("start_step"), t0=rec.get("time"))
-        elif event == "session_end":
-            if cur is None:
-                cur = new_session()
-            cur["end"] = rec
-            cur = None
-        elif "val_loss" in rec:
-            if cur is None:
-                cur = new_session()
-            cur["vals"].append(rec)
-        elif "step" in rec:
-            # A step number that goes backwards means a resume happened without a marker
-            # (a log from before this feature, or a session killed with -9).
-            if cur is not None and cur["steps"] and rec["step"] < cur["steps"][-1]["step"]:
-                cur = None
-            if cur is None:
-                cur = new_session(unmarked=True)
-            cur["steps"].append(rec)
-    return sessions
+from aksharallm.train.runlog import fmt_dur, load_sessions, summarise_sessions
 
 
 def summarise(sessions: list[dict]) -> None:
     hdr = ("#", "started", "steps", "loss (ema)", "best val", "tok/s", "wall", "ended")
     rows = []
-    for i, s in enumerate(sessions, 1):
-        steps, vals, end = s["steps"], s["vals"], s["end"]
-        first, last = (steps[0], steps[-1]) if steps else (None, None)
-
-        started = s["start_iso"]
-        if started is None and first and "time" in first:
-            started = datetime.fromtimestamp(first["time"]).strftime("%Y-%m-%d %H:%M:%S")
-
-        if end and end.get("elapsed") is not None:
-            wall = fmt_dur(end["elapsed"])
-        elif first and last and "time" in first and "time" in last:
-            wall = fmt_dur(last["time"] - first["time"])
-        else:
-            wall = "?"
-
-        rate = [r["tok_per_sec"] for r in steps if "tok_per_sec" in r]
+    for s in summarise_sessions(sessions):
         rows.append((
-            str(i),
-            started or "?",
-            f"{first['step']} -> {last['step']}" if steps else "-",
-            f"{first['ema']:.3f} -> {last['ema']:.3f}"
-            if steps and "ema" in first and "ema" in last else "-",
-            f"{min(v['val_loss'] for v in vals):.4f}" if vals else "-",
-            f"{sum(rate) / len(rate) / 1e3:.1f}k" if rate else "-",
-            wall,
-            (end.get("reason") or "?") if end else
-            ("no end record (killed, crashed, or still running)"
-             if not s.get("unmarked") else "before session markers"),
+            str(s["index"]),
+            s["started"] or "?",
+            f"{s['first_step']} -> {s['last_step']}" if s["n_logged"] else "-",
+            f"{s['ema_first']:.3f} -> {s['ema_last']:.3f}"
+            if s["ema_first"] is not None and s["ema_last"] is not None else "-",
+            f"{s['best_val']:.4f}" if s["best_val"] is not None else "-",
+            f"{s['tok_per_sec'] / 1e3:.1f}k" if s["tok_per_sec"] else "-",
+            fmt_dur(s["wall_s"]) if s["wall_s"] is not None else "?",
+            s["ended"] or ("before session markers" if s["unmarked"]
+                           else "no end record (killed, crashed, or still running)"),
         ))
 
     widths = [max(len(r[c]) for r in [hdr, *rows]) for c in range(len(hdr))]

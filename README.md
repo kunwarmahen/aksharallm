@@ -112,7 +112,13 @@ aksharallm/
 │   │   ├── pretrain.py       next-token prediction (single- or blended-source)
 │   │   ├── sft.py            instruction tuning
 │   │   ├── dpo.py            preference tuning
-│   │   └── schedule.py       learning-rate schedules
+│   │   ├── schedule.py       learning-rate schedules
+│   │   └── runlog.py         reads train_log.jsonl back (sessions, series) — shared by
+│   │                         scripts/sessions.py and the portal
+│   ├── portal/           local web portal: start/stop a run, watch the curves
+│   │   ├── runs.py           run state on disk; drives phase2.sh / stop.sh
+│   │   ├── server.py         stdlib http.server + a small JSON API
+│   │   └── static/           one page, hand-written SVG charts, no dependencies
 │   ├── eval/evaluate.py  perplexity, HellaSwag, sample generations
 │   └── infer/
 │       ├── generate.py   KV-cache sampling loop
@@ -121,6 +127,7 @@ aksharallm/
 │   ├── phase1.sh         Phase 1 end to end (data -> pretrain -> generate), ~30 min
 │   ├── phase2.sh         Phase 2: pre-flight, build data, smoke test, background launch
 │   ├── stop.sh           stop a background run cleanly, now or after N more steps
+│   ├── portal.sh         the web portal (progress, graphs, start/stop) on localhost
 │   ├── sessions.py       per-session summary of a run trained over many evenings
 │   └── postrain.sh       Phase 3: SFT then DPO
 ├── tests/                correctness tests (KV cache, causality, RoPE, mixing, DPO)
@@ -165,6 +172,28 @@ scripts/sessions.py small-code          # compare the sessions afterwards
 
 Each session gets its own `logs/<run>/train_<timestamp>.log` (never overwritten), and
 `train_<run>.log` symlinks to the newest one.
+
+### Watching it in a browser
+
+```bash
+scripts/portal.sh --open        # http://127.0.0.1:8765
+```
+
+A local page with the progress against the budget and an ETA, live loss / throughput /
+gradient-norm / LR curves, the per-session table, the tail of the log, and buttons for
+start, stop, "stop after N more steps" and "stop at step N".
+
+It is a **view over the same files**, and it presses the same buttons: it starts runs with
+`scripts/phase2.sh` and stops them with `scripts/stop.sh`, so a run launched from a terminal
+appears in the portal and vice versa, and closing the portal never stops training. Standard
+library only — the server is `http.server`, the charts are hand-written SVG.
+
+```mermaid
+flowchart LR
+    UI["portal page<br/>charts + buttons"] <-->|JSON| SRV["aksharallm.portal"]
+    SRV -->|reads| F[("train_log.jsonl<br/>train.pid · STOP · logs/")]
+    SRV -->|runs| P["phase2.sh / stop.sh"] --> T["trainer"] -->|appends| F
+```
 
 ---
 

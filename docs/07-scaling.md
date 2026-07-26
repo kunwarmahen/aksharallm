@@ -160,7 +160,9 @@ for l in open('checkpoints/small-code/train_log.jsonl'):
 "
 ```
 
-Set `wandb_project` in the config for live charts instead.
+Or run the portal (`scripts/portal.sh`) and watch the curves in a browser — same numbers,
+same files, no `wandb` account. See "Driving it from a browser" below. Setting
+`wandb_project` in the config remains an option if you want the runs hosted.
 
 ### The one-command wrapper
 
@@ -218,6 +220,7 @@ scripts/stop.sh                      # graceful stop of the default run; waits f
 scripts/stop.sh small-code --status  # is it alive, and at what step? changes nothing
 scripts/stop.sh small-code --after 500   # queue: 500 more steps, then save and exit
 scripts/stop.sh small-code --at 20000    # queue: finish step 20000, then save and exit
+scripts/stop.sh small-code --cancel      # withdraw a queued stop; the run carries on
 FORCE=1 scripts/stop.sh small-code   # SIGKILL if the graceful stop hasn't landed in WAIT=300s
 ```
 
@@ -239,6 +242,65 @@ With no pid file (a run launched by hand, or started before this existed) `stop.
 the process by its command line and adopts the pid into the file. A graceful stop removes
 the STOP file itself; `stop.sh` also clears a stale one, since a leftover STOP would end the
 *next* launch at step 0.
+
+### Driving it from a browser
+
+Everything above works from a terminal, which is the right interface for a machine you are
+sitting at. It is the wrong interface for "is it still going?" from a phone on the sofa. So
+there is a small local portal:
+
+```bash
+scripts/portal.sh              # http://127.0.0.1:8765
+scripts/portal.sh --open       # ...and open a browser at it
+scripts/portal.sh --port 9000
+```
+
+It shows, for whichever run you pick: the current step against the budget with an ETA, the
+latest loss / throughput / MFU, the loss curve (per-step, EMA and validation), throughput,
+gradient norm and the LR schedule, the per-session table, the tail of the live log, and the
+config the trainer actually read. Start, stop, "stop after N more steps", "stop at step N"
+and "cancel that" are buttons.
+
+**The portal is a view, not a second system.** It starts runs by running `scripts/phase2.sh`
+and stops them by running `scripts/stop.sh` — the same scripts, with the same pre-flight and
+the same graceful save. It stores nothing of its own: every number on the page is read back
+out of `checkpoints/<run>/train_log.jsonl`, `train.pid`, `STOP` and `logs/<run>/*.log`.
+
+```mermaid
+flowchart LR
+    subgraph browser
+        UI[portal page<br/>charts + buttons]
+    end
+    UI -->|GET /api/run/name| SRV[aksharallm.portal<br/>stdlib http.server]
+    UI -->|POST start/stop| SRV
+    SRV -->|reads| F[("train_log.jsonl<br/>train.pid · STOP<br/>logs/run/*.log")]
+    SRV -->|runs| P[scripts/phase2.sh]
+    SRV -->|runs| S[scripts/stop.sh]
+    P -->|nohup| T[trainer]
+    S -->|STOP file| T
+    T -->|appends| F
+```
+
+Consequences of it being only a view, all of them good:
+
+- Closing the portal, or killing it, does **not** stop training. The trainer is detached.
+- A run you launched from a terminal shows up in the portal, and vice versa. Both find the
+  process the same way `stop.sh` does — pid file first, command line as the fallback.
+- You can run it on the training box and read it from another machine on the LAN, but the
+  API starts and stops processes and has **no login**, so a non-loopback bind must be asked
+  for explicitly: `scripts/portal.sh --host 0.0.0.0 --allow-remote`.
+
+Two things worth knowing before pressing **Start**:
+
+| | |
+|---|---|
+| **Start takes minutes to become "training"** | It runs the full pre-flight: tests, disk check, data check, then a 50-step smoke test. The page shows `pre-flight` and streams that log until the trainer appears. |
+| **`skip smoke test`** | Sets `SKIP_SMOKE=1`, which `phase2.sh` honours **only** when `ckpt_last.pt` exists — i.e. when you are resuming a config that has already trained for real. On a first launch it runs the smoke test anyway and says so. |
+
+The whole thing is the standard library plus hand-written SVG: `aksharallm/portal/` is
+~600 lines (`runs.py` = what a run is, `server.py` = routes, `static/` = the page), and
+`aksharallm/train/runlog.py` is the shared reader that `scripts/sessions.py` uses too, so the
+table in the terminal and the chart in the browser cannot disagree.
 
 ### Re-running (what happens if you run it again)
 

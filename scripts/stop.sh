@@ -12,6 +12,7 @@
 #   scripts/stop.sh small-code --after 500  # do 500 more steps, then save and exit
 # Both are inclusive: the step you name is trained, logged and checkpointed; the resume
 # picks up the step after it.
+#   scripts/stop.sh small-code --cancel     # withdraw a queued stop; the run carries on
 #   scripts/stop.sh --status           # is it running, and where is it? changes nothing
 #   WAIT=900 scripts/stop.sh           # wait longer for the save (default 300s)
 #   FORCE=1  scripts/stop.sh           # SIGKILL if still alive after WAIT (loses that step)
@@ -29,12 +30,14 @@ FORCE=${FORCE:-0}
 RUN=""
 AT=""
 STATUS=0
+CANCEL=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --at)     AT=${2:?--at needs a step number}; shift 2 ;;
         --after)  AFTER=${2:?--after needs a step count}; shift 2 ;;
+        --cancel) CANCEL=1; shift ;;
         --status) STATUS=1; shift ;;
-        -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
         -*)      echo "unknown flag: $1" >&2; exit 2 ;;
         *)       RUN=$1; shift ;;
     esac
@@ -49,6 +52,22 @@ if [ ! -d "$RUN_DIR" ]; then
     echo "no such run: $RUN_DIR" >&2
     echo "runs found: $(ls -1 checkpoints 2>/dev/null | tr '\n' ' ')" >&2
     exit 1
+fi
+
+# ---- cancel a queued stop ---------------------------------------------------------------
+# Removing the STOP file is all it takes: the trainer only reads it, and reads it fresh
+# every step. Works whether or not anything is running -- a leftover STOP on a dead run
+# would otherwise end the *next* launch at step 0.
+if [ "$CANCEL" = "1" ]; then
+    if [ -f "$STOP_FILE" ]; then
+        TARGET=$(tr -d '\n' < "$STOP_FILE" | head -c 20)
+        echo "cancelled the queued stop for '$RUN' (was: ${TARGET:-stop now})."
+        rm -f "$STOP_FILE"
+        echo "the run continues to its budget (or until you stop it again)."
+    else
+        echo "no stop is queued for '$RUN'."
+    fi
+    exit 0
 fi
 
 # ---- find the process ------------------------------------------------------------------

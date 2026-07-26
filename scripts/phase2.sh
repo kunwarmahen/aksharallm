@@ -14,6 +14,7 @@
 # Env knobs:
 #   PURE=1              FineWeb-Edu only, no code blend
 #   STOP_AFTER=500      train 500 steps this launch, then save and exit (chunked training)
+#   SKIP_SMOKE=1        skip the 50-step smoke test (see below -- resumes only)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -21,6 +22,7 @@ PY=${PY:-.venv/bin/python}
 NEED_GB=25
 PURE=${PURE:-0}
 STOP_AFTER=${STOP_AFTER:-}
+SKIP_SMOKE=${SKIP_SMOKE:-0}
 
 if [ "$PURE" = "1" ]; then
     CFG=configs/small.yaml;      RUN=small
@@ -89,9 +91,22 @@ done
 
 echo
 echo "=== 2/3  smoke test (50 steps) ==="
-echo "    check: step-0 loss ~10.4, MFU > 35%, memory stable"
-$PY -m aksharallm.train.pretrain "$CFG" \
-    -o train.max_steps=50 -o train.out_dir=/tmp/aksharallm_smoke -o train.resume=null
+# Skipping is only defensible when *resuming* a config that has already trained for real:
+# the thing the smoke test proves (model builds, data loads, memory fits, MFU is sane) was
+# proved by the previous session. On a first launch, or after touching the config or the
+# data, let it run -- 8 minutes here has repeatedly beaten discovering it at hour six.
+if [ "$SKIP_SMOKE" = "1" ] && [ -s "$RUN_DIR/ckpt_last.pt" ]; then
+    echo "    SKIP_SMOKE=1 and $RUN_DIR/ckpt_last.pt exists -- skipping (resume of a proven config)"
+elif [ "$SKIP_SMOKE" = "1" ]; then
+    echo "    SKIP_SMOKE=1 ignored: there is no checkpoint to resume, so this is a first"
+    echo "    launch and the smoke test is exactly what you want. Running it."
+    $PY -m aksharallm.train.pretrain "$CFG" \
+        -o train.max_steps=50 -o train.out_dir=/tmp/aksharallm_smoke -o train.resume=null
+else
+    echo "    check: step-0 loss ~10.4, MFU > 35%, memory stable"
+    $PY -m aksharallm.train.pretrain "$CFG" \
+        -o train.max_steps=50 -o train.out_dir=/tmp/aksharallm_smoke -o train.resume=null
+fi
 
 echo
 echo "=== 3/3  launching the real run ==="
@@ -131,6 +146,7 @@ echo "    pid $PID  ->  $PID_FILE  (config: $CFG)"
 echo "    log $LOG  (this session; $LOG_LINK -> it)"
 echo
 echo "    watch:   tail -f $LOG_LINK"
+echo "             scripts/portal.sh              (browser: progress, graphs, start/stop)"
 echo "    stop:    scripts/stop.sh $RUN"
 echo "    later:   scripts/stop.sh $RUN --after 500   (do 500 more steps, then stop)"
 echo "             scripts/stop.sh $RUN --at 20000    (stop on reaching step 20000)"

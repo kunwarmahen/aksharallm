@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aksharallm — training portal</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <span class="brand-name">aksharallm</span>
+    <span class="brand-sub">training portal</span>
+  </div>
+
+  <div class="topbar-right">
+    <label class="field">
+      <span class="field-label">run</span>
+      <select id="run-select" aria-label="run"></select>
+    </label>
+    <span id="phase" class="badge badge-idle">–</span>
+    <button id="theme" class="ghost" type="button" title="light / dark / follow system">
+      <span id="theme-label">auto</span>
+    </button>
+  </div>
+</header>
+
+<!-- One control row above everything it scopes. -->
+<section class="controls" aria-label="run controls">
+  <div class="control-group">
+    <button id="btn-start" class="primary" type="button">Start run</button>
+    <label class="field">
+      <span class="field-label">steps this session</span>
+      <input id="stop-after" type="number" min="1" step="50" placeholder="to budget">
+    </label>
+    <label class="check" title="Pre-flight normally runs the tests and a 50-step smoke test
+before the real run. Skipping is only sane when resuming a config that has already trained.">
+      <input id="skip-smoke" type="checkbox">
+      <span>skip smoke test</span>
+    </label>
+  </div>
+
+  <div class="control-group">
+    <button id="btn-stop" type="button">Stop now</button>
+    <button id="btn-stop-after" type="button">Stop after…</button>
+    <button id="btn-stop-at" type="button">Stop at step…</button>
+    <button id="btn-cancel-stop" class="ghost" type="button">Cancel queued stop</button>
+  </div>
+
+  <div class="control-group control-status">
+    <span id="live" class="live" title="polling">
+      <span class="dot"></span><span id="live-label">connecting…</span>
+    </span>
+  </div>
+</section>
+
+<div id="flash" class="flash" role="status" aria-live="polite" hidden></div>
+
+<main>
+  <!-- Progress: the headline number is a step count, not a chart. -->
+  <section class="panel progress-panel">
+    <div class="progress-head">
+      <div>
+        <div class="hero" id="hero-step">–</div>
+        <div class="hero-sub" id="hero-sub">no log for this run yet</div>
+      </div>
+      <div class="progress-eta">
+        <div class="eta-label">eta to finish</div>
+        <div class="eta-value" id="eta">–</div>
+      </div>
+    </div>
+    <div class="meter" role="img" aria-label="training progress">
+      <div class="meter-fill" id="meter-fill"></div>
+      <div class="meter-mark" id="meter-stop" hidden title="queued stop"></div>
+    </div>
+    <div class="meter-legend">
+      <span id="meter-left">–</span>
+      <span id="meter-right">–</span>
+    </div>
+  </section>
+
+  <section class="tiles" aria-label="latest readings">
+    <div class="tile"><div class="tile-label">loss (ema)</div>
+      <div class="tile-value" id="t-ema">–</div><div class="tile-note" id="t-ema-note">–</div></div>
+    <div class="tile"><div class="tile-label">best val loss</div>
+      <div class="tile-value" id="t-val">–</div><div class="tile-note" id="t-val-note">–</div></div>
+    <div class="tile"><div class="tile-label">throughput</div>
+      <div class="tile-value" id="t-tok">–</div><div class="tile-note" id="t-tok-note">–</div></div>
+    <div class="tile"><div class="tile-label">MFU</div>
+      <div class="tile-value" id="t-mfu">–</div><div class="tile-note" id="t-mfu-note">–</div></div>
+    <div class="tile"><div class="tile-label">tokens seen</div>
+      <div class="tile-value" id="t-tokens">–</div><div class="tile-note" id="t-tokens-note">–</div></div>
+    <div class="tile"><div class="tile-label">session up</div>
+      <div class="tile-value" id="t-up">–</div><div class="tile-note" id="t-up-note">–</div></div>
+  </section>
+
+  <section class="chart-grid" aria-label="training curves">
+    <figure class="panel chart-card" id="card-loss">
+      <figcaption>
+        <span class="chart-title">Training loss</span>
+        <span class="chart-note">lower is better · the ema smooths the per-step noise · validation is the honest one</span>
+        <button class="ghost view-toggle" data-target="loss" type="button">table</button>
+      </figcaption>
+      <div class="chart" data-chart="loss"></div>
+      <div class="chart-table" data-table="loss" hidden></div>
+    </figure>
+
+    <figure class="panel chart-card" id="card-tok">
+      <figcaption>
+        <span class="chart-title">Throughput</span>
+        <span class="chart-note">thousand tokens per second · MFU is this same curve as a % of peak</span>
+        <button class="ghost view-toggle" data-target="tok" type="button">table</button>
+      </figcaption>
+      <div class="chart" data-chart="tok"></div>
+      <div class="chart-table" data-table="tok" hidden></div>
+    </figure>
+
+    <figure class="panel chart-card" id="card-gnorm">
+      <figcaption>
+        <span class="chart-title">Gradient norm</span>
+        <span class="chart-note">spikes are the thing to watch; the rule is the clip threshold</span>
+        <button class="ghost view-toggle" data-target="gnorm" type="button">table</button>
+      </figcaption>
+      <div class="chart" data-chart="gnorm"></div>
+      <div class="chart-table" data-table="gnorm" hidden></div>
+    </figure>
+
+    <figure class="panel chart-card" id="card-lr">
+      <figcaption>
+        <span class="chart-title">Learning rate</span>
+        <span class="chart-note">warmup, then the cosine decay to the floor</span>
+        <button class="ghost view-toggle" data-target="lr" type="button">table</button>
+      </figcaption>
+      <div class="chart" data-chart="lr"></div>
+      <div class="chart-table" data-table="lr" hidden></div>
+    </figure>
+  </section>
+
+  <section class="panel" aria-label="sessions">
+    <div class="panel-head">
+      <h2>Sessions</h2>
+      <span class="panel-note">one row per launch — a run trained over evenings is many processes</span>
+    </div>
+    <div class="scroll-x" id="sessions"></div>
+  </section>
+
+  <section class="panel" aria-label="log">
+    <div class="panel-head">
+      <h2>Log</h2>
+      <label class="field">
+        <span class="field-label">file</span>
+        <select id="log-select"></select>
+      </label>
+      <label class="check"><input id="log-follow" type="checkbox" checked><span>follow</span></label>
+      <span class="panel-note" id="log-note"></span>
+    </div>
+    <pre id="log" class="log" tabindex="0">…</pre>
+  </section>
+
+  <section class="panel" aria-label="run detail">
+    <div class="panel-head">
+      <h2>Configuration</h2>
+      <span class="panel-note">a run is a YAML plus overrides — this is what the trainer read</span>
+    </div>
+    <dl class="kv" id="config"></dl>
+    <div class="scroll-x" id="checkpoints"></div>
+  </section>
+</main>
+
+<footer class="footer">
+  <span id="foot-root">–</span>
+  <span>Stopping is safe at any step: the trainer saves <code>ckpt_last.pt</code> where it
+  stopped and the next start resumes there with no loss spike.</span>
+</footer>
+
+<div id="tooltip" class="tooltip" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -238,6 +238,39 @@ If you see this in your own script, your data is fine; check the file sizes.
 
 ---
 
+## The portal
+
+### `cannot bind 127.0.0.1:8765`
+
+Another portal is already running (they are harmless, but only one can hold the port):
+`scripts/portal.sh --port 8766`, or stop the other one. Nothing about a training run is
+affected either way — the portal holds no state.
+
+### The Start button is greyed out
+
+Either that run is already training (the badge says so), or it has no launcher.
+`scripts/phase2.sh` knows how to build `small-code` and `small`; any other run is read-only
+in the portal and must be started from a terminal. Hover the button for the reason.
+
+### I pressed Start and the phase says `pre-flight` for ten minutes
+
+That is `phase2.sh` doing its job: tests, disk check, data check, then a 50-step smoke test
+before the real run. The log panel is streaming that launcher log; the phase turns to
+`training` when the trainer's pid appears. On a resume you can tick **skip smoke test**
+(`SKIP_SMOKE=1`), which is honoured only when `ckpt_last.pt` exists.
+
+### The portal says idle but `nvidia-smi` shows a busy GPU
+
+Something is training that this run's `train.pid` doesn't point at — a hand-launched trainer
+for a different config, or another program. `scripts/stop.sh <run> --status` and
+`nvidia-smi` together will say which. The portal deliberately refuses to signal a pid whose
+command line isn't an `aksharallm` trainer.
+
+### Closing the portal / the browser
+
+Neither stops training. The trainer is detached (`nohup`, its own session), the portal is a
+reader, and the buttons work by writing the same `STOP` file `scripts/stop.sh` writes.
+
 ## Sanity checklist before a multi-day run
 
 ```bash
