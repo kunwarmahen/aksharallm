@@ -13,6 +13,7 @@ measurement so you can tell when you've made things slower.
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import math
 import os
@@ -84,6 +85,33 @@ def resolve_stop_step(start_step: int, stop_after: int | None,
             f"{start_step} -- there is nothing to do. Raise it or drop the flag."
         )
     return stop_at
+
+
+def claim_pid_file(out_dir: Path) -> Path:
+    """Record "this process is training into this directory" in `<out_dir>/train.pid`.
+
+    The pid belongs to the *run directory*, not to a command line. That distinction is
+    load-bearing: the 50-step smoke test runs the identical command line with a throwaway
+    `out_dir`, so anything that identifies a run by `pgrep -f "pretrain configs/x.yaml"`
+    will happily find the smoke test and aim a stop request at it. Writing the pid here
+    means `scripts/stop.sh` and the portal both get an unambiguous answer, whoever launched
+    the run -- `phase2.sh`, the portal, or a bare command in a terminal.
+
+    Released on any clean exit (including a stop or a crash), so a missing file really does
+    mean "nothing is training here". A `kill -9` leaves it behind; readers check liveness.
+    """
+    path = out_dir / "train.pid"
+    path.write_text(f"{os.getpid()}\n")
+
+    def release():
+        try:
+            if int(path.read_text().strip()) == os.getpid():
+                path.unlink()
+        except (OSError, ValueError):
+            pass  # someone else's pid, or already gone: leave it alone
+
+    atexit.register(release)
+    return path
 
 
 def stop_file_target(path: Path) -> int | None:
@@ -174,6 +202,7 @@ def main():
 
     out_dir = Path(cfg.train.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    claim_pid_file(out_dir)
 
     # ---- data --------------------------------------------------------------------
     if cfg.data.train_sources:

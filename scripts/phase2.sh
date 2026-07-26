@@ -36,8 +36,46 @@ PID_FILE=$RUN_DIR/train.pid
 LOG_DIR=logs/$RUN
 LOG=$LOG_DIR/train_$(date '+%Y%m%d-%H%M%S').log
 LOG_LINK=train_${RUN}.log
+mkdir -p "$RUN_DIR" "$LOG_DIR"
+
+# ---- publish this launch ----------------------------------------------------------------
+# Pre-flight takes minutes (tests, data check, a 50-step smoke test) before any trainer
+# exists. Without a record of it, a second launch -- from another terminal, or from the
+# portal -- sails straight past the "already training?" check below and you get two of
+# everything on one GPU. So the launcher publishes *itself*, the same way it publishes the
+# trainer, and both scripts/stop.sh and the portal read it.
+LAUNCH_PID_FILE=$RUN_DIR/launch.pid
+LAUNCH_META=$RUN_DIR/launch.meta
+LAUNCH_LOG=${LAUNCH_LOG:-}          # the caller (e.g. the portal) can name the log it captures
+STARTED=$(date '+%Y-%m-%d %H:%M:%S')
+
+launch_stage() {   # so an aborted launch can say *what* it interrupted
+    cat > "$LAUNCH_META" <<META
+pid     $$
+stage   $1
+started $STARTED
+config  $CFG
+log     ${LAUNCH_LOG:-(terminal)}
+META
+}
+# Clean up on every exit path -- success, error, or SIGTERM from `scripts/stop.sh`.
+trap 'rm -f "$LAUNCH_PID_FILE"' EXIT
+trap 'echo "[abort] launch cancelled during $(sed -n "s/^stage *//p" "$LAUNCH_META" 2>/dev/null)"; exit 130' TERM INT
 
 echo "=== pre-flight ($([ "$PURE" = 1 ] && echo 'pure FineWeb-Edu' || echo 'blended 85/15 general+Python')) ==="
+
+if [ -f "$LAUNCH_PID_FILE" ]; then
+    OTHER=$(tr -dc '0-9' < "$LAUNCH_PID_FILE")
+    if [ -n "$OTHER" ] && [ "$OTHER" != "$$" ] && kill -0 "$OTHER" 2>/dev/null; then
+        echo "    ERROR: another launch of '$RUN' is already in pre-flight (pid $OTHER)." >&2
+        sed 's/^/           /' "$LAUNCH_META" >&2 2>/dev/null || true
+        echo "           abort it:  scripts/stop.sh $RUN   (or wait for it to start training)" >&2
+        trap - EXIT   # that pid file is the *other* launch's -- do not delete it
+        exit 1
+    fi
+fi
+echo "$$" > "$LAUNCH_PID_FILE"
+launch_stage preflight
 
 # Two trainers sharing one GPU and one checkpoint dir ruin both runs, and the smoke test
 # below would fight the live one for memory. Check this before anything expensive.
@@ -58,6 +96,7 @@ $PY -m pytest tests/ -q || { echo "tests failed -- fix before a 6-day run" >&2; 
 
 echo
 echo "=== 1/3  building token files (~20 GB) ==="
+launch_stage data
 if [ "$PURE" = "1" ]; then
     if [ -s data/fineweb/train.bin ]; then
         echo "    already present, skipping"
@@ -91,6 +130,7 @@ done
 
 echo
 echo "=== 2/3  smoke test (50 steps) ==="
+launch_stage smoke
 # Skipping is only defensible when *resuming* a config that has already trained for real:
 # the thing the smoke test proves (model builds, data loads, memory fits, MFU is sane) was
 # proved by the previous session. On a first launch, or after touching the config or the
@@ -110,7 +150,7 @@ fi
 
 echo
 echo "=== 3/3  launching the real run ==="
-mkdir -p "$RUN_DIR" "$LOG_DIR"
+launch_stage launching
 rm -f "$RUN_DIR/STOP"   # a STOP left over from a previous stop would end this run at step 0
 
 EXTRA=()

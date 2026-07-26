@@ -3,7 +3,12 @@
 # ckpt_last.pt at that exact step, then exits. Re-running phase2.sh resumes with no loss
 # spike, so stopping costs nothing but the seconds of the step in flight.
 #
-# It works off the pid file phase2.sh writes to checkpoints/<run>/train.pid.
+# It works off checkpoints/<run>/train.pid, which the trainer itself writes (so it is the
+# pid of whoever is training into *that directory* -- never the 50-step smoke test, which
+# has the same command line but a throwaway out_dir).
+#
+# If nothing is training yet but phase2.sh is still in pre-flight (checkpoints/<run>/
+# launch.pid), a stop aborts that launch instead -- nothing has trained, so nothing is lost.
 #
 # Usage:
 #   scripts/stop.sh                    # stop the default run now (small-code; PURE=1 -> small)
@@ -19,6 +24,8 @@
 #
 # --at/--after don't wait around: they leave the target in the STOP file and return, so you
 # can queue a bounded finish and close the terminal.
+#
+# All of this is also available as buttons: scripts/portal.sh (it runs this very script).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -37,7 +44,7 @@ while [ $# -gt 0 ]; do
         --after)  AFTER=${2:?--after needs a step count}; shift 2 ;;
         --cancel) CANCEL=1; shift ;;
         --status) STATUS=1; shift ;;
-        -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
         -*)      echo "unknown flag: $1" >&2; exit 2 ;;
         *)       RUN=$1; shift ;;
     esac
@@ -46,7 +53,19 @@ RUN=${RUN:-$DEFAULT_RUN}
 RUN_DIR=checkpoints/$RUN
 PID_FILE=$RUN_DIR/train.pid
 STOP_FILE=$RUN_DIR/STOP
+LAUNCH_PID_FILE=$RUN_DIR/launch.pid   # phase2.sh while it is still pre-flighting
+LAUNCH_META=$RUN_DIR/launch.meta
 LOG_LINK=train_${RUN}.log   # symlink phase2.sh points at the current session's log
+
+launch_pid() {   # a live phase2.sh for this run (pre-flight: tests, data, smoke test)
+    local p
+    [ -f "$LAUNCH_PID_FILE" ] || return 1
+    p=$(tr -dc '0-9' < "$LAUNCH_PID_FILE")
+    [ -n "$p" ] && kill -0 "$p" 2>/dev/null && ps -p "$p" -o args= 2>/dev/null \
+        | grep -q 'phase2.sh' && { echo "$p"; return 0; }
+    return 1
+}
+launch_stage() { sed -n 's/^stage *//p' "$LAUNCH_META" 2>/dev/null | head -1; }
 
 if [ ! -d "$RUN_DIR" ]; then
     echo "no such run: $RUN_DIR" >&2
@@ -74,10 +93,16 @@ fi
 PID=""
 [ -f "$PID_FILE" ] && PID=$(tr -dc '0-9' < "$PID_FILE")
 
-# No pid file? The run may predate phase2.sh writing one, or have been launched by hand.
-# Fall back to the command line (the config name matches the run name) and adopt the pid.
+# No pid file? Fall back to the command line and adopt the pid.
+#
+# The `$` anchor is not decoration. The 50-step smoke test inside phase2.sh runs the *same*
+# command with `-o train.out_dir=/tmp/...` appended, so an unanchored match finds the smoke
+# test and cheerfully aims a stop at it -- writing a STOP file the smoke test never reads,
+# while reporting a pid that is about to vanish. Anchoring means we only ever adopt a plain,
+# override-free launch; anything else is expected to have written its own train.pid
+# (aksharallm/train/pretrain.py does this into its own out_dir).
 if [ -z "$PID" ]; then
-    PID=$(pgrep -f "aksharallm.train.pretrain configs/${RUN}.yaml" | head -1 || true)
+    PID=$(pgrep -f "aksharallm\.train\.pretrain configs/${RUN}\.yaml\$" | head -1 || true)
     if [ -n "$PID" ]; then
         echo "$PID" > "$PID_FILE"
         echo "found pid $PID by command line (no pid file); recorded it in $PID_FILE."
@@ -85,6 +110,39 @@ if [ -z "$PID" ]; then
 fi
 
 if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
+    # Nothing is training -- but a launch may be in pre-flight, minutes away from training.
+    # Treating that as "not running" is how you end up with two trainers on one GPU.
+    if LPID=$(launch_pid); then
+        STAGE=$(launch_stage)
+        echo "run '$RUN' is not training yet: a launch is in pre-flight (pid $LPID, stage ${STAGE:-?})."
+        [ -f "$LAUNCH_META" ] && sed 's/^/    /' "$LAUNCH_META"
+        if [ "$STATUS" = "1" ]; then
+            echo "    it will start training on its own; stop it again once it does."
+            exit 0
+        fi
+        if [ "$STAGE" = "launching" ]; then
+            echo "it is launching the trainer right now -- wait a few seconds and stop that instead." >&2
+            exit 1
+        fi
+        echo "aborting the launch (nothing has trained yet, so nothing is lost)."
+        # The launcher plus whatever it is running right now (pytest, a data build, the smoke
+        # test). Signal the children too: bash defers a signal until its foreground child
+        # exits, which for the smoke test is eight minutes away. Children only -- never a
+        # process group, which for a terminal launch would include your shell.
+        for child in $(pgrep -P "$LPID" 2>/dev/null); do kill -TERM "$child" 2>/dev/null || true; done
+        kill -TERM "$LPID" 2>/dev/null || true
+        waited=0
+        while [ "$waited" -lt 30 ] && kill -0 "$LPID" 2>/dev/null; do sleep 1; waited=$((waited + 1)); done
+        if kill -0 "$LPID" 2>/dev/null; then
+            echo "launch pid $LPID is still alive after ${waited}s -- kill -9 $LPID if it stays." >&2
+            exit 1
+        fi
+        echo "launch aborted after ${waited}s."
+        [ "$STAGE" = "data" ] && echo "NOTE: it was building token files. Check the sizes of" \
+            "data/*/*.bin before the next launch -- a half-written .bin is not obvious." >&2
+        exit 0
+    fi
+
     echo "run '$RUN' is not running${PID:+ (pid $PID is gone)}."
     if [ "$STATUS" = "1" ]; then
         [ -f "$RUN_DIR/run.meta" ] && sed 's/^/    /' "$RUN_DIR/run.meta"
@@ -97,9 +155,19 @@ if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
 fi
 
 # pids get recycled; make sure this one is still our trainer before signalling it.
-if ! ps -p "$PID" -o args= 2>/dev/null | grep -q 'aksharallm.train'; then
+ARGS=$(ps -p "$PID" -o args= 2>/dev/null || true)
+if ! printf '%s' "$ARGS" | grep -q 'aksharallm.train'; then
     echo "pid $PID is alive but is not an aksharallm trainer -- refusing to touch it." >&2
     echo "(stale pid file; removing it)" >&2
+    rm -f "$PID_FILE"
+    exit 1
+fi
+# Belt and braces after the anchored pgrep above: never aim a stop at the smoke test. Its
+# STOP file lives in /tmp/aksharallm_smoke, so a stop written here would be silently ignored
+# while the terminal claimed success.
+if printf '%s' "$ARGS" | grep -q 'aksharallm_smoke'; then
+    echo "pid $PID is the 50-step smoke test, not the run -- refusing." >&2
+    echo "wait for pre-flight to finish, then stop the real trainer." >&2
     rm -f "$PID_FILE"
     exit 1
 fi

@@ -127,7 +127,7 @@ aksharallm/
 │   ├── phase1.sh         Phase 1 end to end (data -> pretrain -> generate), ~30 min
 │   ├── phase2.sh         Phase 2: pre-flight, build data, smoke test, background launch
 │   ├── stop.sh           stop a background run cleanly, now or after N more steps
-│   ├── portal.sh         the web portal (progress, graphs, start/stop) on localhost
+│   ├── portal.sh         the web portal (progress, graphs, start/stop); --lan to share
 │   ├── sessions.py       per-session summary of a run trained over many evenings
 │   └── postrain.sh       Phase 3: SFT then DPO
 ├── tests/                correctness tests (KV cache, causality, RoPE, mixing, DPO)
@@ -177,6 +177,7 @@ Each session gets its own `logs/<run>/train_<timestamp>.log` (never overwritten)
 
 ```bash
 scripts/portal.sh --open        # http://127.0.0.1:8765
+scripts/portal.sh --lan         # ...reachable from your phone; it prints the address
 ```
 
 A local page with the progress against the budget and an ETA, live loss / throughput /
@@ -185,8 +186,15 @@ start, stop, "stop after N more steps" and "stop at step N".
 
 It is a **view over the same files**, and it presses the same buttons: it starts runs with
 `scripts/phase2.sh` and stops them with `scripts/stop.sh`, so a run launched from a terminal
-appears in the portal and vice versa, and closing the portal never stops training. Standard
-library only — the server is `http.server`, the charts are hand-written SVG.
+appears in the portal and vice versa — including while it is still in pre-flight — and
+closing the portal never stops training. Standard library only: the server is `http.server`,
+the charts are hand-written SVG.
+
+Everything either side needs is on disk: the trainer writes `train.pid` into its own
+checkpoint dir (so the 50-step smoke test, which shares its command line, can never be
+mistaken for the run), `phase2.sh` publishes `launch.pid` + `launch.meta` while it
+pre-flights, and a stop during pre-flight aborts the launch from either side. `--lan` serves
+it to the rest of your network; there is no login, so keep that to networks you trust.
 
 ```mermaid
 flowchart LR

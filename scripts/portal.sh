@@ -8,7 +8,11 @@
 #   scripts/portal.sh                 # http://127.0.0.1:8765
 #   scripts/portal.sh --port 9000
 #   scripts/portal.sh --open          # ...and open a browser
-#   scripts/portal.sh --host 0.0.0.0 --allow-remote    # reachable from the LAN (no login!)
+#   scripts/portal.sh --lan           # reachable from other machines on your network;
+#                                     # it prints the address to type on the phone/laptop.
+#
+# --lan has no login: anyone who can reach the address can start and stop training. That is
+# usually what you want on a home LAN, and never what you want on the open internet.
 #
 # Stopping the portal (Ctrl-C) never touches a training run: the trainer is a separate,
 # detached process and the portal holds no state of its own.

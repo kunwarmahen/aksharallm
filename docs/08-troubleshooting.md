@@ -259,6 +259,15 @@ before the real run. The log panel is streaming that launcher log; the phase tur
 `training` when the trainer's pid appears. On a resume you can tick **skip smoke test**
 (`SKIP_SMOKE=1`), which is honoured only when `ckpt_last.pt` exists.
 
+### A stop said "queued: pid NNN will finish step N" but nothing stopped
+
+Check whether that pid was the **smoke test**: `ps -p NNN -o args=`. During pre-flight,
+`phase2.sh` runs the identical trainer command with `-o train.out_dir=/tmp/aksharallm_smoke`,
+so anything identifying a run by command line alone finds it — and a STOP file written to
+`checkpoints/<run>/` is never read by a process whose `out_dir` is `/tmp`. Fixed by the
+trainer writing `train.pid` into its own `out_dir` and by anchoring the command-line
+fallback; if you see this again, the pid file is stale and something is matching too loosely.
+
 ### The portal says idle but `nvidia-smi` shows a busy GPU
 
 Something is training that this run's `train.pid` doesn't point at — a hand-launched trainer

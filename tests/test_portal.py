@@ -10,12 +10,16 @@ never be started.
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 
 import pytest
 
+from aksharallm.portal import runs as runs_mod
 from aksharallm.portal.runs import RunError, RunStore
 from aksharallm.portal.server import serve
 from aksharallm.train import runlog
@@ -81,8 +85,35 @@ def repo(tmp_path):
     (tmp_path / "logs" / "demo").mkdir(parents=True)
     (tmp_path / "logs" / "demo" / "train_20260726-091731.log").write_text(
         "\n".join(f"line {i}" for i in range(500)))
-    (tmp_path / "scripts").mkdir()
+    # Stub launcher/stopper: they record how the portal called them, which is the contract
+    # that matters — the portal must drive the real scripts, not reimplement them.
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "phase2.sh").write_text(
+        '#!/usr/bin/env bash\necho "args: $*"\necho "STOP_AFTER=${STOP_AFTER:-}"\n'
+        'echo "SKIP_SMOKE=${SKIP_SMOKE:-}"\necho "LAUNCH_LOG=${LAUNCH_LOG:-}"\n')
+    (scripts / "stop.sh").write_text('#!/usr/bin/env bash\necho "args: $*"\n')
+    for s in scripts.iterdir():
+        s.chmod(0o755)
     return tmp_path
+
+
+def spawn(*extra_args):
+    """A live process whose command line we control, for pid-identification tests."""
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)", *extra_args],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return proc
+
+
+def wait_for(predicate, timeout=10.0):
+    """Detached subprocesses write their logs asynchronously; give them a moment."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return False
 
 
 @pytest.fixture
@@ -194,6 +225,120 @@ def test_log_tail_reads_only_the_end(store):
     assert tail["file"].startswith("train_")
     with pytest.raises(RunError, match="no such log"):
         store.log_tail("demo", name="../../../etc/passwd")
+
+
+# ---- identifying the right process -----------------------------------------------------
+
+def test_the_smoke_test_is_never_mistaken_for_the_run(store, repo):
+    """The 50-step smoke test runs the identical command line with a throwaway out_dir.
+
+    Aiming a stop at it writes a STOP file it never reads, while the UI reports a pid that
+    is about to vanish — which is exactly what happened before train.pid became the
+    trainer's own, per-out_dir claim.
+    """
+    smoke = spawn("-m", "aksharallm.train.pretrain", "configs/demo.yaml",
+                  "-o", "train.out_dir=/tmp/aksharallm_smoke", "-o", "train.max_steps=50")
+    try:
+        (repo / "checkpoints" / "demo" / "train.pid").write_text(f"{smoke.pid}\n")
+        assert store.trainer_pid("demo") is None
+        assert store.status("demo")["phase"] == "idle"
+    finally:
+        smoke.kill()
+        smoke.wait()
+
+
+def test_a_real_trainers_pid_file_is_trusted(store, repo):
+    real = spawn("-m", "aksharallm.train.pretrain", "configs/demo.yaml")
+    try:
+        (repo / "checkpoints" / "demo" / "train.pid").write_text(f"{real.pid}\n")
+        assert store.trainer_pid("demo") == real.pid
+        s = store.status("demo")
+        assert s["phase"] == "training" and s["can_stop"] and s["can_bound"]
+    finally:
+        real.kill()
+        real.wait()
+
+
+def test_a_preflight_started_anywhere_shows_as_launching(store, repo):
+    """phase2.sh publishes launch.pid + launch.meta, so a launch from a terminal is visible
+    to the portal and a launch from the portal is visible to scripts/stop.sh."""
+    launcher = spawn("scripts/phase2.sh")
+    try:
+        rdir = repo / "checkpoints" / "demo"
+        (rdir / "launch.pid").write_text(f"{launcher.pid}\n")
+        (rdir / "launch.meta").write_text(
+            f"pid     {launcher.pid}\nstage   smoke\nstarted 2026-07-26 12:19:00\n"
+            "config  configs/demo.yaml\nlog     logs/demo/launch_x.log\n")
+        s = store.status("demo")
+        assert s["phase"] == "launching"
+        assert s["launcher"]["stage"] == "smoke"
+        assert s["launcher"]["log"] == "logs/demo/launch_x.log"
+        # Stoppable (that aborts the launch), but not boundable: there is no step yet.
+        assert s["can_stop"] is True and s["can_bound"] is False and s["can_start"] is False
+        with pytest.raises(RunError, match="still in pre-flight"):
+            store.stop("demo", "after", 500)
+    finally:
+        launcher.kill()
+        launcher.wait()
+
+
+def test_a_launch_that_is_starting_the_trainer_is_not_aborted(store, repo):
+    """At stage 'launching' the trainer is seconds old and is still the launcher's child —
+    signalling then could take the real run down with it."""
+    launcher = spawn("scripts/phase2.sh")
+    try:
+        rdir = repo / "checkpoints" / "demo"
+        (rdir / "launch.pid").write_text(f"{launcher.pid}\n")
+        (rdir / "launch.meta").write_text(f"pid {launcher.pid}\nstage   launching\n")
+        with pytest.raises(RunError, match="few seconds"):
+            store.stop("demo", "now")
+    finally:
+        launcher.kill()
+        launcher.wait()
+
+
+def test_meta_files_are_parsed_as_the_shell_writes_them(repo):
+    (repo / "checkpoints" / "demo" / "run.meta").write_text(
+        "pid     4242\nstarted 2026-07-26 09:17:23\nconfig  configs/demo.yaml\n")
+    meta = runs_mod._read_meta(repo / "checkpoints" / "demo" / "run.meta")
+    assert meta == {"pid": "4242", "started": "2026-07-26 09:17:23",
+                    "config": "configs/demo.yaml"}
+
+
+# ---- the portal drives the scripts, it does not reimplement them ------------------------
+
+def test_start_runs_phase2_with_the_env_it_promises(store, repo, monkeypatch):
+    monkeypatch.setitem(runs_mod.LAUNCHERS, "demo", {})
+    res = store.start("demo", stop_after=750, skip_smoke=True)
+    log = repo / res["log"]
+    assert wait_for(lambda: log.exists() and "LAUNCH_LOG=" in log.read_text())
+    text = log.read_text()
+    assert "STOP_AFTER=750" in text
+    assert "SKIP_SMOKE=1" in text
+    assert f"LAUNCH_LOG={res['log']}" in text, "phase2.sh records the log stop.sh should show"
+
+
+@pytest.mark.parametrize("mode,steps,expected", [
+    ("now", None, "args: demo"),
+    ("after", 500, "--after 500"),
+    ("at", 9000, "--at 9000"),
+    ("cancel", None, "--cancel"),
+])
+def test_stop_shells_out_to_stop_sh_with_the_matching_flags(
+        store, repo, mode, steps, expected):
+    rdir = repo / "checkpoints" / "demo"
+    if mode == "cancel":
+        (rdir / "STOP").write_text("9000\n")
+    real = spawn("-m", "aksharallm.train.pretrain", "configs/demo.yaml")
+    try:
+        (rdir / "train.pid").write_text(f"{real.pid}\n")
+        res = store.stop("demo", mode, steps)
+        log = repo / res["log"]
+        assert wait_for(lambda: log.exists() and log.read_text().strip())
+        assert expected in log.read_text()
+    finally:
+        real.kill()
+        real.wait()
 
 
 # ---- the HTTP layer --------------------------------------------------------------------

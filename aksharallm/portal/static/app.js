@@ -336,13 +336,15 @@ function live(text, kind) {
 function renderPhase(s) {
   const badge = $('#phase');
   const queued = s.stop && !s.stop.now ? ` · stop queued at ${fmt.int(s.stop.target)}` : '';
+  const stage = s.launcher && s.launcher.stage ? ` · ${s.launcher.stage}` : '';
   const label = {
     training: 'training',
     launching: 'pre-flight',
     stopping: 'stopping',
     idle: 'idle',
   }[s.phase] || s.phase;
-  badge.textContent = label + (s.pid ? ` · pid ${s.pid}` : '') + queued;
+  badge.textContent = label + stage + (s.pid ? ` · pid ${s.pid}` : '')
+    + (s.launcher && !s.pid ? ` · pid ${s.launcher.pid}` : '') + queued;
   badge.className = `badge badge-${s.phase}`;
 }
 
@@ -350,9 +352,12 @@ function renderControls(s) {
   $('#btn-start').disabled = !s.can_start || state.busy;
   $('#btn-start').title = s.start_hint || 'runs scripts/phase2.sh: pre-flight, data check, '
     + 'smoke test, then the real run (resumes from ckpt_last.pt)';
-  for (const id of ['#btn-stop', '#btn-stop-after', '#btn-stop-at']) {
-    $(id).disabled = !s.can_stop || state.busy;
+  $('#btn-stop').disabled = !s.can_stop || state.busy;
+  /* A bounded stop needs a step to count from, which a pre-flight doesn't have yet. */
+  for (const id of ['#btn-stop-after', '#btn-stop-at']) {
+    $(id).disabled = !s.can_bound || state.busy;
   }
+  $('#btn-stop').textContent = s.phase === 'launching' ? 'Abort launch' : 'Stop now';
   $('#btn-cancel-stop').disabled = !s.stop || state.busy;
   $('#btn-start').textContent = s.step == null ? 'Start run' : `Resume from ${fmt.int(s.step + 1)}`;
 }
@@ -362,7 +367,10 @@ function renderProgress(s) {
   const pct = s.progress == null ? null : Math.min(1, s.progress);
   $('#hero-step').textContent = s.step == null ? 'no steps logged'
     : `step ${fmt.int(s.step)}${s.max_steps ? ` / ${fmt.int(s.max_steps)}` : ''}`;
-  $('#hero-sub').textContent = s.step == null
+  $('#hero-sub').textContent = s.phase === 'launching'
+    ? `pre-flight (${(s.launcher && s.launcher.stage) || '?'}) — tests, data check and a `
+      + '50-step smoke test run before training starts'
+    : s.step == null
     ? (s.can_start ? 'ready to start' : 'nothing logged for this run yet')
     : [
       pct == null ? null : `${fmt.pct(pct)} of the budget`,
@@ -641,12 +649,17 @@ function wire() {
   });
 
   $('#btn-stop').addEventListener('click', () => {
-    const at = state.status && state.status.step;
-    if (!confirm(`Stop '${state.run}' after the current step?\n\n`
-      + `It saves ckpt_last.pt at step ~${fmt.int(at)} and exits; starting again resumes `
-      + 'there with no loss spike.')) return;
+    const s = state.status || {};
+    const msg = s.phase === 'launching'
+      ? `Abort the launch of '${state.run}'?\n\nIt is in pre-flight `
+        + `(${(s.launcher && s.launcher.stage) || '?'}); nothing has trained yet, so nothing `
+        + 'is lost. You would press Start again to relaunch.'
+      : `Stop '${state.run}' after the current step?\n\n`
+        + `It saves ckpt_last.pt at step ~${fmt.int(s.step)} and exits; starting again `
+        + 'resumes there with no loss spike.';
+    if (!confirm(msg)) return;
     act(() => post(`/api/run/${encodeURIComponent(state.run)}/stop`, { mode: 'now' }),
-      'Stop requested.');
+      s.phase === 'launching' ? 'Aborting.' : 'Stop requested.');
   });
 
   $('#btn-stop-after').addEventListener('click', () => {

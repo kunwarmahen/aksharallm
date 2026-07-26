@@ -173,6 +173,30 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, path.read_bytes(), ctype)
 
 
+def lan_addresses() -> list[str]:
+    """This machine's addresses on the local network, best effort.
+
+    Opening a UDP socket toward a public address doesn't send anything; it just makes the
+    kernel pick the interface it *would* route through, which is the address a phone on the
+    same wifi should type. Falls back to whatever the hostname resolves to.
+    """
+    found: list[str] = []
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            found.append(sock.getsockname()[0])
+    except OSError:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            addr = info[4][0]
+            if not addr.startswith("127.") and addr not in found:
+                found.append(addr)
+    except OSError:
+        pass
+    return found or [socket.gethostname()]
+
+
 def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
           quiet: bool = True) -> ThreadingHTTPServer:
     """Build a server (not yet serving). Port 0 picks a free port — used by the tests."""
@@ -189,35 +213,45 @@ def main(argv: list[str] | None = None) -> int:
         prog="python -m aksharallm.portal",
         description="Local web portal: start/stop a training run and watch it.")
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--host", default="127.0.0.1",
-                    help="default 127.0.0.1; anything else needs --allow-remote")
+    ap.add_argument("--host", default=None,
+                    help="bind address (default 127.0.0.1, or 0.0.0.0 with --lan)")
+    ap.add_argument("--lan", action="store_true",
+                    help="serve on every interface so other machines on your network can "
+                         "reach it, and print the address to use. The API starts and stops "
+                         "training and has no login — only do this on a network you trust.")
     ap.add_argument("--root", default=None, help="repo root (default: this checkout)")
     ap.add_argument("--allow-remote", action="store_true",
-                    help="permit a non-loopback bind. The API starts and stops processes "
-                         "and has no authentication, so only do this on a trusted network.")
+                    help="permit a non-loopback --host (implied by --lan)")
     ap.add_argument("--open", action="store_true", help="open a browser at the portal")
     ap.add_argument("--verbose", action="store_true", help="log every request")
     args = ap.parse_args(argv)
+    # Same reason as the trainer: redirected to a file (nohup, a service), block buffering
+    # would swallow the banner — including the LAN address you started it to read.
+    sys.stdout.reconfigure(line_buffering=True)
 
-    loopback = args.host in ("127.0.0.1", "::1", "localhost")
-    if not loopback and not args.allow_remote:
-        ap.error(f"refusing to bind {args.host}: the portal can start and stop training "
-                 "runs and has no login. Pass --allow-remote if you mean it.")
+    host = args.host or ("0.0.0.0" if args.lan else "127.0.0.1")
+    loopback = host in ("127.0.0.1", "::1", "localhost")
+    if not loopback and not (args.lan or args.allow_remote):
+        ap.error(f"refusing to bind {host}: the portal can start and stop training runs "
+                 "and has no login. Pass --lan (or --allow-remote) if you mean it.")
 
     root = Path(args.root).resolve() if args.root else repo_root()
     try:
-        httpd = serve(root, args.host, args.port, quiet=not args.verbose)
+        httpd = serve(root, host, args.port, quiet=not args.verbose)
     except OSError as exc:
-        print(f"cannot bind {args.host}:{args.port} — {exc}", file=sys.stderr)
+        print(f"cannot bind {host}:{args.port} — {exc}", file=sys.stderr)
         print("is a portal already running?  (try --port 8766)", file=sys.stderr)
         return 1
 
-    url = f"http://{'127.0.0.1' if loopback else socket.gethostname()}:{httpd.server_port}/"
+    url = f"http://127.0.0.1:{httpd.server_port}/"
     print(f"aksharallm portal  ->  {url}")
     print(f"    repo   {root}")
     print(f"    runs   {', '.join(RunStore(root).runs()) or '(none found)'}")
     if not loopback:
-        print("    WARNING: reachable from the network, with no authentication.")
+        for addr in lan_addresses():
+            print(f"    on your network:  http://{addr}:{httpd.server_port}/")
+        print("    Anyone who can reach that address can start and stop training — there is")
+        print("    no login. Fine on a home LAN; do not expose it to the internet.")
     print("    Ctrl-C to stop the portal. Stopping it never touches a training run.")
     if args.open:
         threading.Timer(0.4, webbrowser.open, [url]).start()

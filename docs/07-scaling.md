@@ -179,7 +179,11 @@ STOP_AFTER=2000 scripts/phase2.sh    # train 2000 steps tonight, then save and e
 It records the pid in `checkpoints/<run>/train.pid` and a human-readable
 `checkpoints/<run>/run.meta` (pid, start time, config, log path, exact command), waits 5s to
 catch an immediate crash, and refuses to start if that run is already training — two
-trainers sharing one GPU and one checkpoint dir corrupt both.
+trainers sharing one GPU and one checkpoint dir corrupt both. It also publishes *itself*
+while it pre-flights (`launch.pid` + `launch.meta`, with the stage it has reached), so a
+second launch is refused too, and both `stop.sh` and the portal can see a launch that has no
+trainer yet. The trainer additionally writes its own `train.pid` into its `out_dir`, which is
+what makes the 50-step smoke test impossible to confuse with the run.
 
 ### One log per session
 
@@ -226,13 +230,17 @@ FORCE=1 scripts/stop.sh small-code   # SIGKILL if the graceful stop hasn't lande
 
 ```mermaid
 flowchart LR
-    P[scripts/phase2.sh] -->|writes| PID[checkpoints/run/train.pid<br/>+ run.meta]
+    P[scripts/phase2.sh] -->|"writes while<br/>pre-flighting"| LP[launch.pid<br/>+ launch.meta]
     P -->|nohup| T[trainer]
-    S[scripts/stop.sh] -->|reads| PID
+    T -->|"writes into its own out_dir"| PID[train.pid<br/>+ run.meta]
+    S[scripts/stop.sh] -->|reads| LP
+    S -->|reads| PID
+    S -->|"no trainer yet:<br/>abort the launch"| P
     S -->|"empty STOP = now<br/>N in STOP = at step N"| STOP[checkpoints/run/STOP]
     STOP --> T
     T -->|save + exit 0| CK[ckpt_last.pt at the exact step]
     CK -->|re-run phase2.sh| T
+    W[portal / sessions.py] -.->|read only| PID
 ```
 
 `--at N` and `--after N` are inclusive — step N is trained, logged and checkpointed, and the
@@ -252,6 +260,7 @@ there is a small local portal:
 ```bash
 scripts/portal.sh              # http://127.0.0.1:8765
 scripts/portal.sh --open       # ...and open a browser at it
+scripts/portal.sh --lan        # reachable from your phone/laptop; prints the address
 scripts/portal.sh --port 9000
 ```
 
@@ -286,9 +295,50 @@ Consequences of it being only a view, all of them good:
 - Closing the portal, or killing it, does **not** stop training. The trainer is detached.
 - A run you launched from a terminal shows up in the portal, and vice versa. Both find the
   process the same way `stop.sh` does — pid file first, command line as the fallback.
-- You can run it on the training box and read it from another machine on the LAN, but the
-  API starts and stops processes and has **no login**, so a non-loopback bind must be asked
-  for explicitly: `scripts/portal.sh --host 0.0.0.0 --allow-remote`.
+- A run you start in the browser can be stopped from a terminal, and a run you start in a
+  terminal can be stopped from the browser — *including while it is still in pre-flight*
+  (see below).
+- `--lan` serves on every interface and prints the address to type elsewhere
+  (`http://192.168.x.x:8765/`). It is one flag rather than the default because the API
+  starts and stops training and has **no login**: fine on a home network, never on the open
+  internet. `--host`/`--allow-remote` remain for explicit control.
+
+#### One record of a launch, read by both sides
+
+Pre-flight is minutes long and has no trainer in it yet, which used to make it invisible:
+`stop.sh --status` said "not running", a second launch sailed past the "already training?"
+check, and — worse — a stop aimed at whatever `pgrep` found, which during those minutes is
+the **50-step smoke test** (same command line, throwaway `out_dir`). You got a confident
+"queued: pid NNN will finish step N" for a process that never reads that STOP file.
+
+Two rules fix it, and both scripts and the portal follow them:
+
+| file | written by | means |
+|---|---|---|
+| `checkpoints/<run>/train.pid` | the **trainer itself** (`pretrain.py`), into its own `out_dir` | who is training *into this directory* — so the smoke test's pid lands in `/tmp/aksharallm_smoke/`, not here |
+| `checkpoints/<run>/launch.pid` + `launch.meta` | `phase2.sh`, from its first second | a launch is in pre-flight, and which stage (`preflight` / `data` / `smoke` / `launching`) |
+
+So: `phase2.sh` refuses to start over another launch as well as over a live trainer; the
+portal shows `pre-flight · smoke` instead of a fictitious "training"; and `stop.sh --status`
+reports the launch. The command-line fallback that adopts a hand-launched run is now
+anchored (`…configs/small-code.yaml$`), so it can never match the smoke test's
+override-laden command line.
+
+#### Stopping a launch
+
+Pressing **Stop** (or `scripts/stop.sh <run>`) during pre-flight **aborts the launch** —
+nothing has trained, so nothing is lost. It signals the launcher *and* the child it is
+waiting on (bash would otherwise sit on the signal until the smoke test finished eight
+minutes later), never a process group. Two deliberate refusals:
+
+- at stage `launching` it declines — the trainer is seconds old and still the launcher's
+  child, so signalling could take the real run with it. Wait, then stop the run.
+- "stop after N" / "stop at N" are disabled during pre-flight: there is no step to count
+  from yet.
+
+Aborting during the `data` stage prints a warning to check the `.bin` sizes before
+relaunching — a half-written token file is not obvious, and `phase2.sh` skips the rebuild
+whenever the files merely exist.
 
 Two things worth knowing before pressing **Start**:
 

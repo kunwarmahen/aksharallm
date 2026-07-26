@@ -12,7 +12,6 @@ or not run at all, without a training run noticing.
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
@@ -77,6 +76,23 @@ def _cmdline(pid: int) -> str:
             return ""
 
 
+def _read_meta(path: Path) -> dict[str, str]:
+    """Parse the `key   value` files the shell scripts write (`run.meta`, `launch.meta`).
+
+    Deliberately the format a human reads with `cat`, not JSON: these files exist to be
+    understood from a terminal at 2am, and shell can write them without a helper.
+    """
+    out: dict[str, str] = {}
+    try:
+        for line in path.read_text(errors="replace").splitlines():
+            key, _, value = line.partition(" ")
+            if key:
+                out[key.strip()] = value.strip()
+    except OSError:
+        pass
+    return out
+
+
 def _read_int(path: Path) -> int | None:
     try:
         digits = re.sub(r"\D", "", path.read_text())
@@ -133,20 +149,26 @@ class RunStore:
     def trainer_pid(self, run: str) -> int | None:
         """The live trainer for this run, or None.
 
-        Trusts `train.pid` only after confirming the process is both alive and actually a
-        trainer; falls back to the command line, the same way `scripts/stop.sh` does, so a
-        run started by hand is still adopted by the portal.
+        `train.pid` is written by the trainer itself into its own `out_dir`, so it answers
+        "who is training into this directory" — the question that matters. The command-line
+        fallback (for a run launched before that existed) is anchored with `$` on purpose:
+        the 50-step smoke test inside `phase2.sh` runs the identical command with `-o
+        train.out_dir=/tmp/...` appended, and an unanchored match reports the smoke test as
+        the run — which is how a stop request ends up aimed at a process that never reads it.
+        `scripts/stop.sh` uses the same anchor and the same smoke-test guard.
         """
         pid = _read_int(self.run_dir(run) / "train.pid")
-        if pid and _alive(pid) and "aksharallm.train" in _cmdline(pid):
-            return pid
+        if pid and _alive(pid):
+            args = _cmdline(pid)
+            if "aksharallm.train" in args and "aksharallm_smoke" not in args:
+                return pid
 
         cached = self._pgrep_cache.get(run)
         if cached and time.time() - cached[0] < self._PGREP_TTL:
             return cached[1] if _alive(cached[1]) else None
         try:
             found = subprocess.run(
-                ["pgrep", "-f", f"aksharallm.train.pretrain configs/{run}.yaml"],
+                ["pgrep", "-f", rf"aksharallm\.train\.pretrain configs/{run}\.yaml$"],
                 capture_output=True, text=True, timeout=5).stdout.split()
         except (OSError, subprocess.SubprocessError):
             return None
@@ -155,15 +177,19 @@ class RunStore:
         return pid
 
     def launcher(self, run: str) -> dict | None:
-        """The `phase2.sh` process the portal started, while it is still pre-flighting."""
-        path = self.run_dir(run) / "portal_launch.json"
-        try:
-            info = json.loads(path.read_text())
-        except (OSError, ValueError):
+        """A live `phase2.sh` for this run — pre-flight, before any trainer exists.
+
+        Read from the files `phase2.sh` itself writes (`launch.pid` + `launch.meta`), not
+        from anything the portal remembers. So a pre-flight started in a terminal shows up
+        here as `pre-flight` too, and the portal's own launches are visible to
+        `scripts/stop.sh --status`. One record, both directions.
+        """
+        pid = _read_int(self.run_dir(run) / "launch.pid")
+        if not pid or not _alive(pid) or "phase2.sh" not in _cmdline(pid):
             return None
-        if not _alive(info.get("pid")):
-            return None
-        return info
+        meta = _read_meta(self.run_dir(run) / "launch.meta")
+        return {"pid": pid, "stage": meta.get("stage"), "started": meta.get("started"),
+                "config": meta.get("config"), "log": meta.get("log"), "meta": meta}
 
     def stop_request(self, run: str) -> dict | None:
         """The pending stop, read out of the STOP file the trainer polls.
@@ -230,7 +256,10 @@ class RunStore:
             "checkpoints": self._checkpoints(run),
             "logs": self._logs(run),
             "can_start": run in LAUNCHERS and phase == PHASE_IDLE,
-            "can_stop": phase in (PHASE_TRAINING, PHASE_STOPPING),
+            # A pre-flight is stoppable too — that aborts the launch. Bounded stops are not:
+            # there is no step count to count from until the trainer exists.
+            "can_stop": phase in (PHASE_TRAINING, PHASE_STOPPING, PHASE_LAUNCHING),
+            "can_bound": phase in (PHASE_TRAINING, PHASE_STOPPING),
             "start_hint": (None if run in LAUNCHERS else
                            f"no launcher for '{run}' — scripts/phase2.sh builds the Phase-2 "
                            f"runs ({', '.join(LAUNCHERS)}); start this one from a terminal"),
@@ -271,16 +300,21 @@ class RunStore:
         if not script.exists():
             raise RunError(f"missing launcher: {script}")
 
+        ldir = self.log_dir(run)
+        ldir.mkdir(parents=True, exist_ok=True)
+        self.run_dir(run).mkdir(parents=True, exist_ok=True)
+        log = ldir / f"launch_{datetime.now():%Y%m%d-%H%M%S}.log"
+
         env = {**os.environ, **LAUNCHERS[run]}
         if stop_after is not None:
             env["STOP_AFTER"] = str(stop_after)
         if skip_smoke:
             env["SKIP_SMOKE"] = "1"
+        # phase2.sh records this path in launch.meta, so `scripts/stop.sh --status` can point
+        # at the same log the portal is streaming. The launch record itself is written by
+        # phase2.sh (launch.pid + launch.meta) — the portal keeps no private copy.
+        env["LAUNCH_LOG"] = str(log.relative_to(self.root))
 
-        ldir = self.log_dir(run)
-        ldir.mkdir(parents=True, exist_ok=True)
-        self.run_dir(run).mkdir(parents=True, exist_ok=True)
-        log = ldir / f"launch_{datetime.now():%Y%m%d-%H%M%S}.log"
         with open(log, "wb") as fh:
             proc = subprocess.Popen(["bash", str(script)], cwd=self.root, env=env,
                                     stdin=subprocess.DEVNULL, stdout=fh,
@@ -288,7 +322,6 @@ class RunStore:
         info = {"pid": proc.pid, "log": str(log.relative_to(self.root)),
                 "started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "stop_after": stop_after, "skip_smoke": bool(skip_smoke)}
-        (self.run_dir(run) / "portal_launch.json").write_text(json.dumps(info, indent=2))
         return {"ok": True, "action": "start", **info,
                 "note": "pre-flight runs tests, checks the data, then a 50-step smoke test "
                         "before the real run starts — expect several minutes of log first."
@@ -316,8 +349,20 @@ class RunStore:
                 if cur is not None and steps <= cur:
                     raise RunError(f"step {steps} is already behind this run "
                                    f"(it is at {cur}) — use 'stop now'.")
+        launching = None if mode == "cancel" else self.launcher(run)
         if mode != "cancel" and not self.trainer_pid(run):
-            raise RunError(f"'{run}' is not training.")
+            # Nothing is training, but a pre-flight may be minutes from starting one.
+            # `stop.sh` aborts it; that is the only sensible reading of "stop" right now.
+            if not launching:
+                raise RunError(f"'{run}' is not training.")
+            if mode != "now":
+                raise RunError(
+                    f"'{run}' is still in pre-flight ({launching.get('stage')}) — there is no "
+                    "step count to bound yet. Use 'stop now' to abort the launch, or wait "
+                    "for training to start.")
+            if launching.get("stage") == "launching":
+                raise RunError("the launcher is starting the trainer right now — give it a "
+                               "few seconds, then stop the run itself.")
         if mode == "cancel" and not self.stop_request(run):
             raise RunError(f"no stop is queued for '{run}'.")
 
@@ -341,7 +386,9 @@ class RunStore:
                                     start_new_session=True)
         return {"ok": True, "action": f"stop:{mode}", "pid": proc.pid,
                 "log": str(log.relative_to(self.root)),
-                "note": {"now": "saving a checkpoint at the current step, then exiting "
+                "note": {"now": "aborting the launch — nothing has trained yet, so nothing "
+                                "is lost." if launching else
+                                "saving a checkpoint at the current step, then exiting "
                                 "(~30s for a 300M model).",
                          "after": f"queued: {steps} more steps, then save and exit.",
                          "at": f"queued: finish step {steps}, then save and exit.",
