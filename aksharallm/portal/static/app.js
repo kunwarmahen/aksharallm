@@ -312,6 +312,7 @@ function table(head, rows, opts = {}) {
 const state = {
   run: null,
   status: null,
+  schedule: null,
   log: null,
   logFile: null,     // null = whichever file was written most recently
   timer: null,
@@ -565,6 +566,186 @@ function renderRuns(runs) {
   sel.value = state.run;
 }
 
+/* ---------------------------------------------------------------- schedule ------------ */
+
+const DAY_LETTERS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function selectedDays() {
+  return $$('#sched-days .day')
+    .map((b, i) => (b.getAttribute('aria-pressed') === 'true' ? i : -1))
+    .filter((i) => i >= 0);
+}
+
+function describeDays(days) {
+  if (days.length === 7) return 'daily';
+  if (String(days) === '0,1,2,3,4') return 'mon–fri';
+  if (String(days) === '5,6') return 'sat, sun';
+  return days.map((d) => DAY_NAMES[d].toLowerCase()).join(', ');
+}
+
+function buildDayPicker() {
+  const host = $('#sched-days');
+  host.textContent = '';
+  DAY_LETTERS.forEach((letter, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'day';
+    b.textContent = letter;
+    b.title = DAY_NAMES[i];
+    b.setAttribute('aria-label', DAY_NAMES[i]);
+    b.setAttribute('aria-pressed', 'true');
+    b.addEventListener('click', () => {
+      b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') === 'true' ? 'false' : 'true');
+    });
+    host.appendChild(b);
+  });
+  const presets = document.createElement('span');
+  presets.className = 'day-presets';
+  for (const [label, days] of [['daily', [0, 1, 2, 3, 4, 5, 6]],
+    ['mon–fri', [0, 1, 2, 3, 4]], ['sat/sun', [5, 6]]]) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'ghost';
+    b.textContent = label;
+    b.addEventListener('click', () => {
+      $$('#sched-days .day').forEach((d, i) => {
+        d.setAttribute('aria-pressed', days.includes(i) ? 'true' : 'false');
+      });
+    });
+    presets.appendChild(b);
+  }
+  host.appendChild(presets);
+}
+
+function renderSchedule(sched) {
+  state.schedule = sched;
+
+  const arm = $('#sched-arm');
+  arm.textContent = sched.enabled ? 'Armed' : 'Paused';
+  arm.className = sched.enabled ? '' : 'ghost';
+  arm.title = sched.enabled ? 'nothing scheduled will fire if you pause this'
+    : 'rules are kept but nothing fires';
+
+  /* Rules mean nothing without something watching the clock — say so plainly. */
+  $('#sched-status').textContent = sched.running
+    ? `clock running${sched.in_portal ? ' in this portal' : ` as pid ${sched.holder}`} · `
+      + `${sched.rules.length} rule${sched.rules.length === 1 ? '' : 's'} · times are this machine’s local time`
+    : 'NOTHING IS WATCHING THE CLOCK — rules will not fire. Run scripts/portal.sh or '
+      + 'scripts/schedule.sh daemon.';
+
+  const sel = $('#sched-run');
+  const startable = sched.startable || [];
+  if (sel.dataset.sig !== String(startable)) {
+    sel.textContent = '';
+    for (const r of startable) {
+      sel.appendChild(Object.assign(document.createElement('option'),
+        { value: r, textContent: r }));
+    }
+    sel.dataset.sig = String(startable);
+    if (startable.includes(state.run)) sel.value = state.run;
+  }
+
+  const rows = sched.rules.map((r) => {
+    const actions = document.createElement('div');
+    actions.className = 'row-actions';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'ghost';
+    toggle.textContent = r.enabled ? 'pause' : 'resume';
+    toggle.addEventListener('click', () => act(
+      () => post('/api/schedule/toggle', { id: r.id, enabled: !r.enabled }), 'Updated.'));
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'ghost';
+    del.textContent = 'remove';
+    del.addEventListener('click', () => {
+      if (!confirm(`Remove this rule?\n\n${r.describe}`)) return;
+      act(() => post('/api/schedule/remove', { id: r.id }), 'Removed.');
+    });
+    actions.append(toggle, del);
+    return {
+      enabled: r.enabled,
+      cells: [
+        r.run,
+        r.action + (r.stop_after ? ` · ${fmt.int(r.stop_after)} steps` : ''),
+        r.at,
+        describeDays(r.days),
+        r.enabled ? (r.next_fire ? `${new Date(r.next_fire).toLocaleString(undefined,
+          { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`
+          + (r.next_fire_in_s != null ? ` · in ${fmt.dur(r.next_fire_in_s)}` : '') : '—')
+          : 'paused',
+        r.last_result || '—',
+        actions,
+      ],
+    };
+  });
+
+  const host = $('#sched-rules');
+  host.textContent = '';
+  if (!rows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'chart-empty';
+    empty.textContent = 'Nothing scheduled. Add a window above — for example 22:00 to 06:30, '
+      + 'mon–fri, and the GPU trains overnight and hands itself back in the morning.';
+    host.appendChild(empty);
+  } else {
+    const t = table(['run', 'action', 'at', 'days', 'next', 'last result', ''],
+      rows.map((r) => r.cells));
+    [...t.tBodies[0].rows].forEach((tr, i) => {
+      if (!rows[i].enabled) tr.className = 'rule-paused';
+    });
+    host.appendChild(t);
+  }
+
+  const log = $('#sched-log');
+  const events = sched.events || [];
+  log.textContent = events.length ? events.join('\n') : '(the scheduler has not done anything yet)';
+  if (!$('.sched-events').dataset.touched) log.scrollTop = log.scrollHeight;
+}
+
+function wireSchedule() {
+  buildDayPicker();
+
+  const mode = $('#sched-mode');
+  const syncMode = () => {
+    const m = mode.value;
+    $('#sched-to-field').hidden = m !== 'window';
+    $('#sched-steps-field').hidden = m === 'stop';
+    $('#sched-smoke-field').hidden = m === 'stop';
+    $('#sched-from-label').textContent = m === 'stop' ? 'stop at' : 'start at';
+  };
+  mode.addEventListener('change', syncMode);
+  syncMode();
+
+  $('#sched-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const days = selectedDays();
+    if (!days.length) { flash('Pick at least one day.', 'error'); return; }
+    const run = $('#sched-run').value;
+    const steps = $('#sched-steps').value.trim();
+    const common = {
+      run, days,
+      stop_after: steps ? Number(steps) : null,
+      skip_smoke: !$('#sched-smoke').checked,
+    };
+    const m = mode.value;
+    const body = m === 'window'
+      ? { ...common, start_at: $('#sched-from').value, stop_at: $('#sched-to').value }
+      : { ...common, action: m, at: $('#sched-from').value };
+    act(() => post(`/api/schedule/${m === 'window' ? 'window' : 'rule'}`, body), 'Scheduled.');
+  });
+
+  $('#sched-arm').addEventListener('click', () => act(
+    () => post('/api/schedule/enable', { enabled: !(state.schedule || {}).enabled }),
+    'Schedule updated.'));
+
+  /* Don't yank the activity log back to the bottom while it is being read. */
+  $('.sched-events').addEventListener('toggle', (e) => {
+    e.target.dataset.touched = e.target.open ? '1' : '';
+  });
+}
+
 /* ---------------------------------------------------------------- poll loop ----------- */
 
 function pollInterval(phase) {
@@ -577,10 +758,11 @@ async function refresh() {
   if (!state.run) return;
   try {
     const q = state.logFile ? `?lines=400&file=${encodeURIComponent(state.logFile)}` : '?lines=400';
-    const [status, log, runs] = await Promise.all([
+    const [status, log, runs, sched] = await Promise.all([
       api(`/api/run/${encodeURIComponent(state.run)}`),
       api(`/api/run/${encodeURIComponent(state.run)}/log${q}`),
       api('/api/runs'),
+      api('/api/schedule'),
     ]);
     state.status = status;
     state.log = log;
@@ -595,6 +777,7 @@ async function refresh() {
     renderSessions(status);
     renderConfig(status);
     renderLog(log);
+    renderSchedule(sched);
     live(`updated ${new Date().toLocaleTimeString()}`, 'on');
   } catch (err) {
     document.body.classList.add('stale');
@@ -638,6 +821,7 @@ function selectRun(run) {
 }
 
 function wire() {
+  wireSchedule();
   $('#run-select').addEventListener('change', (e) => selectRun(e.target.value));
 
   $('#btn-start').addEventListener('click', () => {

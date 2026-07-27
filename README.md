@@ -117,6 +117,7 @@ aksharallm/
 │   │                         scripts/sessions.py and the portal
 │   ├── portal/           local web portal: start/stop a run, watch the curves
 │   │   ├── runs.py           run state on disk; drives phase2.sh / stop.sh
+│   │   ├── schedule.py       recurring start/stop windows + the clock loop
 │   │   ├── server.py         stdlib http.server + a small JSON API
 │   │   └── static/           one page, hand-written SVG charts, no dependencies
 │   ├── eval/evaluate.py  perplexity, HellaSwag, sample generations
@@ -128,6 +129,7 @@ aksharallm/
 │   ├── phase2.sh         Phase 2: pre-flight, build data, smoke test, background launch
 │   ├── stop.sh           stop a background run cleanly, now or after N more steps
 │   ├── portal.sh         the web portal (progress, graphs, start/stop); --lan to share
+│   ├── schedule.sh       recurring start/stop windows ("22:00-06:30, mon-fri")
 │   ├── sessions.py       per-session summary of a run trained over many evenings
 │   └── postrain.sh       Phase 3: SFT then DPO
 ├── tests/                correctness tests (KV cache, causality, RoPE, mixing, DPO)
@@ -176,8 +178,9 @@ Each session gets its own `logs/<run>/train_<timestamp>.log` (never overwritten)
 ### Watching it in a browser
 
 ```bash
-scripts/portal.sh --open        # http://127.0.0.1:8765
-scripts/portal.sh --lan         # ...reachable from your phone; it prints the address
+scripts/portal.sh --bg --lan    # background, reachable from your phone; prints the address
+scripts/portal.sh --status      # running? which pid, which address
+scripts/portal.sh --restart     # stop and start again (never touches a training run)
 ```
 
 A local page with the progress against the budget and an ETA, live loss / throughput /
@@ -189,6 +192,21 @@ It is a **view over the same files**, and it presses the same buttons: it starts
 appears in the portal and vice versa — including while it is still in pre-flight — and
 closing the portal never stops training. Standard library only: the server is `http.server`,
 the charts are hand-written SVG.
+
+### Training on a schedule
+
+```bash
+scripts/schedule.sh window small-code 22:00 06:30 --days mon-fri   # train overnight
+scripts/schedule.sh window small-code 13:00 17:30 --days sat,sun   # and weekend afternoons
+scripts/schedule.sh                                                # what's next
+```
+
+Or the portal's **Schedule** panel — pick a run, two times, click the days. Both edit the
+same `schedule.json`, and the clock loop runs inside the portal (or as
+`scripts/schedule.sh daemon`, or from cron via `scripts/schedule.sh check`). Firing a rule
+calls the same `phase2.sh` / `stop.sh` the buttons do, so a scheduled start is
+indistinguishable from one you typed. Starting when it is already training is a no-op, and
+a fire missed while the machine slept stays missed rather than going off nine hours late.
 
 Everything either side needs is on disk: the trainer writes `train.pid` into its own
 checkpoint dir (so the 50-step smoke test, which shares its command line, can never be

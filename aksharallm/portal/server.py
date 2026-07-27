@@ -20,8 +20,12 @@ Design notes worth knowing before changing anything here:
 from __future__ import annotations
 
 import argparse
+import atexit
+import dataclasses
 import json
 import mimetypes
+import os
+import signal
 import socket
 import sys
 import threading
@@ -31,11 +35,20 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from .runs import RunError, RunStore, repo_root
+from .runs import LAUNCHERS, RunError, RunStore, repo_root
+from .schedule import Rule, Schedule, Scheduler, parse_days
 
 STATIC = Path(__file__).resolve().parent / "static"
 GUARD_HEADER = "X-Portal"
 MAX_BODY = 64 * 1024
+
+
+def asdict_rule(rule: Rule) -> dict:
+    d = dataclasses.asdict(rule)
+    d["describe"] = rule.describe()
+    nxt = rule.next_fire()
+    d["next_fire"] = nxt.isoformat(timespec="minutes") if nxt else None
+    return d
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -44,8 +57,9 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "aksharallm-portal"
     protocol_version = "HTTP/1.1"
 
-    def __init__(self, *args, store: RunStore, quiet: bool = True, **kw):
+    def __init__(self, *args, store: RunStore, scheduler: Scheduler, quiet: bool = True, **kw):
         self.store = store
+        self.scheduler = scheduler
         self.quiet = quiet
         super().__init__(*args, **kw)
 
@@ -131,6 +145,8 @@ class Handler(BaseHTTPRequestHandler):
                                     "the portal's own page sends it")
         try:
             data = self._body()
+            if parts[:2] == ["api", "schedule"] and len(parts) == 3:
+                return self._json(self._schedule_post(parts[2], data))
             if len(parts) == 4 and parts[:2] == ["api", "run"]:
                 run, action = parts[2], parts[3]
                 if action == "start":
@@ -159,7 +175,73 @@ class Handler(BaseHTTPRequestHandler):
             name = (query.get("file") or [None])[0]
             lines = int((query.get("lines") or [300])[0])
             return self._json(self.store.log_tail(parts[1], name=name, lines=lines))
+        if parts == ["schedule"]:
+            sched = self.scheduler.schedule.reload_if_changed()
+            holder = self.scheduler.holder()
+            return self._json({
+                **sched.as_dict(),
+                # "running" is about the machine, not this process: a scheduler started by
+                # scripts/schedule.sh counts, and the page says which pid owns it.
+                "running": bool(holder or self.scheduler._thread),
+                "holder": holder or (os.getpid() if self.scheduler._thread else None),
+                "in_portal": bool(self.scheduler._thread),
+                "events": self.scheduler.recent(40),
+                "startable": sorted(LAUNCHERS),
+            })
         return self._error(404, "no such api path")
+
+    def _schedule_post(self, action: str, data: dict) -> dict:
+        """Edit the rule file. Every path here validates before it writes: a schedule that
+        cannot fire is worse than no schedule, because you stop watching."""
+        sched = self.scheduler.schedule.reload_if_changed()
+
+        def check_run(run: str, act: str) -> str:
+            self.store.check(run)
+            if act == "start" and run not in LAUNCHERS:
+                raise RunError(f"'{run}' has no launcher, so a scheduled start could never "
+                               f"work. Startable runs: {', '.join(sorted(LAUNCHERS))}.")
+            return run
+
+        if action == "enable":               # the master switch
+            sched.enabled = bool(data.get("enabled", True))
+            sched.save()
+            return {"ok": True, "enabled": sched.enabled,
+                    "note": "schedule armed." if sched.enabled else
+                            "schedule paused — rules are kept, nothing will fire."}
+
+        if action == "window":
+            run = check_run(str(data.get("run", "")), "start")
+            rules = sched.add_window(
+                run, str(data.get("start_at", "")), str(data.get("stop_at", "")),
+                parse_days(data.get("days")),
+                stop_after=(int(data["stop_after"]) if data.get("stop_after") else None),
+                skip_smoke=bool(data.get("skip_smoke", True)))
+            crosses = rules[1].days != rules[0].days
+            return {"ok": True, "rules": [asdict_rule(r) for r in rules],
+                    "note": f"{rules[0].describe()}; {rules[1].describe()}."
+                            + (" The window crosses midnight, so the stops land on the "
+                               "following day." if crosses else "")}
+
+        if action == "rule":
+            act = str(data.get("action", ""))
+            rule = Rule(run=check_run(str(data.get("run", "")), act), action=act,
+                        at=str(data.get("at", "")), days=parse_days(data.get("days")),
+                        stop_after=(int(data["stop_after"]) if data.get("stop_after") else None),
+                        skip_smoke=bool(data.get("skip_smoke", True)),
+                        note=data.get("note") or None)
+            sched.add(rule)
+            return {"ok": True, "rule": asdict_rule(rule), "note": f"added: {rule.describe()}."}
+
+        if action == "remove":
+            rule = sched.remove(str(data.get("id", "")))
+            return {"ok": True, "note": f"removed: {rule.describe()}."}
+
+        if action == "toggle":
+            rule = sched.set_enabled(str(data.get("id", "")), bool(data.get("enabled")))
+            return {"ok": True, "note": f"{'enabled' if rule.enabled else 'paused'}: "
+                                        f"{rule.describe()}."}
+
+        raise RunError(f"unknown schedule action: {action}")
 
     def _static(self, name: str):
         # Serve only the files that ship with the package, by exact name: no traversal, no
@@ -199,12 +281,18 @@ def lan_addresses() -> list[str]:
 
 def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
           quiet: bool = True) -> ThreadingHTTPServer:
-    """Build a server (not yet serving). Port 0 picks a free port — used by the tests."""
+    """Build a server (not yet serving). Port 0 picks a free port — used by the tests.
+
+    The scheduler object is created but *not* started; `main()` starts it. That keeps a
+    test server from firing anybody's rules.
+    """
     store = RunStore(root)
-    handler = partial(Handler, store=store, quiet=quiet)
+    scheduler = Scheduler(store, Schedule(store.root))
+    handler = partial(Handler, store=store, scheduler=scheduler, quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True
+    httpd.scheduler = scheduler
     return httpd
 
 
@@ -223,6 +311,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--allow-remote", action="store_true",
                     help="permit a non-loopback --host (implied by --lan)")
     ap.add_argument("--open", action="store_true", help="open a browser at the portal")
+    ap.add_argument("--no-schedule", action="store_true",
+                    help="don't run the scheduler in this process (rules still show, but "
+                         "nothing fires unless scripts/schedule.sh --daemon is running)")
     ap.add_argument("--verbose", action="store_true", help="log every request")
     args = ap.parse_args(argv)
     # Same reason as the trainer: redirected to a file (nohup, a service), block buffering
@@ -243,8 +334,29 @@ def main(argv: list[str] | None = None) -> int:
         print("is a portal already running?  (try --port 8766)", file=sys.stderr)
         return 1
 
+    # A pid file so `scripts/portal.sh --stop/--restart/--status` can find this process,
+    # the same convention the trainer and the launcher use. SIGTERM is routed through the
+    # Ctrl-C path so a restart shuts the scheduler down cleanly and releases its lock.
+    pid_file = root / "logs" / "portal.pid"
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text(f"{os.getpid()}\n")
+
+    def _release_pid():
+        try:
+            if int(pid_file.read_text().strip()) == os.getpid():
+                pid_file.unlink()
+        except (OSError, ValueError):
+            pass
+
+    atexit.register(_release_pid)
+
+    def _terminate(signum, frame):
+        raise KeyboardInterrupt   # the same clean path as Ctrl-C
+
+    signal.signal(signal.SIGTERM, _terminate)
+
     url = f"http://127.0.0.1:{httpd.server_port}/"
-    print(f"aksharallm portal  ->  {url}")
+    print(f"aksharallm portal  ->  {url}  (pid {os.getpid()})")
     print(f"    repo   {root}")
     print(f"    runs   {', '.join(RunStore(root).runs()) or '(none found)'}")
     if not loopback:
@@ -252,7 +364,26 @@ def main(argv: list[str] | None = None) -> int:
             print(f"    on your network:  http://{addr}:{httpd.server_port}/")
         print("    Anyone who can reach that address can start and stop training — there is")
         print("    no login. Fine on a home LAN; do not expose it to the internet.")
-    print("    Ctrl-C to stop the portal. Stopping it never touches a training run.")
+    print("    Ctrl-C to stop the portal, or scripts/portal.sh --stop / --restart from")
+    print("    any terminal. Stopping the portal never touches a training run.")
+    # The scheduler lives here by default: the portal is the process you leave running, and
+    # a schedule nobody is watching for is a trap. One per machine — if scripts/schedule.sh
+    # already holds the lock, this says so instead of double-firing every rule.
+    scheduler = httpd.scheduler
+    rules = len(scheduler.schedule.rules)
+    if args.no_schedule:
+        print(f"    schedule  not running here (--no-schedule), {rules} rules on file")
+    elif scheduler.start():
+        print(f"    schedule  running here, {rules} rules"
+              f"{'' if scheduler.schedule.enabled else ' (PAUSED — nothing will fire)'}")
+        for rule in sorted(scheduler.schedule.rules, key=lambda r: r.at):
+            nxt = rule.next_fire()
+            print(f"              {rule.describe()}"
+                  f"{'  ->  next ' + nxt.strftime('%a %H:%M') if nxt else '  (paused)'}")
+    else:
+        print(f"    schedule  already running as pid {scheduler.holder()} — not starting a "
+              "second one")
+
     if args.open:
         threading.Timer(0.4, webbrowser.open, [url]).start()
     try:
@@ -260,5 +391,6 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("\nportal stopped (training runs are unaffected).")
     finally:
+        scheduler.stop()
         httpd.server_close()
     return 0

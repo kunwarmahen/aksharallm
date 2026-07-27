@@ -146,6 +146,59 @@ before the real run. Skipping is only sane when resuming a config that has alrea
     <div class="scroll-x" id="sessions"></div>
   </section>
 
+  <section class="panel" aria-label="schedule">
+    <div class="panel-head">
+      <h2>Schedule</h2>
+      <button id="sched-arm" class="ghost" type="button">–</button>
+      <span class="panel-note" id="sched-status">–</span>
+    </div>
+
+    <form class="sched-form" id="sched-form">
+      <label class="field">
+        <span class="field-label">run</span>
+        <select id="sched-run"></select>
+      </label>
+      <label class="field">
+        <span class="field-label">what</span>
+        <select id="sched-mode">
+          <option value="window">training window (start + stop)</option>
+          <option value="start">start only</option>
+          <option value="stop">stop only</option>
+        </select>
+      </label>
+      <label class="field">
+        <span class="field-label" id="sched-from-label">start at</span>
+        <input id="sched-from" type="time" value="22:00" step="60" required>
+      </label>
+      <label class="field" id="sched-to-field">
+        <span class="field-label">stop at</span>
+        <input id="sched-to" type="time" value="06:30" step="60">
+      </label>
+      <div class="field">
+        <span class="field-label">days</span>
+        <div class="days" id="sched-days" role="group" aria-label="days"></div>
+      </div>
+      <label class="field" id="sched-steps-field">
+        <span class="field-label">steps (optional)</span>
+        <input id="sched-steps" type="number" min="1" step="100" placeholder="to budget">
+      </label>
+      <label class="check" id="sched-smoke-field"
+             title="A scheduled start is normally a resume, so the 50-step smoke test is
+skipped. phase2.sh ignores the skip when there is no checkpoint to resume.">
+        <input id="sched-smoke" type="checkbox">
+        <span>run the smoke test</span>
+      </label>
+      <button class="primary" id="sched-add" type="submit">Add</button>
+    </form>
+
+    <div class="scroll-x" id="sched-rules"></div>
+
+    <details class="sched-events">
+      <summary>Scheduler activity</summary>
+      <pre id="sched-log" class="log"></pre>
+    </details>
+  </section>
+
   <section class="panel" aria-label="log">
     <div class="panel-head">
       <h2>Log</h2>

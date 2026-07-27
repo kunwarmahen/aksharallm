@@ -284,6 +284,41 @@ table.data tr.current td { background: var(--wash); }
 .kv dd { margin: 0; font-size: 13px; }
 .kv dd code, code { font-family: var(--mono); font-size: 12px; }
 
+/* ---- schedule ----------------------------------------------------------------------- */
+.sched-form {
+  display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-end;
+  padding-bottom: 16px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.sched-form input[type="time"] {
+  font: inherit; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--axis); border-radius: 8px; padding: 6px 9px;
+  font-variant-numeric: tabular-nums;
+}
+.days { display: flex; gap: 4px; }
+/* Day toggles carry their state in aria-pressed and a filled background, never colour
+ * alone — and each keeps its initial letter, so the pattern is readable at a glance. */
+.day {
+  width: 30px; padding: 6px 0; text-align: center;
+  border: 1px solid var(--axis); border-radius: 7px;
+  background: var(--surface); color: var(--ink-muted);
+  font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.day[aria-pressed="true"] {
+  background: var(--series-1); border-color: var(--series-1); color: #fff;
+}
+.day-presets { display: flex; gap: 6px; margin-left: 4px; }
+.day-presets button { padding: 5px 9px; font-size: 12px; font-weight: 500; }
+
+.sched-events { margin-top: 14px; }
+.sched-events summary {
+  cursor: pointer; color: var(--ink-2); font-size: 12px; margin-bottom: 8px;
+}
+.sched-events .log { max-height: 200px; }
+.rule-paused td { opacity: 0.5; }
+.row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.row-actions button { padding: 3px 9px; font-size: 12px; }
+
 /* ---- log -------------------------------------------------------------------------- */
 .log {
   margin: 0; padding: 12px 14px; max-height: 380px; overflow: auto;

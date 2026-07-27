@@ -399,3 +399,157 @@ def test_static_serving_has_no_traversal(server):
     with pytest.raises(urllib.error.HTTPError) as exc:
         get(server + "/static/..%2F..%2Fserver.py")
     assert exc.value.code == 404
+
+
+# ---- the schedule ------------------------------------------------------------------------
+
+from datetime import datetime, timedelta  # noqa: E402
+
+from aksharallm.portal.schedule import Rule, Schedule, Scheduler, parse_days  # noqa: E402
+
+MON, TUE, SAT, SUN = 0, 1, 5, 6
+
+
+def at(day: int, hh: int, mm: int = 0) -> datetime:
+    """A datetime `day` days after a known Monday (2026-07-27), so weekdays are readable."""
+    return datetime(2026, 7, 27, hh, mm) + timedelta(days=day)
+
+
+def test_days_are_parsed_the_way_people_write_them():
+    assert parse_days("daily") == [0, 1, 2, 3, 4, 5, 6]
+    assert parse_days("mon-fri") == [0, 1, 2, 3, 4]
+    assert parse_days("sat,sun") == [5, 6]
+    assert parse_days("mon wed fri") == [0, 2, 4]
+    assert parse_days("fri-mon") == [0, 4, 5, 6], "a range may wrap past Sunday"
+    assert parse_days(None) == [0, 1, 2, 3, 4, 5, 6]
+    with pytest.raises(RunError):
+        parse_days("smorsday")
+
+
+def test_a_rule_is_validated_when_it_is_made():
+    with pytest.raises(RunError, match="HH:MM"):
+        Rule(run="demo", action="start", at="25:00")
+    with pytest.raises(RunError, match="start' or 'stop"):
+        Rule(run="demo", action="obliterate", at="09:00")
+    with pytest.raises(RunError, match="Monday to Sunday"):
+        Rule(run="demo", action="stop", at="09:00", days=[9])
+
+
+def test_next_fire_finds_the_right_day():
+    rule = Rule(run="demo", action="start", at="22:00", days=[0, 1, 2, 3, 4])
+    assert rule.next_fire(at(MON, 21, 0)) == at(MON, 22, 0)        # later today
+    assert rule.next_fire(at(MON, 22, 30)) == at(TUE, 22, 0)       # already gone
+    assert rule.next_fire(at(SAT, 12, 0)) == at(MON + 7, 22, 0)    # skips the weekend
+
+
+def test_a_missed_fire_stays_missed():
+    """Waking the machine at 07:00 must not trigger the 22:00 start."""
+    rule = Rule(run="demo", action="start", at="22:00")
+    assert rule.due(at(MON, 22, 0)) == at(MON, 22, 0)
+    assert rule.due(at(MON, 22, 5)) == at(MON, 22, 0), "a few minutes late still counts"
+    assert rule.due(at(TUE, 7, 0)) is None, "nine hours late does not"
+
+
+def test_an_occurrence_fires_once():
+    rule = Rule(run="demo", action="stop", at="06:30")
+    occurrence = rule.due(at(MON, 6, 31))
+    assert occurrence is not None
+    rule.last_fired = occurrence.isoformat(timespec="seconds")
+    assert rule.due(at(MON, 6, 32)) is None, "same occurrence, already handled"
+    assert rule.due(at(TUE, 6, 30)) == at(TUE, 6, 30), "tomorrow's is a new occurrence"
+
+
+def test_a_window_over_midnight_shifts_the_stop_to_the_next_day(repo):
+    sched = Schedule(repo, repo / "schedule.json")
+    start, stop = sched.add_window("demo", "22:00", "06:30", parse_days("mon-fri"))
+    assert start.days == [0, 1, 2, 3, 4]
+    assert stop.days == [1, 2, 3, 4, 5], "Mon-Fri nights end Tue-Sat mornings"
+    # A window inside one day keeps both on the same days.
+    s2, e2 = sched.add_window("demo", "13:00", "17:30", parse_days("sat,sun"))
+    assert s2.days == e2.days == [5, 6]
+
+
+def test_the_schedule_round_trips_through_the_file(repo):
+    sched = Schedule(repo, repo / "schedule.json")
+    sched.add(Rule(run="demo", action="start", at="09:00", days=[0], stop_after=250))
+    again = Schedule(repo, repo / "schedule.json")
+    assert len(again.rules) == 1
+    assert again.rules[0].stop_after == 250 and again.rules[0].at == "09:00"
+    # A rule that no longer parses is dropped, not fatal — the file is hand-editable.
+    (repo / "schedule.json").write_text(
+        '{"enabled": true, "rules": [{"run": "demo", "action": "start", "at": "nope"},'
+        ' {"run": "demo", "action": "stop", "at": "06:30"}]}')
+    assert [r.at for r in Schedule(repo, repo / "schedule.json").rules] == ["06:30"]
+
+
+def test_firing_is_idempotent_and_never_raises(store, repo, monkeypatch):
+    """A start when it is already training, or a stop when nothing runs, is a no-op — the
+    schedule's intent already holds, and an unattended loop must not die on it."""
+    monkeypatch.setitem(runs_mod.LAUNCHERS, "demo", {})
+    sched = Schedule(repo, repo / "schedule.json")
+    scheduler = Scheduler(store, sched, tick=0.01)
+
+    stop_rule = Rule(run="demo", action="stop", at="06:30")
+    sched.add(stop_rule)
+    result = scheduler.fire(stop_rule, at(MON, 6, 30))
+    assert "skipped" in result and "not training" in result
+    assert stop_rule.last_fired is not None, "a skip still counts as handled"
+    assert "skipped" in scheduler.recent()[-1]
+
+
+def test_the_master_switch_stops_everything_firing(store, repo):
+    sched = Schedule(repo, repo / "schedule.json")
+    sched.add(Rule(run="demo", action="stop", at="06:30"))
+    sched.enabled = False
+    sched.save()
+    scheduler = Scheduler(store, Schedule(repo, repo / "schedule.json"), tick=0.01)
+    fired = scheduler.check(datetime.now().replace(hour=6, minute=30, second=0))
+    assert fired == []
+
+
+def test_only_one_scheduler_holds_the_clock(store, repo):
+    first = Scheduler(store, Schedule(repo, repo / "schedule.json"))
+    assert first.lock() is True
+    assert first.holder() is None, "our own pid is not a rival"
+    other = spawn("-m", "aksharallm.portal")
+    try:
+        (repo / "logs" / "scheduler.pid").write_text(f"{other.pid}\n")
+        second = Scheduler(store, Schedule(repo, repo / "schedule.json"))
+        assert second.holder() == other.pid
+        assert second.lock() is False
+    finally:
+        other.kill()
+        other.wait()
+
+
+def test_schedule_api_add_list_and_remove(server, repo):
+    body = json.dumps({"run": "demo", "start_at": "22:00", "stop_at": "06:30",
+                       "days": "mon-fri"}).encode()
+    req = urllib.request.Request(server + "/api/schedule/window", data=body, method="POST")
+    req.add_header("X-Portal", "1")
+    # 'demo' has no launcher, so a scheduled start is refused rather than silently useless.
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(req, timeout=10)
+    assert exc.value.code == 409
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setitem(runs_mod.LAUNCHERS, "demo", {})
+        req = urllib.request.Request(server + "/api/schedule/window", data=body, method="POST")
+        req.add_header("X-Portal", "1")
+        with urllib.request.urlopen(req, timeout=10) as res:
+            added = json.loads(res.read())
+        assert len(added["rules"]) == 2 and "crosses midnight" in added["note"]
+
+    _, listing = get(server + "/api/schedule")
+    data = json.loads(listing)
+    assert len(data["rules"]) == 2 and data["enabled"] is True
+    assert all(r["next_fire"] for r in data["rules"])
+
+    rid = data["rules"][0]["id"]
+    req = urllib.request.Request(server + "/api/schedule/remove",
+                                 data=json.dumps({"id": rid}).encode(), method="POST")
+    req.add_header("X-Portal", "1")
+    with urllib.request.urlopen(req, timeout=10) as res:
+        assert json.loads(res.read())["ok"] is True
+    _, listing = get(server + "/api/schedule")
+    assert len(json.loads(listing)["rules"]) == 1

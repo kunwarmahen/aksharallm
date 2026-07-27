@@ -352,6 +352,80 @@ The whole thing is the standard library plus hand-written SVG: `aksharallm/porta
 `aksharallm/train/runlog.py` is the shared reader that `scripts/sessions.py` uses too, so the
 table in the terminal and the chart in the browser cannot disagree.
 
+### Scheduling it: "train overnight, hand the GPU back at breakfast"
+
+Six days of compute over evenings is a lot of remembering to press things. So starts and
+stops can be put on a clock — several windows a day, per weekday — from either side:
+
+```bash
+scripts/schedule.sh window small-code 22:00 06:30 --days mon-fri
+scripts/schedule.sh window small-code 13:00 17:30 --days sat,sun --steps 2000
+scripts/schedule.sh                       # the rules, and when each next fires
+scripts/schedule.sh pause 3f9a2b1c        # keep a rule, don't fire it
+scripts/schedule.sh off                   # master switch: nothing fires at all
+scripts/schedule.sh log                   # what it actually did, and why
+```
+
+…or in the portal's **Schedule** panel: pick a run, a start and stop time, click the days,
+press Add. Both edit the same `schedule.json` in the repo root, so a window added in the
+browser is `scripts/schedule.sh`'s to pause, and vice versa.
+
+A window is stored as the two rules it really is, and the stop's days are shifted when it
+crosses midnight — `22:00 → 06:30, mon-fri` means starts Mon–Fri and stops **Tue–Sat**.
+Getting that wrong silently leaves the GPU running all Saturday, so it is done for you.
+
+```mermaid
+flowchart LR
+    E1["scripts/schedule.sh"] <-->|edits| F[("schedule.json")]
+    E2["portal · Schedule panel"] <-->|edits| F
+    F --> C{"clock loop<br/>every 20s"}
+    C -->|"a rule is due"| A["RunStore.start / stop"]
+    A --> P["scripts/phase2.sh"]
+    A --> S["scripts/stop.sh"]
+    C -->|"appends"| L[("logs/scheduler.log")]
+```
+
+**Something has to watch the clock.** Any one of these, and they take the same
+one-per-machine lock so they never double-fire:
+
+| | |
+|---|---|
+| `scripts/portal.sh` | runs the scheduler by default — this is the usual answer, since the portal is the thing you leave running |
+| `scripts/schedule.sh daemon` | a foreground clock loop with no web server |
+| `* * * * * cd <repo> && scripts/schedule.sh check` | let cron do the ticking; `check` fires anything due and exits |
+
+The portal says plainly when nothing is watching, because a schedule you have stopped
+checking on is worse than no schedule at all.
+
+Two properties make an unattended schedule safe to leave armed:
+
+- **Firing is idempotent.** A start when the run is already training is a no-op; so is a
+  stop when nothing is running. Overlapping rules cannot compound into two trainers — the
+  log records `skipped — 'small-code' is already training as pid …`.
+- **A missed fire stays missed.** If the machine was asleep at 22:00, that start does not go
+  off at 07:00 when you open the lid; the grace window is 15 minutes. Waking to find a run
+  that began nine hours late, mid-workday, is worse than one that didn't begin.
+
+Scheduled starts default to **skipping the smoke test** (`SKIP_SMOKE=1`), because a
+scheduled start is nearly always a resume — and `phase2.sh` ignores the skip anyway when
+there is no `ckpt_last.pt` to resume from. Tick "run the smoke test" (or drop `--smoke`'s
+absence on the CLI) if you would rather have the eight minutes of insurance every night.
+
+### Restarting the portal
+
+```bash
+scripts/portal.sh --status         # running? which pid, which address
+scripts/portal.sh --stop
+scripts/portal.sh --restart --lan  # stop, then start again in the background
+scripts/portal.sh --bg --lan       # start in the background (log: logs/portal.log)
+```
+
+It works off `logs/portal.pid` and stops with SIGTERM, which the portal routes through its
+Ctrl-C path so the scheduler releases its lock on the way out (a `kill -9` leaves
+`logs/scheduler.pid` behind and the next portal declines to run the clock). Restarting
+never touches a training run. It does pause the scheduler for those two seconds, and a rule
+due in that gap is missed rather than fired late.
+
 ### Re-running (what happens if you run it again)
 
 Re-running is the intended resume workflow — nothing is lost or duplicated:
