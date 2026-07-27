@@ -35,6 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from .gpu import Sampler, snapshot
 from .runs import LAUNCHERS, RunError, RunStore, repo_root
 from .schedule import Rule, Schedule, Scheduler, parse_days
 
@@ -57,9 +58,11 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "aksharallm-portal"
     protocol_version = "HTTP/1.1"
 
-    def __init__(self, *args, store: RunStore, scheduler: Scheduler, quiet: bool = True, **kw):
+    def __init__(self, *args, store: RunStore, scheduler: Scheduler, sampler: Sampler,
+                 quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
+        self.sampler = sampler
         self.quiet = quiet
         super().__init__(*args, **kw)
 
@@ -175,6 +178,13 @@ class Handler(BaseHTTPRequestHandler):
             name = (query.get("file") or [None])[0]
             lines = int((query.get("lines") or [300])[0])
             return self._json(self.store.log_tail(parts[1], name=name, lines=lines))
+        if parts == ["gpu"]:
+            window = (query.get("window") or ["3600"])[0]
+            return self._json(snapshot(
+                self.store,
+                window_s=None if window in ("all", "0") else float(window),
+                index=int((query.get("index") or [0])[0]),
+                sampler=self.sampler))
         if parts == ["schedule"]:
             sched = self.scheduler.schedule.reload_if_changed()
             holder = self.scheduler.holder()
@@ -288,11 +298,14 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
     """
     store = RunStore(root)
     scheduler = Scheduler(store, Schedule(store.root))
-    handler = partial(Handler, store=store, scheduler=scheduler, quiet=quiet)
+    sampler = Sampler(store)
+    handler = partial(Handler, store=store, scheduler=scheduler, sampler=sampler,
+                      quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True
     httpd.scheduler = scheduler
+    httpd.sampler = sampler
     return httpd
 
 
@@ -311,6 +324,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--allow-remote", action="store_true",
                     help="permit a non-loopback --host (implied by --lan)")
     ap.add_argument("--open", action="store_true", help="open a browser at the portal")
+    ap.add_argument("--no-gpu", action="store_true",
+                    help="don't sample GPU telemetry in this process")
     ap.add_argument("--no-schedule", action="store_true",
                     help="don't run the scheduler in this process (rules still show, but "
                          "nothing fires unless scripts/schedule.sh --daemon is running)")
@@ -384,6 +399,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"    schedule  already running as pid {scheduler.holder()} — not starting a "
               "second one")
 
+    sampler = httpd.sampler
+    if args.no_gpu:
+        print("    gpu       not sampling here (--no-gpu)")
+    elif sampler.start():
+        names = ", ".join(f"{d['index']}: {d['name']}" for d in sampler.devices())
+        print(f"    gpu       sampling every {sampler.interval:.0f}s — {names}")
+    elif not sampler.devices():
+        print("    gpu       no NVIDIA GPU detected — the GPU panel will say so")
+    else:
+        print(f"    gpu       already sampled by pid {sampler.holder()}")
+
     if args.open:
         threading.Timer(0.4, webbrowser.open, [url]).start()
     try:
@@ -392,5 +418,6 @@ def main(argv: list[str] | None = None) -> int:
         print("\nportal stopped (training runs are unaffected).")
     finally:
         scheduler.stop()
+        sampler.stop()
         httpd.server_close()
     return 0

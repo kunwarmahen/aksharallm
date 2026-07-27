@@ -119,9 +119,17 @@ function lineChart(host, spec) {
 
   /* A legend is always present for two or more series, so identity is never colour-alone.
    * One series needs none: the title names it. */
-  if (series.length > 1 && spec.legend !== false) {
+  if ((series.length > 1 || (spec.spans || []).length) && spec.legend !== false) {
     const legend = document.createElement('div');
     legend.className = 'legend';
+    if ((spec.spans || []).length) {
+      const item = document.createElement('span');
+      item.className = 'legend-item';
+      const sw = document.createElement('span');
+      sw.className = 'legend-swatch band';
+      item.append(sw, document.createTextNode(spec.spanLabel || 'training'));
+      legend.appendChild(item);
+    }
     for (const s of series) {
       const item = document.createElement('span');
       item.className = 'legend-item';
@@ -158,6 +166,18 @@ function lineChart(host, spec) {
     viewBox: `0 0 ${width} ${height}`, width, height,
     role: 'img', 'aria-label': spec.label || 'chart',
   }, host);
+
+  /* Shaded periods behind everything: "the GPU was training here". A neutral wash, not a
+   * categorical hue — it is context for the series, and must not compete with it. */
+  for (const sp of spec.spans || []) {
+    const a = Math.max(sx(sp.start), pad.l);
+    const b = Math.min(sx(sp.end), pad.l + pw);
+    if (b <= a) continue;
+    const band = el('rect', {
+      class: 'span-band', x: a, y: pad.t, width: Math.max(b - a, 1.5), height: ph,
+    }, svg);
+    el('title', {}, band).textContent = sp.label || 'training';
+  }
 
   /* grid + axes: solid hairlines, never dashed, one shade off the surface */
   const yTicks = niceTicks(y0, y1, 5);
@@ -313,6 +333,8 @@ const state = {
   run: null,
   status: null,
   schedule: null,
+  gpu: null,
+  gpuWindow: '3600',
   log: null,
   logFile: null,     // null = whichever file was written most recently
   timer: null,
@@ -426,6 +448,7 @@ function renderCharts(s) {
   const clip = s.config && s.config.grad_clip;
 
   state.charts = {
+    ...state.charts,
     loss: {
       label: 'training and validation loss by step',
       yFmt: (v) => v.toFixed(2),
@@ -564,6 +587,140 @@ function renderRuns(runs) {
   });
   sel.dataset.sig = sig;
   sel.value = state.run;
+}
+
+/* ---------------------------------------------------------------- gpu ----------------- */
+
+/** Clock-time x axis: the GPU charts are wall-clock, not step number. */
+const timeFmt = (t) => new Date(t * 1000).toLocaleTimeString(undefined,
+  { hour: '2-digit', minute: '2-digit' });
+
+function renderGpu(gpu) {
+  state.gpu = gpu;
+  const tiles = ['util', 'mem', 'temp', 'power'];
+
+  if (!gpu.available) {
+    $('#gpu-status').textContent = gpu.reason || 'no GPU';
+    for (const t of tiles) {
+      $(`#g-${t}`).textContent = '–';
+      $(`#g-${t}-note`).textContent = '';
+    }
+    $('#gpu-summary').textContent = '';
+    for (const key of ['gutil', 'gmem', 'gtemp', 'gpower']) delete state.charts[key];
+    for (const key of ['gutil', 'gmem', 'gtemp', 'gpower']) {
+      const host = $(`.chart[data-chart="${key}"]`);
+      if (host) {
+        host.textContent = '';
+        const div = document.createElement('div');
+        div.className = 'chart-empty';
+        div.textContent = gpu.reason || 'No GPU telemetry.';
+        host.appendChild(div);
+      }
+    }
+    return;
+  }
+
+  const dev = (gpu.devices || [])[gpu.index] || (gpu.devices || [])[0] || {};
+  const cur = gpu.current || {};
+  const memTotal = dev.mem_total || null;
+  const limit = dev.power_limit || null;
+
+  $('#gpu-status').textContent = [
+    dev.name,
+    gpu.sampling ? `sampling every ${gpu.interval_s}s` : 'NOT SAMPLING — no history is being recorded',
+    gpu.current_run ? `${gpu.current_run} is training` : 'no run training',
+    gpu.samples ? `${fmt.int(gpu.samples)} samples in view` : 'no samples yet',
+  ].filter(Boolean).join(' · ');
+
+  const set = (id, value, note) => {
+    $(`#g-${id}`).textContent = value;
+    $(`#g-${id}-note`).textContent = note;
+  };
+  set('util', cur.util == null ? '–' : `${Math.round(cur.util)}%`,
+    gpu.current_age_s == null ? '–' : `${fmt.dur(gpu.current_age_s)} ago`);
+  set('mem', cur.mem_used == null ? '–' : `${(cur.mem_used / 1024).toFixed(1)} GB`,
+    memTotal ? `of ${(memTotal / 1024).toFixed(0)} GB` : '–');
+  set('temp', cur.temp == null ? '–' : `${Math.round(cur.temp)}°C`,
+    (gpu.summary.training && gpu.summary.training.temp_max)
+      ? `peak ${Math.round(gpu.summary.training.temp_max)}°C while training` : 'idle');
+  set('power', cur.power == null ? '–' : `${Math.round(cur.power)} W`,
+    limit ? `of ${Math.round(limit)} W limit` : '–');
+
+  /* The comparison the panel exists for, as numbers rather than eyeballed off the chart. */
+  const rows = [];
+  for (const [key, label] of [['training', 'while training'], ['idle', 'idle']]) {
+    const s = gpu.summary[key];
+    if (!s) continue;
+    rows.push([
+      label,
+      fmt.dur(s.seconds),
+      s.util == null ? '–' : `${s.util.toFixed(0)}%`,
+      s.mem_used == null ? '–' : `${(s.mem_used / 1024).toFixed(1)} GB`,
+      s.temp == null ? '–' : `${s.temp.toFixed(0)}°C`,
+      s.temp_max == null ? '–' : `${s.temp_max.toFixed(0)}°C`,
+      s.power == null ? '–' : `${s.power.toFixed(0)} W`,
+    ]);
+  }
+  const sumHost = $('#gpu-summary');
+  sumHost.textContent = '';
+  if (rows.length) {
+    sumHost.appendChild(table(
+      ['', 'time in window', 'avg util', 'avg memory', 'avg temp', 'peak temp', 'avg power'],
+      rows));
+  } else {
+    const div = document.createElement('div');
+    div.className = 'chart-empty';
+    div.textContent = 'No samples in this window yet — the sampler writes one every '
+      + `${gpu.interval_s}s.`;
+    sumHost.appendChild(div);
+  }
+
+  const t = gpu.series.time || [];
+  const spans = (gpu.spans || []).map((s) => ({ ...s, label: `${s.run} training` }));
+  const common = { xFmt: timeFmt, spans, spanLabel: 'a run was training', zeroFloor: true };
+  Object.assign(state.charts, {
+    gutil: {
+      ...common, label: 'GPU utilisation over time', yFmt: (v) => `${v.toFixed(0)}%`,
+      yMin: 0,
+      series: [{ name: 'utilisation', color: '--series-1', x: t, y: gpu.series.util || [], label: true, fmt: (v) => `${v.toFixed(0)}%` }],
+    },
+    gmem: {
+      ...common, label: 'GPU memory used over time', yFmt: (v) => `${(v / 1024).toFixed(0)}G`,
+      rules: memTotal ? [{ y: memTotal, label: `${(memTotal / 1024).toFixed(0)} GB total` }] : [],
+      series: [{ name: 'memory used', color: '--series-1', x: t, y: gpu.series.mem_used || [], label: true, fmt: (v) => `${(v / 1024).toFixed(1)}G` }],
+    },
+    gtemp: {
+      ...common, label: 'GPU temperature over time', yFmt: (v) => `${v.toFixed(0)}°`,
+      series: [{ name: 'temperature', color: '--series-1', x: t, y: gpu.series.temp || [], label: true, fmt: (v) => `${v.toFixed(0)}°C` }],
+    },
+    gpower: {
+      ...common, label: 'GPU power draw over time', yFmt: (v) => `${v.toFixed(0)}W`,
+      rules: limit ? [{ y: limit, label: `${Math.round(limit)} W limit` }] : [],
+      series: [{ name: 'power', color: '--series-1', x: t, y: gpu.series.power || [], label: true, fmt: (v) => `${v.toFixed(0)}W` }],
+    },
+  });
+  drawCharts();
+}
+
+function wireGpu() {
+  for (const btn of $$('.gpu-window button')) {
+    btn.addEventListener('click', () => {
+      state.gpuWindow = btn.dataset.window;
+      localStorage.setItem('aksharallm-gpu-window', state.gpuWindow);
+      markGpuWindow();
+      schedule(0);
+    });
+  }
+  state.gpuWindow = localStorage.getItem('aksharallm-gpu-window') || '3600';
+  markGpuWindow();
+}
+
+function markGpuWindow() {
+  for (const btn of $$('.gpu-window button')) {
+    const on = btn.dataset.window === state.gpuWindow;
+    btn.className = on ? '' : 'ghost';
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
 }
 
 /* ---------------------------------------------------------------- schedule ------------ */
@@ -758,11 +915,12 @@ async function refresh() {
   if (!state.run) return;
   try {
     const q = state.logFile ? `?lines=400&file=${encodeURIComponent(state.logFile)}` : '?lines=400';
-    const [status, log, runs, sched] = await Promise.all([
+    const [status, log, runs, sched, gpu] = await Promise.all([
       api(`/api/run/${encodeURIComponent(state.run)}`),
       api(`/api/run/${encodeURIComponent(state.run)}/log${q}`),
       api('/api/runs'),
       api('/api/schedule'),
+      api(`/api/gpu?window=${encodeURIComponent(state.gpuWindow)}`),
     ]);
     state.status = status;
     state.log = log;
@@ -777,6 +935,7 @@ async function refresh() {
     renderSessions(status);
     renderConfig(status);
     renderLog(log);
+    renderGpu(gpu);
     renderSchedule(sched);
     live(`updated ${new Date().toLocaleTimeString()}`, 'on');
   } catch (err) {
@@ -821,6 +980,7 @@ function selectRun(run) {
 }
 
 function wire() {
+  wireGpu();
   wireSchedule();
   $('#run-select').addEventListener('change', (e) => selectRun(e.target.value));
 

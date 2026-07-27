@@ -118,6 +118,7 @@ aksharallm/
 │   ├── portal/           local web portal: start/stop a run, watch the curves
 │   │   ├── runs.py           run state on disk; drives phase2.sh / stop.sh
 │   │   ├── schedule.py       recurring start/stop windows + the clock loop
+│   │   ├── gpu.py            nvidia-smi sampling, history, training-vs-idle summary
 │   │   ├── server.py         stdlib http.server + a small JSON API
 │   │   └── static/           one page, hand-written SVG charts, no dependencies
 │   ├── eval/evaluate.py  perplexity, HellaSwag, sample generations
@@ -130,6 +131,7 @@ aksharallm/
 │   ├── stop.sh           stop a background run cleanly, now or after N more steps
 │   ├── portal.sh         the web portal (progress, graphs, start/stop); --lan to share
 │   ├── schedule.sh       recurring start/stop windows ("22:00-06:30, mon-fri")
+│   ├── gpu.sh            GPU utilisation/memory/temp/power, now and over time
 │   ├── sessions.py       per-session summary of a run trained over many evenings
 │   └── postrain.sh       Phase 3: SFT then DPO
 ├── tests/                correctness tests (KV cache, causality, RoPE, mixing, DPO)
@@ -192,6 +194,19 @@ It is a **view over the same files**, and it presses the same buttons: it starts
 appears in the portal and vice versa — including while it is still in pre-flight — and
 closing the portal never stops training. Standard library only: the server is `http.server`,
 the charts are hand-written SVG.
+
+### Watching the GPU
+
+```bash
+scripts/gpu.sh                  # now + a 1-hour summary, split into training vs idle
+scripts/gpu.sh watch            # one line a second
+```
+
+The portal samples `nvidia-smi` every five seconds into `logs/gpu.jsonl` and charts
+utilisation, memory, temperature and power, banding the periods when a run was training.
+Since each sample records whether a trainer was alive, the summary splits into *while
+training* vs *idle* — which is how you notice that the GPU sat at 40% all night, or that
+something else was resident on it.
 
 ### Training on a schedule
 

@@ -553,3 +553,114 @@ def test_schedule_api_add_list_and_remove(server, repo):
         assert json.loads(res.read())["ok"] is True
     _, listing = get(server + "/api/schedule")
     assert len(json.loads(listing)["rules"]) == 1
+
+
+# ---- gpu telemetry -----------------------------------------------------------------------
+
+from aksharallm.portal import gpu as gpumod  # noqa: E402
+
+FAKE_STATIC = [["0", "NVIDIA GeForce RTX 3090", "24576", "390.00"]]
+FAKE_LIVE = [["0", "98", "19140", "71", "310.50"]]
+
+
+@pytest.fixture
+def fake_smi(monkeypatch):
+    """nvidia-smi, faked — the tests must pass on a machine with no GPU and give the same
+    answer on one with four."""
+    def runner(fields, timeout=5.0):
+        return FAKE_STATIC if "name" in fields else FAKE_LIVE
+    monkeypatch.setattr(gpumod, "_run_smi", runner)
+    return runner
+
+
+def test_devices_and_a_sample_are_parsed(fake_smi, store):
+    assert gpumod.devices() == [{"index": 0, "name": "NVIDIA GeForce RTX 3090",
+                                 "mem_total": 24576.0, "power_limit": 390.0}]
+    rec = gpumod.sample(store)
+    assert rec["gpus"][0] == {"index": 0, "util": 98.0, "mem_used": 19140.0,
+                              "temp": 71.0, "power": 310.5}
+    assert "run" not in rec, "nothing is training in the fixture repo"
+
+
+def test_unreported_fields_are_missing_not_zero(monkeypatch, store):
+    """nvidia-smi prints [N/A] for what a card doesn't report. Averaging that as 0 W would
+    quietly halve the reported power draw."""
+    monkeypatch.setattr(gpumod, "_run_smi",
+                        lambda fields, timeout=5.0: [["0", "50", "1024", "40", "[N/A]"]])
+    assert gpumod.sample(store)["gpus"][0]["power"] is None
+
+
+def test_no_gpu_is_reported_honestly(monkeypatch, store):
+    monkeypatch.setattr(gpumod, "_run_smi", lambda fields, timeout=5.0: None)
+    snap = gpumod.snapshot(store)
+    assert snap["available"] is False and "no NVIDIA GPU" in snap["reason"]
+    assert gpumod.Sampler(store).start() is False
+
+
+def test_samples_are_written_read_back_and_windowed(fake_smi, store, repo):
+    sampler = gpumod.Sampler(store)
+    for _ in range(3):
+        assert sampler.tick() is not None
+    # An old sample must fall outside a short window.
+    with open(sampler.path, "a") as fh:
+        fh.write(json.dumps({"time": time.time() - 7200,
+                             "gpus": [{"index": 0, "util": 1.0}]}) + "\n")
+    assert len(gpumod.read_records(sampler.path, window_s=60)) == 3
+    assert len(gpumod.read_records(sampler.path, window_s=None)) == 4
+
+
+def test_series_are_bucket_averaged_down_to_max_points():
+    now = time.time()
+    records = [{"time": now + i, "gpus": [{"index": 0, "util": float(i % 10),
+                                           "mem_used": 1000.0, "temp": 50.0,
+                                           "power": 100.0}]} for i in range(1000)]
+    s = gpumod.series(records, max_points=50)
+    assert len(s["time"]) == 50
+    assert 4.0 <= sum(s["util"]) / 50 <= 5.0, "the mean survives downsampling"
+
+
+def test_training_spans_split_on_a_gap():
+    """A portal restart must leave a gap in the band, not one continuous lie across the
+    hours nothing was watching."""
+    t = 1_000_000.0
+    records = (
+        [{"time": t + i * 5, "run": "small-code", "gpus": []} for i in range(5)]
+        + [{"time": t + 3600 + i * 5, "run": "small-code", "gpus": []} for i in range(5)]
+        + [{"time": t + 7200, "gpus": []}]
+    )
+    spans = gpumod.training_spans(records)
+    assert len(spans) == 2
+    assert spans[0]["start"] == t and spans[0]["end"] == t + 20
+    assert all(s["run"] == "small-code" for s in spans)
+
+
+def test_summary_splits_training_from_idle():
+    def rec(util, power, run=None):
+        r = {"time": time.time(),
+             "gpus": [{"index": 0, "util": util, "mem_used": 19000.0, "temp": 70.0,
+                       "power": power}]}
+        if run:
+            r["run"] = run
+        return r
+    records = [rec(98, 310, "small-code"), rec(96, 300, "small-code"), rec(2, 25)]
+    summary = gpumod.summarise(records)
+    assert summary["training"]["samples"] == 2
+    assert summary["training"]["util"] == 97.0 and summary["training"]["power"] == 305.0
+    assert summary["idle"]["samples"] == 1 and summary["idle"]["util"] == 2.0
+    assert summary["training"]["temp_max"] == 70.0
+
+
+def test_gpu_api_serves_the_panel(server, repo, monkeypatch):
+    monkeypatch.setattr(gpumod, "_run_smi",
+                        lambda fields, timeout=5.0:
+                        FAKE_STATIC if "name" in fields else FAKE_LIVE)
+    store = RunStore(repo)
+    sampler = gpumod.Sampler(store)
+    sampler.tick()
+    _, body = get(server + "/api/gpu?window=3600")
+    data = json.loads(body)
+    assert data["available"] is True
+    assert data["devices"][0]["name"] == "NVIDIA GeForce RTX 3090"
+    assert data["current"]["util"] == 98.0
+    assert data["series"]["util"] == [98.0]
+    assert data["summary"]["idle"]["samples"] == 1

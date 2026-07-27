@@ -146,6 +146,73 @@ before the real run. Skipping is only sane when resuming a config that has alrea
     <div class="scroll-x" id="sessions"></div>
   </section>
 
+  <section class="panel" aria-label="gpu">
+    <div class="panel-head">
+      <h2>GPU</h2>
+      <span class="panel-note" id="gpu-status">–</span>
+      <!-- One filter row above everything it scopes: the tiles and all four charts. -->
+      <div class="control-group gpu-window" role="group" aria-label="time window">
+        <button class="ghost" data-window="900" type="button">15m</button>
+        <button class="ghost" data-window="3600" type="button">1h</button>
+        <button class="ghost" data-window="21600" type="button">6h</button>
+        <button class="ghost" data-window="86400" type="button">24h</button>
+        <button class="ghost" data-window="all" type="button">all</button>
+      </div>
+    </div>
+
+    <div class="tiles gpu-tiles">
+      <div class="tile"><div class="tile-label">utilisation</div>
+        <div class="tile-value" id="g-util">–</div><div class="tile-note" id="g-util-note">–</div></div>
+      <div class="tile"><div class="tile-label">memory</div>
+        <div class="tile-value" id="g-mem">–</div><div class="tile-note" id="g-mem-note">–</div></div>
+      <div class="tile"><div class="tile-label">temperature</div>
+        <div class="tile-value" id="g-temp">–</div><div class="tile-note" id="g-temp-note">–</div></div>
+      <div class="tile"><div class="tile-label">power</div>
+        <div class="tile-value" id="g-power">–</div><div class="tile-note" id="g-power-note">–</div></div>
+    </div>
+
+    <div class="scroll-x" id="gpu-summary"></div>
+
+    <div class="chart-grid gpu-charts">
+      <figure class="panel chart-card">
+        <figcaption>
+          <span class="chart-title">Utilisation</span>
+          <span class="chart-note">percent of the time the GPU had work</span>
+          <button class="ghost view-toggle" data-target="gutil" type="button">table</button>
+        </figcaption>
+        <div class="chart" data-chart="gutil"></div>
+        <div class="chart-table" data-table="gutil" hidden></div>
+      </figure>
+      <figure class="panel chart-card">
+        <figcaption>
+          <span class="chart-title">Memory used</span>
+          <span class="chart-note">gigabytes of the card’s VRAM</span>
+          <button class="ghost view-toggle" data-target="gmem" type="button">table</button>
+        </figcaption>
+        <div class="chart" data-chart="gmem"></div>
+        <div class="chart-table" data-table="gmem" hidden></div>
+      </figure>
+      <figure class="panel chart-card">
+        <figcaption>
+          <span class="chart-title">Temperature</span>
+          <span class="chart-note">°C — a plateau near the limit means it is throttling</span>
+          <button class="ghost view-toggle" data-target="gtemp" type="button">table</button>
+        </figcaption>
+        <div class="chart" data-chart="gtemp"></div>
+        <div class="chart-table" data-table="gtemp" hidden></div>
+      </figure>
+      <figure class="panel chart-card">
+        <figcaption>
+          <span class="chart-title">Power draw</span>
+          <span class="chart-note">watts against the card’s limit</span>
+          <button class="ghost view-toggle" data-target="gpower" type="button">table</button>
+        </figcaption>
+        <div class="chart" data-chart="gpower"></div>
+        <div class="chart-table" data-table="gpower" hidden></div>
+      </figure>
+    </div>
+  </section>
+
   <section class="panel" aria-label="schedule">
     <div class="panel-head">
       <h2>Schedule</h2>

@@ -411,6 +411,58 @@ scheduled start is nearly always a resume — and `phase2.sh` ignores the skip a
 there is no `ckpt_last.pt` to resume from. Tick "run the smoke test" (or drop `--smoke`'s
 absence on the CLI) if you would rather have the eight minutes of insurance every night.
 
+### Watching the GPU itself
+
+Loss curves say whether the model is learning. They say nothing about whether the *card* is
+healthy — and on a machine you also use, the interesting question is often "is something
+else on my GPU?". So the portal samples `nvidia-smi` every five seconds into
+`logs/gpu.jsonl` and charts utilisation, memory, temperature and power over time:
+
+```bash
+scripts/gpu.sh                    # now, plus a 1-hour summary split training vs idle
+scripts/gpu.sh --window 6h        # 15m | 1h | 6h | 24h | all
+scripts/gpu.sh watch              # one line a second, like `nvidia-smi -l 1`
+scripts/gpu.sh daemon             # record samples without running the portal
+```
+
+Every sample records **whether a trainer was alive at that moment**, which is what makes
+the comparison possible. The charts band the training periods in grey, and both the panel
+and the CLI split every average in two:
+
+```
+last 6h (4,320 samples)
+                  time     util  memory   temp  peak temp  power
+while training    5h12m    98%   19.1 GB  71°C  74°C       309 W
+idle              48m00s   3%    0.4 GB   43°C  46°C       26 W
+```
+
+That table answers questions the loss curve cannot:
+
+| reading | what it means |
+|---|---|
+| util well under ~95% while training | the GPU is waiting on something — data loading, a too-small batch, or another process |
+| memory used ≫ the trainer's own | something else is resident. An inference server left running is the usual culprit |
+| temperature flat at a ceiling | thermal throttling; expect `tok/s` to have dropped with it |
+| power far below the limit under load | the card is not being fed work |
+
+```mermaid
+flowchart LR
+    S["nvidia-smi<br/>every 5s"] --> R[("logs/gpu.jsonl<br/>+ was a trainer alive?")]
+    R --> P["portal · GPU panel<br/>charts + training bands"]
+    R --> C["scripts/gpu.sh<br/>summary + sparklines"]
+```
+
+The sampler runs inside the portal by default (`--no-gpu` to skip it, `scripts/gpu.sh
+daemon` to run it alone), takes the same one-per-machine lock as the scheduler, and trims
+`logs/gpu.jsonl` to a rolling ~8 MB — roughly a week. GPU telemetry is a rolling picture;
+`train_log.jsonl` is the record that has to survive.
+
+Two honest limitations worth knowing: **history only exists while something is sampling**,
+so a gap in the chart means nobody was watching, not that the GPU was idle (spans break
+across gaps rather than drawing one continuous band); and during pre-flight the *smoke
+test* occupies the GPU without a trainer being alive, so you will see load with no training
+band — which is correct, and a useful thing to be able to see.
+
 ### Restarting the portal
 
 ```bash
