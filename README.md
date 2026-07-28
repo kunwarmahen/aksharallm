@@ -62,8 +62,10 @@ python -m aksharallm.data.prepare tinystories \
 python -m aksharallm.train.pretrain configs/tiny.yaml
 
 # 3. Talk to it
-python -m aksharallm.infer.cli checkpoints/tiny/ckpt_best.pt \
-    --prompt "Once upon a time"
+python -m aksharallm.infer.cli tiny --prompt "Once upon a time"
+
+# 4. See what it can and cannot do yet
+python -m aksharallm.infer.cli tiny --probes
 ```
 
 That's the entire loop, end to end. Everything after this is the same code with bigger
@@ -83,7 +85,7 @@ Read these in order. They assume no prior knowledge of machine learning.
 | 3 | [The model](docs/03-model.md) | Attention, RoPE, SwiGLU, residual streams — every line of the transformer |
 | 4 | [Pretraining](docs/04-pretraining.md) | The training loop, mixed precision, LR schedules, reading the logs |
 | 5 | [Post-training](docs/05-posttraining.md) | SFT and DPO — turning a text completer into an assistant |
-| 6 | [Inference](docs/06-inference.md) | KV caches, sampling, temperature and top-p |
+| 6 | [Inference](docs/06-inference.md) | KV caches, sampling, and how to tell whether a half-trained model is learning |
 | 7 | [Scaling up](docs/07-scaling.md) | Phase 2: a 300M model on 10B tokens, and how to size your own |
 | 8 | [Troubleshooting](docs/08-troubleshooting.md) | Loss spikes, NaNs, OOM, slow training |
 
@@ -115,7 +117,7 @@ aksharallm/
 │   │   ├── schedule.py       learning-rate schedules
 │   │   └── runlog.py         reads train_log.jsonl back (sessions, series) — shared by
 │   │                         scripts/sessions.py and the portal
-│   ├── portal/           local web portal: start/stop a run, watch it, read the code
+│   ├── portal/           local web portal: start/stop a run, watch it, test it, read it
 │   │   ├── runs.py           run state on disk; drives phase2.sh / stop.sh
 │   │   ├── schedule.py       recurring start/stop windows + the clock loop
 │   │   ├── gpu.py            nvidia-smi sampling, history, training-vs-idle summary
@@ -123,9 +125,15 @@ aksharallm/
 │   │   ├── server.py         stdlib http.server + a small JSON API
 │   │   └── static/           one page, hand-written SVG charts, no dependencies
 │   ├── eval/evaluate.py  perplexity, HellaSwag, sample generations
-│   └── infer/
-│       ├── generate.py   KV-cache sampling loop
-│       └── cli.py        interactive chat / completion
+│   └── infer/            talking to a checkpoint, and judging what comes back
+│       ├── generate.py       KV-cache sampling loop (streaming + one-shot)
+│       ├── checkpoints.py    what has been trained: step, loss, stage, tokens seen
+│       ├── engine.py         one model kept warm; CPU while a run has the GPU
+│       ├── tasks.py          the fixed probes and the graded Python tasks
+│       ├── sandbox.py        runs the Python the model wrote, under limits
+│       ├── history.py        every generation + the training state that produced it
+│       ├── playground.py     the four above in the order both front ends use
+│       └── cli.py            completion / chat / code, probes, tasks, comparisons
 ├── scripts/
 │   ├── phase1.sh         Phase 1 end to end (data -> pretrain -> generate), ~30 min
 │   ├── phase2.sh         Phase 2: pre-flight, build data, smoke test, background launch
@@ -188,7 +196,9 @@ scripts/portal.sh --restart     # stop and start again (never touches a training
 
 A local page with the progress against the budget and an ETA, live loss / throughput /
 gradient-norm / LR curves, the per-session table, the tail of the log, and buttons for
-start, stop, "stop after N more steps" and "stop at step N".
+start, stop, "stop after N more steps" and "stop at step N". Three tabs, each with its own
+address so a view can be bookmarked: **Dashboard** (the run), **Playground** (talk to the
+checkpoint it is producing) and **Code** (have the source explained to you).
 
 It is a **view over the same files**, and it presses the same buttons: it starts runs with
 `scripts/phase2.sh` and stops them with `scripts/stop.sh`, so a run launched from a terminal
@@ -196,9 +206,44 @@ appears in the portal and vice versa — including while it is still in pre-flig
 closing the portal never stops training. Standard library only: the server is `http.server`,
 the charts are hand-written SVG.
 
+### Testing the model while it is still training
+
+A loss curve tells you the number is going down. It does not tell you whether the model can
+finish a sentence. The portal's **Playground** tab — and the same thing from a terminal —
+lets you ask it:
+
+```bash
+python -m aksharallm.infer.cli                    # what has been trained so far
+python -m aksharallm.infer.cli small-code         # talk to it
+python -m aksharallm.infer.cli small-code --probes   # the fixed prompt suite
+python -m aksharallm.infer.cli small-code --tasks    # Python tasks, actually executed
+python -m aksharallm.infer.cli --compare fluency     # that prompt, across every step
+```
+
+Three things make it useful rather than a toy:
+
+**It will not cost you the run.** A Phase-2 run holds ~21 GB of a 24 GB card. The model
+would fit in the gap, but a CUDA context is half a gigabyte before any weights land and the
+failure mode is a six-day run dying overnight. So while a run is training, inference loads
+on the **CPU**, automatically, and the tab says why. The card is used the moment it is free.
+
+**It knows what the checkpoint can do.** A base model has never seen a chat turn, so chat is
+disabled on one — with that sentence, rather than letting you conclude the model is broken.
+
+**The record outlives the checkpoint.** `ckpt_last.pt` is overwritten every 500 steps.
+Rather than archive 1.2 GB of weights forty times, every generation appends a line to
+`logs/playground.jsonl` carrying the step, validation loss and tokens seen of the model that
+produced it — so the same prompt at step 7,000 and step 30,000 sit side by side for about a
+kilobyte. That comparison is what `--compare` and the tab's history panel show.
+
+The Python tasks are graded by **executing** the generated function against asserts, in a
+subprocess with CPU-time and memory limits, isolated from this project's code, in a
+throwaway directory. It is not a container — see `aksharallm/infer/sandbox.py`, which is
+honest about what the containment is and is not — and `infer.run_tests: false` turns it off.
+
 ### Reading the code with a local model
 
-The portal's second tab is a source browser for this repo with an explainer attached: pick a
+The portal's third tab is a source browser for this repo with an explainer attached: pick a
 file, highlight a line or a block, and a model running on your own machine through
 [Ollama](https://ollama.com) tells you what it does, why it is written that way, and what
 would bite you if you changed it. Follow-up questions keep the thread; the answer streams in
@@ -254,9 +299,12 @@ it to the rest of your network; there is no login, so keep that to networks you 
 
 ```mermaid
 flowchart LR
-    UI["portal page<br/>charts + buttons"] <-->|JSON| SRV["aksharallm.portal"]
+    UI["portal page<br/>charts · playground · code"] <-->|JSON + SSE| SRV["aksharallm.portal"]
     SRV -->|reads| F[("train_log.jsonl<br/>train.pid · STOP · logs/")]
     SRV -->|runs| P["phase2.sh / stop.sh"] --> T["trainer"] -->|appends| F
+    T -->|saves| C[("checkpoints/&lt;run&gt;/*.pt")]
+    SRV -->|generates from| C
+    SRV -->|appends| H[("logs/playground.jsonl<br/>output + the step that made it")]
 ```
 
 ---

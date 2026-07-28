@@ -1,7 +1,10 @@
 # The portal itself, not a training run.
 #
-# This file configures the Code tab: the reader that hands a file and the lines you
-# highlighted to a local model and asks it to explain them. Nothing here affects training.
+# Two sections, for the portal's two non-dashboard tabs:
+#   explain:  the Code tab — hands a file and the lines you highlighted to a local Ollama
+#             model and asks it to explain them.
+#   infer:    the Playground tab — loads one of your own checkpoints and generates from it.
+# Nothing here affects training.
 #
 # The model runs on Ollama, on this machine. Start it with `ollama serve` (or the desktop
 # app) and pull a model once:
@@ -55,3 +58,73 @@ explain:
   # Seconds to wait for the first byte, and how many follow-up turns to carry.
   timeout_s: 300
   max_history: 12
+
+# --------------------------------------------------------------------------------------
+# The Playground tab: testing your own checkpoints.
+#
+# This is the other model in the building — not the Ollama one that reads your code, but
+# the one you are training. Point it at a checkpoint and it generates: prose completion,
+# chat (once Phase 3 has produced an SFT'd model), and Python that is actually executed
+# against tests.
+#
+# Overridable for one session without editing this file:
+#     AKSHARALLM_INFER_DEVICE=cpu
+# --------------------------------------------------------------------------------------
+
+infer:
+  # THE ONE THAT MATTERS WHILE TRAINING. Where the checkpoint is loaded.
+  #
+  #   auto  (default) the GPU — unless a run is training on this card, in which case the
+  #         CPU, automatically, and the tab says why. Also falls back to the CPU if less
+  #         than 2 GB of VRAM is free, which catches an Ollama model the Code tab left
+  #         resident.
+  #   cuda  always the GPU. A 300M model in bf16 is only ~0.7 GB with its KV cache, so it
+  #         does fit alongside a Phase-2 run's ~21 GB — but a CUDA context is half a
+  #         gigabyte before any weights land, and the failure mode is not a slow tab, it is
+  #         a six-day run dying overnight at step 22,000. Choose this deliberately.
+  #   cpu   never the GPU. Safe, and slower: measure it before relying on it — a 13M model
+  #         does ~180 tok/s on this machine, a 300M one is a few tokens a second.
+  device: auto
+
+  # Seconds of no generations before the model is unloaded and its memory handed back.
+  # Same idea as `explain.keep_alive` above: the card should not stay occupied because you
+  # opened a tab an hour ago. Reloading costs a few seconds off disk.
+  idle_unload_s: 300
+
+  # Seconds to wait for the model when another generation is already running. One at a
+  # time: two concurrent generations each allocate their own KV cache and halve each
+  # other's speed for no benefit.
+  busy_wait_s: 2
+
+  # The system prompt for chat mode. Ignored by a base model, which has never seen one.
+  system: You are a helpful assistant.
+
+  sampling:
+    max_new_tokens: 256
+    # 0.8 with nucleus sampling is roughly what the model "feels" like. Set temperature to
+    # 0 for greedy decoding when you want two checkpoints to be comparable.
+    temperature: 0.8
+    top_k: 50
+    top_p: 0.95
+    # Deliberately 1.0 (off). A penalty above 1 hides degenerate looping, which is exactly
+    # the symptom that tells you a base model is undertrained — see the `repetition` probe.
+    repetition_penalty: 1.0
+
+  # RUNNING CODE THE MODEL WROTE. The Python tasks are graded by executing the generated
+  # function against asserts, in a subprocess with a CPU-time limit, a memory limit, no
+  # access to this project's code and a throwaway working directory. Read the docstring of
+  # aksharallm/infer/sandbox.py before changing this — it is honest about what the
+  # containment is and, more importantly, what it is not.
+  # Set false to generate the code and show it without ever running it.
+  run_tests: true
+  sandbox_timeout_s: 10
+  sandbox_memory_mb: 512
+
+  # Generations kept in logs/playground.jsonl, each stamped with the step, validation loss
+  # and tokens seen of the checkpoint that produced it. This is why checkpoints are not
+  # archived: a text record of what the model said at step 7,000 is a kilobyte and
+  # permanent, where a copy of the weights is 1.2 GB and would be one of forty.
+  history_max: 2000
+
+  # Longest prompt accepted over HTTP. The real limit is the model's context window.
+  max_prompt_chars: 20000

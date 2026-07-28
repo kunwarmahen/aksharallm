@@ -13,11 +13,13 @@ Design notes worth knowing before changing anything here:
 * **Writes are guarded.** Every mutating request must carry `X-Portal: 1`; a browser cannot
   attach a custom header to a cross-site form post, so a random page you visit cannot stop
   your training run through your own localhost server.
-* **The API is read-mostly.** The POSTs are `/start`, `/stop`, the schedule edits and
-  `/explain` (which writes nothing but streams, so it cannot be a GET with a long body);
-  everything else is a GET, so refreshing the page can never do anything.
-* **One streaming response.** `/api/explain` is server-sent events: the answer is written as
-  it is generated, so a 12B model on a local GPU feels like reading rather than waiting.
+* **The API is read-mostly.** The POSTs are `/start`, `/stop`, the schedule edits,
+  `/explain` and `/infer/generate` (which write nothing but stream, so they cannot be GETs
+  with a long body); everything else is a GET, so refreshing the page can never do anything.
+* **Two streaming responses.** `/api/explain` and `/api/infer/generate` are both server-sent
+  events, and deliberately the same event shape — one is a local Ollama model reading your
+  code, the other is your own checkpoint generating, and the page consumes them with the
+  same few lines of JavaScript.
 """
 
 from __future__ import annotations
@@ -38,9 +40,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from ..infer.checkpoints import InferError
+from ..infer.engine import SamplingParams
+from ..infer.playground import Playground
 from .explain import ExplainConfig, Ollama, SourceTree, build_messages
 from .gpu import Sampler, snapshot
-from .runs import LAUNCHERS, RunError, RunStore, repo_root
+from .runs import PHASE_LAUNCHING, PHASE_TRAINING, LAUNCHERS, RunError, RunStore, repo_root
 from .schedule import Rule, Schedule, Scheduler, parse_days
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -63,12 +68,14 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def __init__(self, *args, store: RunStore, scheduler: Scheduler, sampler: Sampler,
-                 source: SourceTree, explain: ExplainConfig, quiet: bool = True, **kw):
+                 source: SourceTree, explain: ExplainConfig, playground: Playground,
+                 quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
         self.sampler = sampler
         self.source = source
         self.explain_cfg = explain
+        self.playground = playground
         self.quiet = quiet
         super().__init__(*args, **kw)
 
@@ -135,7 +142,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(204, b"", "image/x-icon")
             if parts[0] == "api":
                 return self._api_get(parts[1:], query)
-        except RunError as exc:
+        except (RunError, InferError) as exc:
             return self._error(400, str(exc))
         except Exception as exc:  # never let one bad read kill the poll loop silently
             self.log_message("error: %s", exc)
@@ -156,6 +163,13 @@ class Handler(BaseHTTPRequestHandler):
             data = self._body()
             if parts == ["api", "explain"]:
                 return self._explain(data)
+            if parts == ["api", "infer", "generate"]:
+                return self._generate(data)
+            if parts == ["api", "infer", "unload"]:
+                freed = self.playground.engine.unload()
+                return self._json({"ok": True, "freed": freed,
+                                   "note": "model unloaded; its memory is back."
+                                           if freed else "nothing was loaded."})
             if parts[:2] == ["api", "schedule"] and len(parts) == 3:
                 return self._json(self._schedule_post(parts[2], data))
             if len(parts) == 4 and parts[:2] == ["api", "run"]:
@@ -168,7 +182,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(self.store.stop(
                         run, mode=str(data.get("mode", "now")),
                         steps=self._int(data, "steps")))
-        except RunError as exc:
+        except (RunError, InferError) as exc:
             return self._error(409, str(exc))
         except Exception as exc:
             self.log_message("error: %s", exc)
@@ -215,6 +229,28 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({**base, "available": False, "models": [],
                                    "error": str(exc)})
             return self._json({**base, "available": True, "models": models})
+        if parts == ["infer"]:
+            return self._json(self.playground.overview())
+        if parts == ["infer", "status"]:
+            # The light poll: what is loaded, where it would run, is it busy. The tab hits
+            # this every couple of seconds; `overview` re-reads every checkpoint header and
+            # the whole history file, so it is not the thing to poll.
+            return self._json(self.playground.status())
+        if parts == ["infer", "history"]:
+            return self._json({
+                "rows": self.playground.history.recent(
+                    int((query.get("limit") or [50])[0]),
+                    run=(query.get("run") or [None])[0],
+                    mode=(query.get("mode") or [None])[0],
+                    probe=(query.get("probe") or [None])[0]),
+                "stats": self.playground.history.stats(),
+                "probes_seen": self.playground.history.probes_seen()})
+        if parts == ["infer", "compare"]:
+            probe = (query.get("probe") or [""])[0]
+            if not probe:
+                raise RunError("compare needs ?probe=<id>")
+            return self._json(self.playground.history.compare(
+                probe, run=(query.get("run") or [None])[0]))
         if parts == ["schedule"]:
             sched = self.scheduler.schedule.reload_if_changed()
             holder = self.scheduler.holder()
@@ -284,6 +320,73 @@ class Handler(BaseHTTPRequestHandler):
             event({"error": f"{type(exc).__name__}: {exc}"})
         else:
             event({"done": True})
+        finally:
+            stream.close()
+
+    # ---- the playground -------------------------------------------------------------
+    def _generate(self, data: dict):
+        """Stream a generation from one of the project's own checkpoints.
+
+        The same server-sent-events shape as `/api/explain`, with two extra event kinds:
+        `start` carries the checkpoint's full provenance (step, losses, tokens seen) so the
+        page can label the answer with what the model *was* when it said it, and `test`
+        carries the sandbox verdict for a graded code task.
+
+        As with the explainer, everything that can fail with a useful message is checked
+        before the first byte — `Playground.stream` validates eagerly for exactly this
+        reason — so "that is a base model, chat would be noise" arrives as a 409 the tab can
+        show in place, not as an error inside a stream it has already started.
+        """
+        mode = str(data.get("mode") or "complete")
+        cfg = self.playground.cfg.reload_if_changed()
+        sent = data.get("sampling") if isinstance(data.get("sampling"), dict) else {}
+        params = SamplingParams(
+            max_new_tokens=int(sent.get("max_new_tokens", cfg.sampling.max_new_tokens)),
+            temperature=float(sent.get("temperature", cfg.sampling.temperature)),
+            top_k=int(sent.get("top_k", cfg.sampling.top_k)),
+            top_p=float(sent.get("top_p", cfg.sampling.top_p)),
+            repetition_penalty=float(sent.get("repetition_penalty",
+                                              cfg.sampling.repetition_penalty)),
+            seed=self._int(sent, "seed"),
+        )
+        messages = [m for m in (data.get("messages") or [])
+                    if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+                    and str(m.get("content", "")).strip()]
+
+        stream = self.playground.stream(
+            ckpt_id=str(data.get("checkpoint") or ""), mode=mode,
+            prompt=str(data.get("prompt") or ""), messages=messages,
+            system=(str(data["system"]) if data.get("system") is not None else None),
+            params=params, device=(str(data["device"]) if data.get("device") else None),
+            probe=(str(data["probe"]) if data.get("probe") else None),
+            task=(str(data["task"]) if data.get("task") else None),
+            record=data.get("record", True) is not False)
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+        def event(payload: dict) -> bool:
+            try:
+                self.wfile.write(f"data: {json.dumps(payload, default=str)}\n\n".encode())
+                self.wfile.flush()
+                return True
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return False
+
+        try:
+            for kind, payload in stream:
+                if not event({kind: payload}):
+                    return      # closing the generator stops the decode loop and frees the
+                                # model's lock — the browser going away must not pin the GPU
+        except (RunError, InferError) as exc:
+            event({"error": str(exc)})
+        except Exception as exc:
+            self.log_message("generate error: %s", exc)
+            event({"error": f"{type(exc).__name__}: {exc}"})
         finally:
             stream.close()
 
@@ -388,14 +491,27 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
     sampler = Sampler(store)
     source = SourceTree(store.root)
     explain = ExplainConfig.load(store.root)
+
+    def busy() -> list[str]:
+        """Runs that must not have the card taken away from them.
+
+        A launch still in pre-flight counts: `phase2.sh` is minutes from starting a trainer
+        that wants 21 GB, and a playground model loaded in that window would be resident
+        exactly when the run tries to allocate.
+        """
+        return [r for r in store.runs()
+                if store.summary(r).get("phase") in (PHASE_TRAINING, PHASE_LAUNCHING)]
+
+    playground = Playground(store.root, busy_cb=busy)
     handler = partial(Handler, store=store, scheduler=scheduler, sampler=sampler,
-                      source=source, explain=explain, quiet=quiet)
+                      source=source, explain=explain, playground=playground, quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True
     httpd.scheduler = scheduler
     httpd.sampler = sampler
     httpd.explain = explain
+    httpd.playground = playground
     return httpd
 
 
@@ -511,6 +627,18 @@ def main(argv: list[str] | None = None) -> int:
               f", {len(names)} model(s) available")
     except RunError as exc:
         print(f"    code      no explainer — {exc}")
+
+    # The Playground tab needs a trained checkpoint, and "the picker is empty" is a bad way
+    # to discover there isn't one yet.
+    play = httpd.playground
+    ckpts = play.store.list()
+    if ckpts:
+        plan = play.status()["plan"]
+        print(f"    play      {len(ckpts)} checkpoint(s), default {play.store.default().rel}"
+              f" — on the {'GPU' if plan['device'] == 'cuda' else 'CPU'}"
+              f"{' (a run is training)' if plan['training'] else ''}")
+    else:
+        print("    play      no checkpoints yet — the Playground tab will say so")
 
     if args.open:
         threading.Timer(0.4, webbrowser.open, [url]).start()

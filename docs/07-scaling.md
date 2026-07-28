@@ -270,9 +270,14 @@ gradient norm and the LR schedule, the per-session table, the tail of the live l
 config the trainer actually read. Start, stop, "stop after N more steps", "stop at step N"
 and "cancel that" are buttons.
 
-There are two tabs. **Dashboard** is everything above — the run. **Code** is a source
-browser that explains the project back to you with a model running on your own machine; see
-"Reading the code with a local model" below.
+There are three tabs, and each has its own address (`#dashboard`, `#play`, `#code`) so a
+view can be bookmarked or linked to:
+
+| tab | what it is for |
+|---|---|
+| **Dashboard** | everything above — the run |
+| **Playground** | talk to the checkpoint the run is producing; see "Testing the model while it trains" |
+| **Code** | a source browser that explains the project back to you with a local model |
 
 **The portal is a view, not a second system.** It starts runs by running `scripts/phase2.sh`
 and stops them by running `scripts/stop.sh` — the same scripts, with the same pre-flight and
@@ -466,6 +471,64 @@ so a gap in the chart means nobody was watching, not that the GPU was idle (span
 across gaps rather than drawing one continuous band); and during pre-flight the *smoke
 test* occupies the GPU without a trainer being alive, so you will see load with no training
 band — which is correct, and a useful thing to be able to see.
+
+### Testing the model while it trains
+
+The Dashboard answers "is the loss going down". It cannot answer "has it learnt to finish a
+sentence", and at some point in a six-day run that becomes the only question you care about.
+The **Playground** tab is that: pick a checkpoint, type something, read what comes back.
+
+Three columns, left to right in the order you use them.
+
+**Left — which model.** Every `.pt` under `checkpoints/*/`, each labelled with the step it
+stopped at, its validation loss, its smoothed training loss at that step, and how many
+tokens it has seen. `ckpt_last.pt` is re-read whenever it changes, so re-selecting it during
+a run picks up the newer weights — testing *during* a run is the point.
+
+Underneath is the sentence that matters most on this tab:
+
+> **CPU** — small-code is training on this card, so inference runs on the CPU to keep the
+> run safe. It will be slow — a few tokens a second. The GPU is used automatically once the
+> run stops.
+
+The trade is spelled out in `configs/portal.yaml` and in
+[6. Inference](06-inference.md#testing-a-model-while-it-is-still-training): a 300M model
+would fit in the ~3 GB a Phase-2 run leaves free, and it is still not worth risking six days
+of training on the allocator. The card is used the moment it is free, and the model unloads
+after five idle minutes either way.
+
+**Middle — the conversation.** Three modes, and the tab only offers what the checkpoint can
+actually do. `Chat` is greyed out on a base model with the reason attached (it has never seen
+a ChatML token; that arrives with SFT in Phase 3). `Python` gives you the graded tasks — the
+model writes a function body and the asserts are **executed**, with the verdict and the exact
+program that ran shown underneath.
+
+**Right — the history.** Every generation, with the step and loss of the model that produced
+it. Pick a probe from the dropdown and you get that one prompt across every checkpoint you
+have ever run it against, oldest step first. This is the feature that replaces archiving
+checkpoints: a text record of what the model said at step 7,000 is a kilobyte and permanent;
+a copy of the weights is 1.2 GB and would be one of forty.
+
+The **Run all probes** button generates the whole fixed suite in one go, which is the thing
+to do at the end of a session — it puts a row at this step into every probe's comparison.
+
+Everything here is the same code the terminal uses (`python -m aksharallm.infer.cli`), the
+same `logs/playground.jsonl`, and the same device policy — so a result you get in the browser
+and one you get in a terminal mean the same thing. Two API routes are worth knowing:
+`GET /api/infer` describes everything, `POST /api/infer/generate` streams server-sent events
+in the same shape as `/api/explain`.
+
+```mermaid
+flowchart LR
+    UI[Playground tab] -->|GET /api/infer| SRV[portal]
+    UI -->|POST /api/infer/generate<br/>server-sent events| SRV
+    SRV --> PG[infer.Playground]
+    PG --> EN[engine: load once,<br/>CPU if a run is training]
+    EN --> CK[(checkpoints/&lt;run&gt;/*.pt)]
+    PG --> SB[sandbox: run the asserts]
+    PG --> HI[(logs/playground.jsonl)]
+    HI --> UI
+```
 
 ### Reading the code with a local model
 
