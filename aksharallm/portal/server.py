@@ -560,9 +560,33 @@ def main(argv: list[str] | None = None) -> int:
     # Ctrl-C path so a restart shuts the scheduler down cleanly and releases its lock.
     pid_file = root / "logs" / "portal.pid"
     pid_file.parent.mkdir(parents=True, exist_ok=True)
-    pid_file.write_text(f"{os.getpid()}\n")
+
+    def _holder() -> int | None:
+        """The pid in the file, if it is a portal that is still alive."""
+        try:
+            pid = int(pid_file.read_text().strip())
+        except (OSError, ValueError):
+            return None
+        try:
+            os.kill(pid, 0)
+            args = Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace")
+        except (OSError, ProcessLookupError):
+            return None
+        return pid if "aksharallm.portal" in args else None
+
+    # Running a second portal on another port is legitimate (a scratch one on --port 8799
+    # while the real one serves the LAN). Taking over the first one's pid file is not: this
+    # process would then remove it on the way out, and the original -- still serving, still
+    # holding the scheduler -- becomes invisible to `--status`, `--stop` and `--restart`,
+    # which report "portal is not running" at a page you are looking at.
+    owner = _holder()
+    own_pid_file = owner is None
+    if own_pid_file:
+        pid_file.write_text(f"{os.getpid()}\n")
 
     def _release_pid():
+        if not own_pid_file:
+            return                      # not ours to remove
         try:
             if int(pid_file.read_text().strip()) == os.getpid():
                 pid_file.unlink()
@@ -578,6 +602,11 @@ def main(argv: list[str] | None = None) -> int:
 
     url = f"http://127.0.0.1:{httpd.server_port}/"
     print(f"aksharallm portal  ->  {url}  (pid {os.getpid()})")
+    if not own_pid_file:
+        print(f"    note   portal pid {owner} already owns logs/portal.pid, so "
+              f"scripts/portal.sh")
+        print(f"           --stop/--restart will act on that one, not this one. Stop this "
+              f"one with Ctrl-C or kill {os.getpid()}.")
     print(f"    repo   {root}")
     print(f"    runs   {', '.join(RunStore(root).runs()) or '(none found)'}")
     if not loopback:
@@ -632,11 +661,19 @@ def main(argv: list[str] | None = None) -> int:
     # to discover there isn't one yet.
     play = httpd.playground
     ckpts = play.store.list()
-    if ckpts:
+    # `default()` is None when every .pt on disk is unreadable — a checkpoint from a
+    # `kill -9` mid-save, or a file that is not a checkpoint at all. They are still *listed*
+    # (with the reason), so a non-empty list does not imply a usable default, and reaching
+    # for `.rel` here took the whole portal down before it served a single request.
+    default = play.store.default()
+    if default is not None:
         plan = play.status()["plan"]
-        print(f"    play      {len(ckpts)} checkpoint(s), default {play.store.default().rel}"
+        print(f"    play      {len(ckpts)} checkpoint(s), default {default.rel}"
               f" — on the {'GPU' if plan['device'] == 'cuda' else 'CPU'}"
               f"{' (a run is training)' if plan['training'] else ''}")
+    elif ckpts:
+        print(f"    play      {len(ckpts)} checkpoint(s), none of them readable — the "
+              "Playground tab shows why for each")
     else:
         print("    play      no checkpoints yet — the Playground tab will say so")
 

@@ -606,7 +606,20 @@ scripts/portal.sh --restart --lan  # stop, then start again in the background
 scripts/portal.sh --bg --lan       # start in the background (log: logs/portal.log)
 ```
 
-It works off `logs/portal.pid` and stops with SIGTERM, which the portal routes through its
+`scripts/portal.sh --help` lists these alongside the server's own options — the wrapper
+handles `--status/--stop/--restart/--bg` itself, and passing `--help` straight through to the
+server used to print a list that mentioned none of them.
+
+It works off `logs/portal.pid`, falling back to finding a portal by process (confined to
+this checkout) when that file is missing or has been taken over. **A portal on a second port
+will not touch the first one's pid file** — it says whose it is at startup and leaves it
+alone. It used to claim the file and then, being well behaved, delete it on exit, after
+which `--status`, `--stop` and `--restart` all reported "portal is not running" about a
+portal that was still serving pages and still running the scheduler. Both halves of that
+(don't steal it; find a portal without it) are covered by
+`test_a_second_portal_does_not_steal_the_pid_file`.
+
+Stopping uses SIGTERM, which the portal routes through its
 Ctrl-C path so the scheduler releases its lock on the way out (a `kill -9` leaves
 `logs/scheduler.pid` behind and the next portal declines to run the clock). Restarting
 never touches a training run. It does pause the scheduler for those two seconds, and a rule

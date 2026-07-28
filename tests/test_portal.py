@@ -664,3 +664,48 @@ def test_gpu_api_serves_the_panel(server, repo, monkeypatch):
     assert data["current"]["util"] == 98.0
     assert data["series"]["util"] == [98.0]
     assert data["summary"]["idle"]["samples"] == 1
+
+
+def _launch_portal(repo):
+    """A real portal process serving on a free port, rooted at the test repo."""
+    return subprocess.Popen(
+        [sys.executable, "-m", "aksharallm.portal", "--port", "0",
+         "--root", str(repo), "--no-schedule", "--no-gpu"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def test_a_second_portal_does_not_steal_the_pid_file(repo):
+    """A scratch portal on another port must leave the real one's pid file alone.
+
+    It used to take the file over and then, being a well-behaved process, delete it on the
+    way out — after which `scripts/portal.sh --status|--stop|--restart` all answered "portal
+    is not running" about a portal that was still serving pages and still holding the
+    scheduler lock. Found the hard way, on a portal that had been up for sixteen hours.
+    """
+    pid_file = repo / "logs" / "portal.pid"
+    first = _launch_portal(repo)
+    second = None
+    try:
+        wait_for(lambda: pid_file.exists() and pid_file.read_text().strip().isdigit(),
+                 timeout=20)
+        assert pid_file.read_text().strip() == str(first.pid)
+
+        second = _launch_portal(repo)
+        time.sleep(4)                      # long enough to have written it, had it wanted to
+        assert pid_file.read_text().strip() == str(first.pid), \
+            "the second portal overwrote a live portal's pid file"
+
+        second.terminate()
+        second.wait(timeout=15)
+        second = None
+        assert pid_file.exists(), "the second portal deleted a pid file it did not write"
+        assert pid_file.read_text().strip() == str(first.pid)
+    finally:
+        for proc in (second, first):
+            if proc is not None:
+                proc.terminate()
+                proc.wait(timeout=15)
+
+    # The owner still cleans up after itself.
+    wait_for(lambda: not pid_file.exists(), timeout=10)
+    assert not pid_file.exists()

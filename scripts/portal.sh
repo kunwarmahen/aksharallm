@@ -35,11 +35,26 @@ LOG=logs/portal.log
 
 portal_pid() {   # a live portal, or nothing
     local p
-    [ -f "$PID_FILE" ] || return 1
-    p=$(tr -dc '0-9' < "$PID_FILE")
-    [ -n "$p" ] && kill -0 "$p" 2>/dev/null \
-        && ps -p "$p" -o args= 2>/dev/null | grep -q 'aksharallm.portal' \
-        && { echo "$p"; return 0; }
+    if [ -f "$PID_FILE" ]; then
+        p=$(tr -dc '0-9' < "$PID_FILE")
+        [ -n "$p" ] && kill -0 "$p" 2>/dev/null \
+            && ps -p "$p" -o args= 2>/dev/null | grep -q 'aksharallm.portal' \
+            && { echo "$p"; return 0; }
+    fi
+    # No usable pid file, but a portal may still be running: one started before pid files
+    # existed, or -- the case that actually bit -- one whose file a *second* portal on
+    # another port took over and then removed on its way out. Without this fallback the
+    # lifecycle commands all report "not running" while the page is plainly still being
+    # served, which is a maddening thing to debug.
+    #
+    # Matched on the module name and confined to this checkout, so it can only ever find a
+    # portal, and only ours. The same belt-and-braces rule as identifying a trainer: the pid
+    # file first, a narrow process match second.
+    p=$(pgrep -f 'python.* -m aksharallm\.portal' 2>/dev/null | head -1) || true
+    if [ -n "${p:-}" ] && [ "$(readlink -f "/proc/$p/cwd" 2>/dev/null)" = "$PWD" ]; then
+        echo "$p"
+        return 0
+    fi
     return 1
 }
 
@@ -63,11 +78,29 @@ stop_portal() {
     echo "portal stopped (pid $p). Training runs are unaffected."
 }
 
+usage() {
+    # This wrapper owns --status/--stop/--restart/--bg; everything else is passed through to
+    # the server. Without this, `--help` fell through to argparse, which knows nothing about
+    # the four lifecycle flags -- so the script looked like it had no way to stop itself.
+    sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
+    echo
+    echo "Options this script handles itself:"
+    echo "  --status      is a portal running? which pid, which address"
+    echo "  --stop        stop it (SIGTERM, so the scheduler lock is released)"
+    echo "  --restart     stop it, then start again in the background"
+    echo "  --bg          start in the background (log: $LOG)"
+    echo
+    echo "Everything else is passed to the server itself:"
+    echo
+    "$PY" -m aksharallm.portal --help | sed 's/^/  /'
+}
+
 RESTART=0
 BG=0
 ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
+        -h|--help) usage; exit 0 ;;
         --status)
             if p=$(portal_pid); then
                 echo "portal is running as pid $p"
