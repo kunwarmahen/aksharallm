@@ -115,10 +115,11 @@ aksharallm/
 │   │   ├── schedule.py       learning-rate schedules
 │   │   └── runlog.py         reads train_log.jsonl back (sessions, series) — shared by
 │   │                         scripts/sessions.py and the portal
-│   ├── portal/           local web portal: start/stop a run, watch the curves
+│   ├── portal/           local web portal: start/stop a run, watch it, read the code
 │   │   ├── runs.py           run state on disk; drives phase2.sh / stop.sh
 │   │   ├── schedule.py       recurring start/stop windows + the clock loop
 │   │   ├── gpu.py            nvidia-smi sampling, history, training-vs-idle summary
+│   │   ├── explain.py        source browser + a local Ollama model that explains it
 │   │   ├── server.py         stdlib http.server + a small JSON API
 │   │   └── static/           one page, hand-written SVG charts, no dependencies
 │   ├── eval/evaluate.py  perplexity, HellaSwag, sample generations
@@ -194,6 +195,28 @@ It is a **view over the same files**, and it presses the same buttons: it starts
 appears in the portal and vice versa — including while it is still in pre-flight — and
 closing the portal never stops training. Standard library only: the server is `http.server`,
 the charts are hand-written SVG.
+
+### Reading the code with a local model
+
+The portal's second tab is a source browser for this repo with an explainer attached: pick a
+file, highlight a line or a block, and a model running on your own machine through
+[Ollama](https://ollama.com) tells you what it does, why it is written that way, and what
+would bite you if you changed it. Follow-up questions keep the thread; the answer streams in
+as it is generated.
+
+```bash
+ollama serve && ollama pull gemma4:12b   # once
+scripts/portal.sh --open                 # then click "Code"
+```
+
+The model gets the selection *and* the whole enclosing file *and* a primer on the project,
+which is what lets it answer "why" rather than just paraphrasing syntax. Which model, where
+Ollama lives and how much of the machine it may use are all in `configs/portal.yaml`.
+
+One thing to know: the explainer shares your GPU with training. A 12B model is ~8 GB of VRAM
+against a Phase-2 run's ~21 GB of a 24 GB card, so the tab warns you when a run is live, and
+`num_gpu: 0` keeps the explainer on the CPU where it cannot touch it. Details and the other
+sharp edges are in `docs/07-scaling.md`.
 
 ### Watching the GPU
 

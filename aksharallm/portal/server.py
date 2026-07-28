@@ -13,8 +13,11 @@ Design notes worth knowing before changing anything here:
 * **Writes are guarded.** Every mutating request must carry `X-Portal: 1`; a browser cannot
   attach a custom header to a cross-site form post, so a random page you visit cannot stop
   your training run through your own localhost server.
-* **The API is read-mostly.** Two POSTs (`/start`, `/stop`) and everything else is a GET, so
-  refreshing the page can never do anything.
+* **The API is read-mostly.** The POSTs are `/start`, `/stop`, the schedule edits and
+  `/explain` (which writes nothing but streams, so it cannot be a GET with a long body);
+  everything else is a GET, so refreshing the page can never do anything.
+* **One streaming response.** `/api/explain` is server-sent events: the answer is written as
+  it is generated, so a 12B model on a local GPU feels like reading rather than waiting.
 """
 
 from __future__ import annotations
@@ -35,6 +38,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from .explain import ExplainConfig, Ollama, SourceTree, build_messages
 from .gpu import Sampler, snapshot
 from .runs import LAUNCHERS, RunError, RunStore, repo_root
 from .schedule import Rule, Schedule, Scheduler, parse_days
@@ -59,10 +63,12 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def __init__(self, *args, store: RunStore, scheduler: Scheduler, sampler: Sampler,
-                 quiet: bool = True, **kw):
+                 source: SourceTree, explain: ExplainConfig, quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
         self.sampler = sampler
+        self.source = source
+        self.explain_cfg = explain
         self.quiet = quiet
         super().__init__(*args, **kw)
 
@@ -148,6 +154,8 @@ class Handler(BaseHTTPRequestHandler):
                                     "the portal's own page sends it")
         try:
             data = self._body()
+            if parts == ["api", "explain"]:
+                return self._explain(data)
             if parts[:2] == ["api", "schedule"] and len(parts) == 3:
                 return self._json(self._schedule_post(parts[2], data))
             if len(parts) == 4 and parts[:2] == ["api", "run"]:
@@ -185,6 +193,28 @@ class Handler(BaseHTTPRequestHandler):
                 window_s=None if window in ("all", "0") else float(window),
                 index=int((query.get("index") or [0])[0]),
                 sampler=self.sampler))
+        if parts == ["source"]:
+            return self._json(self.source.files())
+        if parts == ["source", "file"]:
+            return self._json(self.source.read((query.get("path") or [""])[0]))
+        if parts == ["explain", "models"]:
+            cfg = self.explain_cfg.reload_if_changed()
+            # The explainer and the trainer share one card. A 12B model is ~8 GB of VRAM,
+            # and a Phase-2 run leaves about that much free — so the page is told what is
+            # training and can say so *before* the reader presses Explain and finds out by
+            # watching a six-day run die of an out-of-memory error.
+            busy = [r for r in self.store.runs()
+                    if self.store.summary(r).get("phase") in ("training", "launching")]
+            base = {**cfg.as_dict(), "training": busy,
+                    "on_cpu": cfg.num_gpu == 0}
+            try:
+                models = Ollama(cfg).models()
+            except RunError as exc:
+                # Not an error response: the page still works, it just cannot ask anything,
+                # and it should say why in the panel instead of a red banner.
+                return self._json({**base, "available": False, "models": [],
+                                   "error": str(exc)})
+            return self._json({**base, "available": True, "models": models})
         if parts == ["schedule"]:
             sched = self.scheduler.schedule.reload_if_changed()
             holder = self.scheduler.holder()
@@ -199,6 +229,63 @@ class Handler(BaseHTTPRequestHandler):
                 "startable": sorted(LAUNCHERS),
             })
         return self._error(404, "no such api path")
+
+    # ---- the code explainer ---------------------------------------------------------
+    def _explain(self, data: dict):
+        """Stream an explanation of a selection as server-sent events.
+
+        Everything that can fail with a useful message — unknown file, bad line range,
+        Ollama not running — is checked *before* the first byte goes out, so those still
+        arrive as an ordinary 4xx the page can show in place. Once the stream has started
+        the only way to report trouble is an `error` event inside it.
+        """
+        cfg = self.explain_cfg.reload_if_changed()
+        source = self.source.read(str(data.get("path", "")))
+        total = max(1, len(source["text"].splitlines()))
+        start = max(1, min(self._int(data, "start") or 1, total))
+        end = max(start, min(self._int(data, "end") or start, total))
+        model = str(data.get("model") or cfg.model)
+        history = data.get("history") if isinstance(data.get("history"), list) else []
+        messages = build_messages(
+            cfg, path=source["path"], text=source["text"], start=start, end=end,
+            question=(str(data.get("question")).strip() if data.get("question") else None),
+            snippet=(str(data.get("snippet")) if data.get("snippet") else None),
+            doc=source["doc"], history=history)
+
+        # No Content-Length: the length is unknown until the model stops. HTTP/1.1 needs to
+        # be told the connection ends the body, hence Connection: close.
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+        def event(payload: dict) -> bool:
+            """Write one SSE frame; False once the reader has gone away."""
+            try:
+                self.wfile.write(f"data: {json.dumps(payload, default=str)}\n\n".encode())
+                self.wfile.flush()
+                return True
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return False
+
+        event({"start": True, "model": model, "path": source["path"],
+               "lines": [start, end], "doc": source["doc"]})
+        stream = Ollama(cfg).chat(messages, model=model)
+        try:
+            for kind, piece in stream:
+                if not event({kind: piece}):
+                    return          # closing the generator stops Ollama generating
+        except RunError as exc:
+            event({"error": str(exc)})
+        except Exception as exc:
+            self.log_message("explain error: %s", exc)
+            event({"error": f"{type(exc).__name__}: {exc}"})
+        else:
+            event({"done": True})
+        finally:
+            stream.close()
 
     def _schedule_post(self, action: str, data: dict) -> dict:
         """Edit the rule file. Every path here validates before it writes: a schedule that
@@ -299,13 +386,16 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
     store = RunStore(root)
     scheduler = Scheduler(store, Schedule(store.root))
     sampler = Sampler(store)
+    source = SourceTree(store.root)
+    explain = ExplainConfig.load(store.root)
     handler = partial(Handler, store=store, scheduler=scheduler, sampler=sampler,
-                      quiet=quiet)
+                      source=source, explain=explain, quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True
     httpd.scheduler = scheduler
     httpd.sampler = sampler
+    httpd.explain = explain
     return httpd
 
 
@@ -409,6 +499,18 @@ def main(argv: list[str] | None = None) -> int:
         print("    gpu       no NVIDIA GPU detected — the GPU panel will say so")
     else:
         print(f"    gpu       already sampled by pid {sampler.holder()}")
+
+    # The Code tab is only as good as the model behind it, and "nothing happens when I press
+    # Explain" is a bad way to find out Ollama is not running. Say it at startup.
+    explain = httpd.explain
+    try:
+        names = [m["name"] for m in Ollama(explain).models()]
+        have = explain.model in names
+        print(f"    code      {explain.model} on {explain.host}"
+              f"{'' if have else '  — NOT PULLED (ollama pull ' + explain.model + ')'}"
+              f", {len(names)} model(s) available")
+    except RunError as exc:
+        print(f"    code      no explainer — {exc}")
 
     if args.open:
         threading.Timer(0.4, webbrowser.open, [url]).start()

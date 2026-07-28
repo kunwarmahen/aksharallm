@@ -351,3 +351,175 @@ table.data tr.current td { background: var(--wash); }
 /* Nested panels inside the GPU section shouldn't double up on chrome. */
 .gpu-charts .panel { padding: 14px 16px; }
 #gpu-summary { margin-bottom: var(--gap); }
+
+/* ---- tabs ----------------------------------------------------------------------------- */
+/* Two views, one page. The tab strip sits in the top bar so the brand, the view and the
+ * run selector read as one line of context. */
+.tabs { display: flex; gap: 4px; margin-left: 8px; }
+.tab {
+  padding: 6px 14px; border-color: transparent; color: var(--ink-2);
+  font-weight: 550;
+}
+.tab:hover:not(.on) { border-color: var(--border); }
+.tab.on {
+  background: var(--wash); color: var(--ink); border-color: var(--border);
+}
+
+/* ---- code tab ------------------------------------------------------------------------- */
+/* Three columns in the order you use them: pick, read, ask. Each scrolls independently so
+ * a 900-line module does not push the explanation off the screen. */
+.code-layout {
+  display: grid;
+  grid-template-columns: minmax(190px, 240px) minmax(0, 1.55fr) minmax(340px, 1fr);
+  gap: var(--gap);
+  padding: var(--gap) clamp(16px, 3vw, 32px);
+  max-width: 1800px; margin: 0 auto;
+  align-items: start;
+}
+.code-layout > .panel {
+  /* Fill the viewport below the top bar, minus the footer, so all three scroll in place. */
+  height: calc(100vh - 150px); min-height: 420px;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+
+/* file list */
+#file-filter {
+  width: 100%; padding: 6px 10px; margin-bottom: 8px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--plane); color: var(--ink); font: inherit; font-size: 13px;
+}
+.file-tree { overflow-y: auto; flex: 1; margin: 0 -6px; padding: 0 6px; }
+.file-dir {
+  font-family: var(--mono); font-size: 11px; color: var(--ink-muted);
+  padding: 10px 4px 3px; position: sticky; top: 0; background: var(--surface);
+  text-transform: none; letter-spacing: 0.02em;
+}
+button.file {
+  display: block; width: 100%; text-align: left;
+  padding: 3px 8px; border-color: transparent; border-radius: 6px;
+  font-family: var(--mono); font-size: 12.5px; color: var(--ink-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+button.file:hover { background: var(--wash); border-color: transparent; }
+button.file.on {
+  background: var(--wash); color: var(--ink); font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--series-1);
+}
+
+/* the source pane */
+.code {
+  flex: 1; overflow: auto; font-family: var(--mono); font-size: 12.5px; line-height: 1.55;
+  background: var(--plane); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 0; tab-size: 4;
+}
+.cl { display: flex; align-items: flex-start; }
+.cl.sel { background: color-mix(in srgb, var(--series-1) 13%, transparent); }
+/* Selection is never colour alone: the selected block also carries a solid left edge. */
+.cl.sel .ln { box-shadow: inset 2px 0 0 var(--series-1); color: var(--ink-2); }
+.ln {
+  flex: 0 0 auto; width: 52px; padding: 0 12px 0 6px; text-align: right;
+  color: var(--ink-muted); user-select: none; cursor: pointer;
+  position: sticky; left: 0; background: var(--plane);
+}
+.ln:hover { color: var(--ink); }
+.cl.sel .ln { background: color-mix(in srgb, var(--series-1) 13%, var(--plane)); }
+.lc { white-space: pre; padding-right: 20px; }
+/* Syntax roles. Deliberately few: this is a reading aid, not an IDE. */
+.lc .k { color: var(--series-1); font-weight: 600; }
+.lc .s { color: var(--series-2); }
+.lc .c { color: var(--ink-muted); font-style: italic; }
+.lc .n { color: var(--ink-2); }
+
+/* the explanation column */
+.explain-sel {
+  font-family: var(--mono); font-size: 12px; color: var(--ink-2);
+  padding: 6px 10px; border-radius: 8px; background: var(--wash); margin-bottom: 10px;
+}
+.lenses { gap: 4px; flex-wrap: wrap; margin-bottom: 10px; }
+.lenses button { padding: 4px 10px; font-size: 12px; }
+.lenses button.on {
+  background: var(--wash); color: var(--ink); border-color: var(--series-1);
+}
+.explain-status { font-size: 12px; color: var(--ink-muted); margin: 8px 0; min-height: 16px; }
+.explain-status.err { color: var(--critical); }
+.explain-status.busy::after {
+  content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 6px;
+  border-radius: 50%; background: var(--series-1); animation: pulse 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) { .explain-status.busy::after { animation: none; } }
+
+.md { flex: 1; overflow-y: auto; font-size: 13.5px; line-height: 1.6; }
+.md p { margin: 0 0 10px; }
+.md h3, .md h4, .md h5, .md h6 { font-size: 13px; margin: 14px 0 6px; font-weight: 650; }
+.md h4.md-ask {
+  color: var(--ink-2); border-top: 1px solid var(--border);
+  padding-top: 12px; margin-top: 16px; font-weight: 550; font-style: italic;
+}
+.md ul, .md ol { margin: 0 0 10px; padding-left: 20px; }
+.md li { margin-bottom: 4px; }
+.md code {
+  font-family: var(--mono); font-size: 12px;
+  background: var(--wash); padding: 1px 4px; border-radius: 4px;
+}
+.md pre.md-code {
+  background: var(--plane); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 12px; overflow-x: auto; margin: 0 0 10px;
+}
+.md pre.md-code code { background: none; padding: 0; }
+
+.followup { display: flex; gap: 8px; margin-top: 12px; }
+.followup input {
+  flex: 1; min-width: 0; padding: 7px 10px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--plane); color: var(--ink); font: inherit; font-size: 13px;
+}
+
+/* Below three columns the reading order is what survives: file, then code, then answer. */
+@media (max-width: 1100px) {
+  .code-layout { grid-template-columns: 1fr; }
+  .code-layout > .panel { height: auto; max-height: 70vh; }
+  .code-files { max-height: 240px; }
+}
+/* The GPU collision warning: the one thing on this tab that can cost you six days. */
+.explain-warn {
+  font-size: 12px; line-height: 1.5; color: var(--ink-2);
+  padding: 8px 10px; margin-bottom: 10px;
+  border: 1px solid var(--border); border-left: 3px solid var(--warning);
+  border-radius: 8px; background: var(--wash);
+}
+.explain-warn code {
+  font-family: var(--mono); font-size: 11px;
+  background: var(--surface); padding: 1px 4px; border-radius: 4px;
+}
+
+/* Folder navigation: the breadcrumb is the way back up, the ../ row is one step of it. */
+.crumbs {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px;
+  margin-bottom: 8px; font-family: var(--mono); font-size: 11.5px;
+}
+button.crumb {
+  padding: 2px 5px; border-color: transparent; border-radius: 5px;
+  color: var(--series-1); font-family: var(--mono); font-size: 11.5px;
+}
+button.crumb:hover { background: var(--wash); border-color: transparent; }
+button.crumb.on { color: var(--ink); font-weight: 650; }
+.crumb-sep { color: var(--ink-muted); }
+
+button.folder {
+  display: block; width: 100%; text-align: left;
+  padding: 3px 8px; border-color: transparent; border-radius: 6px;
+  font-family: var(--mono); font-size: 12.5px; font-weight: 600; color: var(--ink-2);
+}
+button.folder:hover { background: var(--wash); border-color: transparent; }
+button.folder.up { color: var(--ink-muted); }
+
+/* A reasoning model's scratchpad: present, foldable, never mixed into the answer. */
+.md-think { margin: 0 0 10px; }
+.md-think summary {
+  cursor: pointer; font-size: 12px; color: var(--ink-muted); padding: 2px 0;
+}
+.md-think pre {
+  white-space: pre-wrap; font-family: var(--mono); font-size: 11.5px;
+  color: var(--ink-2); background: var(--wash); border-radius: 8px;
+  padding: 8px 10px; margin: 6px 0 0; max-height: 240px; overflow-y: auto;
+}

@@ -15,8 +15,13 @@
     <span class="brand-sub">training portal</span>
   </div>
 
+  <nav class="tabs" aria-label="views">
+    <button class="tab" data-view="dashboard" type="button" aria-current="page">Dashboard</button>
+    <button class="tab" data-view="code" type="button">Code</button>
+  </nav>
+
   <div class="topbar-right">
-    <label class="field">
+    <label class="field" id="run-field">
       <span class="field-label">run</span>
       <select id="run-select" aria-label="run"></select>
     </label>
@@ -26,6 +31,8 @@
     </button>
   </div>
 </header>
+
+<div id="view-dashboard" class="view">
 
 <!-- One control row above everything it scopes. -->
 <section class="controls" aria-label="run controls">
@@ -288,11 +295,85 @@ skipped. phase2.sh ignores the skip when there is no checkpoint to resume.">
     <div class="scroll-x" id="checkpoints"></div>
   </section>
 </main>
+</div><!-- /view-dashboard -->
+
+<!-- The Code tab: read the project with a model that runs on this machine. Three columns,
+     left to right in the order you use them — pick a file, highlight lines, read why. -->
+<div id="view-code" class="view" hidden>
+  <section class="code-layout">
+
+    <aside class="panel code-files">
+      <div class="panel-head">
+        <h2>Files</h2>
+        <span class="panel-note" id="file-count">–</span>
+      </div>
+      <nav id="file-crumbs" class="crumbs" aria-label="folder"></nav>
+      <input id="file-filter" type="search" placeholder="filter the whole tree…"
+             aria-label="filter files" autocomplete="off">
+      <div id="file-tree" class="file-tree"></div>
+    </aside>
+
+    <section class="panel code-source">
+      <div class="panel-head">
+        <h2 id="code-path">No file open</h2>
+        <span class="panel-note" id="code-note">Pick a file on the left, then drag over the
+          code or click a line number.</span>
+      </div>
+      <div id="code-view" class="code" tabindex="0" aria-label="source"></div>
+    </section>
+
+    <aside class="panel code-explain">
+      <div class="panel-head">
+        <h2>Explanation</h2>
+        <label class="field">
+          <span class="field-label">model</span>
+          <select id="explain-model" aria-label="model"></select>
+        </label>
+      </div>
+
+      <div class="explain-warn" id="explain-warn" role="status" hidden></div>
+
+      <div class="explain-sel" id="explain-sel">nothing selected</div>
+
+      <div class="control-group lenses" id="lenses" role="group" aria-label="what to ask">
+        <button class="ghost" type="button" data-ask="">What is this doing?</button>
+        <button class="ghost" type="button"
+                data-ask="Why is it written this way? What would break, or be slower, or be wrong, if it were written the obvious way instead?">Why like this?</button>
+        <button class="ghost" type="button"
+                data-ask="What are the nuances, edge cases and gotchas here? What would bite me if I changed it?">Gotchas</button>
+        <button class="ghost" type="button"
+                data-ask="Walk through this line by line, in order, saying what each line does and what the values look like as it runs.">Line by line</button>
+        <button class="ghost" type="button"
+                data-ask="Explain the maths here: the shapes of the tensors, what the operation computes, and why that is the right operation.">The maths</button>
+      </div>
+
+      <div class="control-group">
+        <button id="btn-explain" class="primary" type="button" disabled>Explain selection</button>
+        <button id="btn-explain-stop" class="ghost" type="button" hidden>Stop</button>
+        <button id="btn-explain-clear" class="ghost" type="button" hidden>Clear</button>
+      </div>
+
+      <div id="explain-status" class="explain-status" role="status" aria-live="polite"></div>
+      <div id="explain-out" class="md" aria-live="polite"></div>
+
+      <form id="followup-form" class="followup" hidden>
+        <input id="followup" type="text" autocomplete="off"
+               placeholder="ask a follow-up about this selection…" aria-label="follow-up">
+        <button class="primary" type="submit">Ask</button>
+      </form>
+    </aside>
+
+  </section>
+</div><!-- /view-code -->
 
 <footer class="footer">
   <span id="foot-root">–</span>
-  <span>Stopping is safe at any step: the trainer saves <code>ckpt_last.pt</code> where it
-  stopped and the next start resumes there with no loss spike.</span>
+  <span class="foot-dashboard">Stopping is safe at any step: the trainer saves
+  <code>ckpt_last.pt</code> where it stopped and the next start resumes there with no loss
+  spike.</span>
+  <span class="foot-code" hidden>The explainer runs on your machine through Ollama and
+  writes nothing. It shares the GPU with training — <code>configs/portal.yaml</code> keeps
+  its context small and unloads the model a few minutes after you stop asking.</span>
 </footer>
 
 <div id="tooltip" class="tooltip" hidden></div>

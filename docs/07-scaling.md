@@ -270,6 +270,10 @@ gradient norm and the LR schedule, the per-session table, the tail of the live l
 config the trainer actually read. Start, stop, "stop after N more steps", "stop at step N"
 and "cancel that" are buttons.
 
+There are two tabs. **Dashboard** is everything above — the run. **Code** is a source
+browser that explains the project back to you with a model running on your own machine; see
+"Reading the code with a local model" below.
+
 **The portal is a view, not a second system.** It starts runs by running `scripts/phase2.sh`
 and stops them by running `scripts/stop.sh` — the same scripts, with the same pre-flight and
 the same graceful save. It stores nothing of its own: every number on the page is read back
@@ -462,6 +466,73 @@ so a gap in the chart means nobody was watching, not that the GPU was idle (span
 across gaps rather than drawing one continuous band); and during pre-flight the *smoke
 test* occupies the GPU without a trainer being alive, so you will see load with no training
 band — which is correct, and a useful thing to be able to see.
+
+### Reading the code with a local model
+
+The dashboard answers *what is the run doing?*. The portal's second tab — **Code** — answers
+the other question you have in front of a from-scratch LLM: *what is this code doing, and
+why is it written this way?* Pick a file, highlight some lines, and a model running on your
+own machine explains them.
+
+It needs [Ollama](https://ollama.com) and one model, once:
+
+```bash
+ollama serve            # or the desktop app
+ollama pull gemma4:12b  # ~7.6 GB
+```
+
+Then open the portal and click **Code**. The file browser is rooted where the portal is
+running (the repo root, or `--root`), and you walk up and down it with the breadcrumb and
+the folder rows; the filter box searches the whole tree at once. Select in the pane by
+dragging over the source, clicking a line number, or shift-clicking to extend — part of a
+line works too, and the model is told exactly which characters you meant. Five preset
+questions sit above the answer (*what is this doing · why like this · gotchas · line by
+line · the maths*), and you can keep asking follow-ups about the same selection.
+
+```mermaid
+flowchart LR
+    subgraph browser
+        F[file tree<br/>breadcrumb + filter] --> S[source pane<br/>select lines]
+        S --> A[answer<br/>streamed markdown]
+    end
+    S -->|POST /api/explain| P[aksharallm.portal<br/>stdlib http.server]
+    P -->|reads| D[(the tree under<br/>the portal's root)]
+    P -->|prompt: primer +<br/>whole file + selection| O[Ollama<br/>gemma4:12b]
+    O -.->|NDJSON, token by token| P
+    P -.->|server-sent events| A
+```
+
+**What the model is actually given.** The selection alone cannot explain *why*, so every
+request carries three things: a short primer on what this project is and how it is laid out,
+the **whole enclosing file** with line numbers (windowed around your selection if it is over
+`max_file_chars`, and explicitly told when it has been), and the selected lines. It is also
+told which of `docs/00`–`08` covers that area — the path only, so it can point you at the
+human-written version rather than paraphrase a doc it has not read. Follow-ups re-send the
+file from disk each time, so an answer twenty minutes later quotes the file as it is now.
+
+**Everything is in `configs/portal.yaml`**, under `explain:` — host, model, temperature,
+context size, how long Ollama keeps the model resident. The file is re-read when it changes,
+so editing it does not mean restarting the portal. `AKSHARALLM_OLLAMA_HOST` and
+`AKSHARALLM_EXPLAIN_MODEL` override it for one session (a model on another box, say), and
+the tab's model picker overrides it again per question.
+
+Three things are worth knowing before you use it during a run:
+
+| | |
+|---|---|
+| **It shares your GPU with training.** | A 12B model is ~8 GB of VRAM and a Phase-2 run already holds ~21 GB of a 24 GB card. Asking a question mid-run can push the trainer into an OOM death days in. The tab warns you when a run is training. Set `num_gpu: 0` (or `AKSHARALLM_EXPLAIN_NUM_GPU=0`) to keep the explainer entirely on the CPU — but expect *minutes* to the first word for a 12B, so pair it with a small model like `starcoder2:3b` if you want to read while training. |
+| **Thinking models need `think: false`.** | A reasoning model spends `num_predict` on its reasoning *before* it answers, so with thinking on and a budget of 800 you get a complete train of thought and an empty answer — which looks exactly like a broken portal. It is off by default; models that don't know the setting have the request retried without it. When a model does think, the transcript is folded away under the answer, never mixed into it. |
+| **Switching `num_gpu` reloads the model.** | Ollama has to tear down the old runner first, and a 12B loaded on CPU takes a while to let go. If a request seems to hang after you change it, `ollama ps` will show the old runner still `Stopping...`. |
+
+The reading boundary is the tree the portal was started in: paths are resolved (symlinks and
+all) before they are checked, so `..`, an absolute path, or a symlink pointing outside all
+get refused, and only text files under 400 kB are listed. That boundary is the whole
+protection — the portal is loopback-only for a reason, and `--lan` means anyone on your
+network can read your source as well as stop your training.
+
+The explainer writes nothing, and it is stdlib-only like the rest of the portal:
+`aksharallm/portal/explain.py` is the file browser, the prompt and a ~40-line streaming
+Ollama client; the tab renders its own markdown and highlights its own syntax.
 
 ### Restarting the portal
 

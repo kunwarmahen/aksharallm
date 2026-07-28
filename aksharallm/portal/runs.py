@@ -76,6 +76,18 @@ def _cmdline(pid: int) -> str:
             return ""
 
 
+#: A top-level `model:` key — the cheap, text-only test for "the trainer could read this".
+#: Deliberately not a YAML parse: `runs()` is called on every poll of every open page.
+_RUN_CONFIG_RE = re.compile(r"^model:", re.MULTILINE)
+
+
+def _is_run_config(path: Path) -> bool:
+    try:
+        return bool(_RUN_CONFIG_RE.search(path.read_text(errors="replace")))
+    except OSError:
+        return False
+
+
 def _read_meta(path: Path) -> dict[str, str]:
     """Parse the `key   value` files the shell scripts write (`run.meta`, `launch.meta`).
 
@@ -130,8 +142,15 @@ class RunStore:
 
         A checkpoint dir with no config still shows up — a run whose YAML was renamed is
         exactly when you want to read its history, not when you want it to vanish.
+
+        Not every YAML under `configs/` is a run: `portal.yaml` configures the portal's own
+        code explainer. A run config is one the trainer could actually read, so that is the
+        test — it must declare a `model:` section. Anything else is a settings file that
+        happens to live next door, and a phantom run in the picker with no log and no
+        launcher is exactly the kind of thing you waste an evening on.
         """
-        names = {p.stem for p in (self.root / "configs").glob("*.yaml")}
+        names = {p.stem for p in (self.root / "configs").glob("*.yaml")
+                 if _is_run_config(p)}
         ckpt = self.root / "checkpoints"
         if ckpt.is_dir():
             names |= {p.name for p in ckpt.iterdir()

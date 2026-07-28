@@ -1,0 +1,57 @@
+# The portal itself, not a training run.
+#
+# This file configures the Code tab: the reader that hands a file and the lines you
+# highlighted to a local model and asks it to explain them. Nothing here affects training.
+#
+# The model runs on Ollama, on this machine. Start it with `ollama serve` (or the desktop
+# app) and pull a model once:
+#
+#     ollama pull gemma4:12b
+#
+# Anything below can be overridden without editing this file:
+#     AKSHARALLM_OLLAMA_HOST=http://192.168.1.9:11434  # a model on another box
+#     AKSHARALLM_EXPLAIN_MODEL=qwen3.5:27b
+# and the Code tab's model picker overrides it again, per request.
+
+explain:
+  host: http://127.0.0.1:11434
+  model: gemma4:12b
+
+  # Low, on purpose: this is an explanation of code that already exists, not a brainstorm.
+  temperature: 0.2
+
+  # Let a reasoning model think before answering? Off, and not for taste: a thinking model
+  # spends `num_predict` on its reasoning *first*, so with thinking on and a budget of 800
+  # you reliably get a complete train of thought and a completely empty answer. gemma4:12b
+  # does exactly this. Turn it on only if you also raise num_predict a long way.
+  # Models that have never heard of the setting ignore it — the request is retried without.
+  think: false
+
+  # The context window Ollama allocates. Every 1k of context is real VRAM, and the card is
+  # usually busy training — that is why this is 8k and not the model's maximum.
+  num_ctx: 8192
+  num_predict: 800
+
+  # THE ONE THAT MATTERS WHILE TRAINING. How many layers Ollama may put on the GPU.
+  # Unset (the default) means "all of them, if they fit" — about 8 GB for a 12B model. A
+  # Phase-2 run already holds ~21 GB of a 24 GB card, so asking a question mid-run can push
+  # the trainer into an out-of-memory death several days in. Set this to 0 to keep the
+  # explainer entirely on the CPU: it cannot touch the run, but be realistic about the cost
+  # — a 12B model reading a real file took over three minutes to produce its first word on
+  # this machine, against ~15 seconds on the card. Pair it with a much smaller model
+  # (`model: starcoder2:3b`) if you want to read while a long run is going. The Code tab
+  # says which of the two you are in.
+  #   num_gpu: 0
+  # Per session instead:  AKSHARALLM_EXPLAIN_NUM_GPU=0
+
+  # How long Ollama keeps the model resident after an answer. Short, so ~8 GB of VRAM goes
+  # back to the trainer a few minutes after you stop reading. "0" unloads immediately.
+  keep_alive: 5m
+
+  # A whole file is sent as context. Past this many characters the file is windowed around
+  # your selection instead, so a 1500-line module still fits with room for the answer.
+  max_file_chars: 12000
+
+  # Seconds to wait for the first byte, and how many follow-up turns to carry.
+  timeout_s: 300
+  max_history: 12
