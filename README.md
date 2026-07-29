@@ -26,6 +26,11 @@ you read this repo top to bottom you will know how an LLM actually works.
                     ┌──────────┐
                     │   DPO    │ ───▶ aligned model: prefers better answers
                     └──────────┘
+                          │
+                          ▼
+                    ┌──────────┐
+                    │  GRPO    │ ───▶ specialist: RL on a reward you can *run*
+                    └──────────┘      (code passes its tests)
 ```
 
 ---
@@ -84,7 +89,7 @@ Read these in order. They assume no prior knowledge of machine learning.
 | 2 | [Tokenizer](docs/02-tokenizer.md) | Why models read "tokens" not letters, how BPE works |
 | 3 | [The model](docs/03-model.md) | Attention, RoPE, SwiGLU, residual streams — every line of the transformer |
 | 4 | [Pretraining](docs/04-pretraining.md) | The training loop, mixed precision, LR schedules, reading the logs |
-| 5 | [Post-training](docs/05-posttraining.md) | SFT and DPO — turning a text completer into an assistant |
+| 5 | [Post-training](docs/05-posttraining.md) | SFT, DPO, and **GRPO** (RL on a verifiable reward) — text completer → assistant → code/math specialist |
 | 6 | [Inference](docs/06-inference.md) | KV caches, sampling, and how to tell whether a half-trained model is learning |
 | 7 | [Scaling up](docs/07-scaling.md) | Phase 2: a 300M model on 10B tokens, and how to size your own |
 | 8 | [Troubleshooting](docs/08-troubleshooting.md) | Loss spikes, NaNs, OOM, slow training |

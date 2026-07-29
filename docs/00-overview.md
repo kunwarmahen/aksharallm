@@ -135,6 +135,13 @@ both are valid. Preference data can. You show the model pairs — one response h
 preferred, one they didn't — and it learns the *direction* of better. This is where tone,
 appropriate length, and refusal behaviour get shaped. → [doc 5](05-posttraining.md)
 
+### 5. Reinforcement learning on a verifiable reward (GRPO)
+For tasks where an answer can be *checked* — does the code pass its tests? is the math
+right? — you don't need human-labelled data at all. Sample several answers, reward the ones
+that pass, and push the model toward them. This is how small models get genuinely good at
+code and math, and it reuses the same sandbox we built to *evaluate* the model as the
+*training signal*. → [doc 5, Part 3](05-posttraining.md)
+
 ---
 
 ## What we're realistically going to get

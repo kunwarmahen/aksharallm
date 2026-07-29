@@ -244,4 +244,137 @@ hours.
 
 ---
 
+# Part 3 — GRPO: learning from a reward you can *run*
+
+SFT needs a dataset of good answers. DPO needs pairs a human ranked. Both are limited by
+someone having judged the answers first. But for some tasks there's a better teacher than a
+human's opinion — **the answer can be checked automatically.** Does the code pass its tests?
+Is the math answer correct? That yes/no is a *reward*, and reinforcement learning turns it
+into a gradient. This is how small models get genuinely good at code and math.
+
+GRPO (Group Relative Policy Optimization) is the simplest RL method that works well here,
+and it's what we implement in [`train/grpo.py`](../aksharallm/train/grpo.py).
+
+## The loop
+
+```mermaid
+flowchart TD
+    P["a prompt<br/>(a coding task)"] --> S["sample a GROUP of<br/>G completions"]
+    S --> R["reward each:<br/>run its code in the sandbox<br/>pass=1 · runs-but-wrong=0.1 · error=0"]
+    R --> A["advantage = how much better<br/>than the group's mean:<br/>(r − mean) / std"]
+    A --> U["push policy UP on above-average,<br/>DOWN on below-average completions"]
+    U --> KL["KL leash to a frozen reference<br/>(don't forget English)"]
+    KL --> P
+```
+
+## The one clever idea: the group is its own baseline
+
+Plain policy gradient (REINFORCE) has a problem: a reward of 0.6 — is that good? You only
+know relative to what you *expected*, and classic methods train a whole second network (a
+"value model") just to predict that expected reward.
+
+GRPO's trick: **sample G completions of the same prompt and use their mean as the baseline.**
+They're all answers to the same question, so they're directly comparable — the group mean
+*is* the expected reward, for free. An answer's advantage is simply how far above or below
+its group-mates it landed:
+
+```
+A_i = (r_i − mean(r_group)) / std(r_group)
+```
+
+Two consequences fall out of this:
+
+- **No value network.** One model instead of two — which is exactly why GRPO fits on a 3090.
+- **A group where every answer scored the same gives zero advantage** — nothing to learn.
+  So GRPO automatically spends its gradient on the prompts *at the edge* of what the policy
+  can do (some samples pass, some fail). The ones it always gets right, or always wrong,
+  contribute nothing. That's the right place to spend compute.
+
+## The loss
+
+```
+L = − 1/Σm · Σ_t m_t [ min(ρ_t·A, clip(ρ_t, 1±ε)·A) − β·KL_t ]
+
+    ρ_t  = π(o_t) / π_old(o_t)      the policy ratio (=1 on the first update)
+    KL_t = exp(r_t−p_t) − (r_t−p_t) − 1     distance from the reference (always ≥ 0)
+    m_t  = 1 on completion tokens only (never train on the prompt)
+```
+
+Reading it: raise the logprob of every token in an above-average completion (`A > 0`), lower
+it for below-average ones — the same advantage applied to all of that completion's tokens.
+Two guards:
+
+- **The clip** (from PPO) stops a single update from chasing one lucky sample arbitrarily
+  far when the policy's probability has already run well above where it sampled.
+- **The KL term** is the leash: drift too far from the frozen reference (the model you
+  started from) and it forgets how to write fluent language while gaming the reward. `β`
+  sets the leash length.
+
+The KL uses the **k3 estimator** (`exp(Δ) − Δ − 1`) rather than the naive `p − r`, because
+the naive one is negative on about half of samples — you'd occasionally *reward* divergence.
+k3 is unbiased and always ≥ 0.
+
+## The reward is the whole point — and we already built it
+
+For code, the reward is [`sandbox.py`](../aksharallm/infer/sandbox.py) run on the model's
+output: write the function, execute the asserts, `pass` → 1.0. The sandbox already existed
+to *evaluate* the model; GRPO reuses it as the *training signal*. That's the highest-leverage
+thing in this whole stage — the reward machinery was free.
+
+We shape it slightly so a small model isn't stuck at zero: code that runs but asserts wrong
+earns 0.1 (it produced a real function), vs 0.0 for a syntax error or crash. A little
+gradient early beats a flat zero.
+
+The reward is pluggable (`RewardFn`). Besides `CodeReward`, there's a toy `SubstringReward`
+("does the output contain this word?") — useless for a real model, but it let us **prove the
+loop optimises anything** before the code model existed: point GRPO at the 13.8M TinyStories
+model with a reward for the word "friend", and its rate of saying "friend" climbs while KL
+stays bounded. If the machinery is right, that number goes up; it does.
+
+## Hyperparameters
+
+| knob | typical | why |
+|---|---|---|
+| `group-size` G | 8 | more = lower-variance advantage, linearly more sampling cost |
+| `lr` | 1e-6 | RL is even twitchier than DPO — very low |
+| `beta` (KL) | 0.04 | the leash; raise it if the model starts to babble |
+| `temperature` | ≥ 0.7 | RL *needs* exploration; greedy sampling learns nothing |
+| `clip-eps` | 0.2 | standard PPO clip |
+
+Sanity check: **step-0 loss ≈ 0 and KL = 0** (policy still equals the reference; advantages
+are zero-mean within each group). Then watch `reward` and `solved%` climb. If reward is flat
+at zero, your completions never pass — the task is too hard for the current model (train the
+base + SFT more first), or the reward is miswired.
+
+## Running it
+
+```bash
+# real: RL on code, sandbox reward (needs a base+SFT model that can already sometimes pass)
+python -m aksharallm.train.grpo \
+    --init checkpoints/small-sft/sft_best.pt --tokenizer data/blend/tokenizer.json \
+    --out-dir checkpoints/grpo --reward code --group-size 8 --lr 1e-6
+
+# machinery check on any model (toy reward), proves the loop increases reward
+python -m aksharallm.train.grpo \
+    --init checkpoints/tiny/ckpt_best.pt --tokenizer data/tinystories/tokenizer.json \
+    --out-dir /tmp/grpo_smoke --reward substring --needle " friend" --lr 2e-5
+```
+
+## Where this sits
+
+```mermaid
+flowchart LR
+    B[base] --> S[SFT] --> D[DPO]
+    S --> G["GRPO<br/>(verifiable reward)"]
+    D --> G
+    G --> M[code/math specialist]
+```
+
+GRPO comes *after* SFT (the model must already produce runnable-looking functions
+sometimes, or every reward is zero). It can run instead of, or after, DPO. For our Python
+specialist it's the finisher: SFT teaches the *format*, GRPO optimises *correctness* against
+the tests.
+
+---
+
 Next: [6. Inference →](06-inference.md)
