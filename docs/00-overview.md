@@ -1,5 +1,9 @@
 # 0. What we're building
 
+> **The name.** *akshara* (अक्षर) is Sanskrit for a *letter*, *syllable*, or *character* —
+> the smallest unit of written language (and, literally, *imperishable*). This project builds
+> a language model up from exactly that: the smallest pieces of text, one token at a time.
+
 ## The one-sentence version
 
 A language model is a function that takes some text and outputs a probability for every

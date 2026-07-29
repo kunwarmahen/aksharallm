@@ -1,5 +1,9 @@
 # aksharallm
 
+> **akshara** (अक्षर), Sanskrit — a *letter*, *syllable*, or *character*: the smallest unit
+> of written language. It also means *imperishable*. A fitting name for a model built up from
+> the smallest pieces of text, one token at a time.
+
 **Build a language model from scratch — data, tokenizer, architecture, pretraining, and
 post-training — on one RTX 3090.**
 
