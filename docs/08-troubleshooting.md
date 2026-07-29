@@ -304,3 +304,7 @@ python -m aksharallm.train.pretrain configs/small.yaml \
 ```
 
 Five minutes here saves six days.
+
+---
+
+Next: [9. Running and watching it →](09-running-and-watching.md)
