@@ -136,6 +136,7 @@ flowchart TD
     end
     Play[Playground: talk to the model *while it trains*]
     Code[Code: a local model explains the source back to you]
+    Docs[Docs: read this guide in the browser, diagrams and all]
 ```
 
 The panels, in plain terms:
@@ -154,6 +155,9 @@ The panels, in plain terms:
   can watch it get better week over week (for a code model, it runs the generated function
   in the sandbox and shows pass/fail). See [doc 6](06-inference.md).
 - **Code** — a local model reads a source file and explains it back to you.
+- **Docs** — this guide, read right in the browser: the sidebar lists every chapter, and the
+  reader renders the same `docs/*.md` files **with their diagrams** (the mermaid library is
+  vendored locally and loaded only when you open this tab). Same files, no duplication.
 
 Everything a button does, you can do from a terminal — the button just runs the script.
 

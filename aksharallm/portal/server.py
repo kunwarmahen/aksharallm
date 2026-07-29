@@ -212,6 +212,28 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) == 2 and parts[0] == "pipeline":
             # post-training stages + gating for a base run: /api/pipeline/<base>
             return self._json(self.pipeline.status(parts[1]))
+        if parts == ["docs"]:
+            # ordered list of the human-written docs (README + docs/*.md) with titles.
+            # Content is fetched through the existing /api/source/file (SourceTree serves .md).
+            root = self.store.root
+            files = []
+            if (root / "README.md").exists():
+                files.append(root / "README.md")
+            ddir = root / "docs"
+            if ddir.is_dir():
+                files += sorted(ddir.glob("*.md"))
+            docs = []
+            for f in files:
+                title = f.stem
+                try:
+                    for line in f.read_text(errors="replace").splitlines():
+                        if line.startswith("# "):
+                            title = line[2:].strip()
+                            break
+                except OSError:
+                    pass
+                docs.append({"path": str(f.relative_to(root)), "title": title})
+            return self._json({"docs": docs})
         if parts == ["gpu"]:
             window = (query.get("window") or ["3600"])[0]
             return self._json(snapshot(

@@ -998,13 +998,37 @@ function renderMarkdown(src) {
     if (i % 2) {                                   /* inside a fence */
       closePara(); closeList();
       const nl = block.indexOf('\n');
+      const lang = (nl >= 0 ? block.slice(0, nl) : '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
       const body = nl >= 0 ? block.slice(nl + 1) : block;
-      out.push(`<pre class="md-code"><code>${escapeHtml(body.replace(/\n$/, ''))}</code></pre>`);
+      // Keep the fence language as a class, so the Docs tab can find ```mermaid blocks and
+      // render them as diagrams. Harmless to every other caller (just an extra class).
+      const cls = lang ? ` language-${lang}` : '';
+      out.push(`<pre class="md-code${cls}"><code>${escapeHtml(body.replace(/\n$/, ''))}</code></pre>`);
       return;
     }
-    for (const raw of block.split('\n')) {
-      const line = raw.replace(/\s+$/, '');
+    const lines = block.split('\n');
+    const isSep = (s) => /^[\s|:-]+$/.test(s) && s.includes('-') && s.includes('|');
+    const cells = (s) => s.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+    for (let li = 0; li < lines.length; li++) {
+      const line = lines[li].replace(/\s+$/, '');
       if (!line.trim()) { closePara(); closeList(); continue; }
+      // GFM table: a header row of `| … |`, then a `|---|---|` separator, then body rows.
+      if (line.includes('|') && li + 1 < lines.length && isSep(lines[li + 1])) {
+        closePara(); closeList();
+        const head = cells(line);
+        const rows = [];
+        li += 2;
+        while (li < lines.length && lines[li].trim() && lines[li].includes('|')) {
+          rows.push(cells(lines[li])); li++;
+        }
+        li--;  // the for-loop increment will step past the last consumed row
+        out.push('<table><thead><tr>'
+          + head.map((c) => `<th>${inline(c)}</th>`).join('') + '</tr></thead><tbody>'
+          + rows.map((r) => '<tr>'
+            + head.map((_, k) => `<td>${inline(r[k] || '')}</td>`).join('') + '</tr>').join('')
+          + '</tbody></table>');
+        continue;
+      }
       const h = line.match(/^(#{1,4})\s+(.*)$/);
       if (h) {
         closePara(); closeList();
@@ -1565,11 +1589,83 @@ async function openCodeTab() {
   }
 }
 
+/* --- docs tab: read the same docs/*.md in the portal, diagrams and all ---------------
+ * Content comes from /api/source/file (SourceTree already serves .md); the ordered list
+ * from /api/docs. Mermaid is vendored locally and loaded LAZILY — only the first time this
+ * tab is opened — so a dashboard left up overnight never pays for a 3 MB diagram library. */
+const docState = { list: [], path: null, loaded: false };
+
+let mermaidReady = null;
+function ensureMermaid() {
+  if (window.mermaid) return Promise.resolve(window.mermaid);
+  if (!mermaidReady) {
+    mermaidReady = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = '/static/mermaid.min.js';
+      s.onload = () => resolve(window.mermaid);
+      s.onerror = () => reject(new Error('could not load the diagram library'));
+      document.head.appendChild(s);
+    });
+  }
+  return mermaidReady;
+}
+
+async function renderDocDiagrams(container) {
+  const pres = [...container.querySelectorAll('pre.language-mermaid')];
+  if (!pres.length) return;
+  let mermaid;
+  try { mermaid = await ensureMermaid(); } catch { return; }  // keep the source if it won't load
+  mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+  const nodes = pres.map((pre) => {
+    const div = document.createElement('div');
+    div.className = 'mermaid';
+    div.textContent = pre.textContent;   // the raw diagram source, unescaped
+    pre.replaceWith(div);
+    return div;
+  });
+  try { await mermaid.run({ nodes }); } catch { /* a bad diagram just shows its source */ }
+}
+
+async function loadDoc(path) {
+  docState.path = path;
+  for (const li of $$('#docs-list li')) li.classList.toggle('on', li.dataset.path === path);
+  const reader = $('#docs-reader');
+  reader.innerHTML = '<p class="docs-hint">loading…</p>';
+  try {
+    const res = await api(`/api/source/file?path=${encodeURIComponent(path)}`);
+    reader.innerHTML = renderMarkdown(res.text || '');
+    reader.scrollTop = 0;
+    await renderDocDiagrams(reader);
+  } catch (err) {
+    reader.innerHTML = `<p class="docs-hint">could not open ${escapeHtml(path)} — ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function openDocsTab() {
+  if (docState.loaded) return;
+  docState.loaded = true;
+  try {
+    const res = await api('/api/docs');
+    docState.list = res.docs || [];
+    $('#docs-list').innerHTML = docState.list.map((d) =>
+      `<li data-path="${escapeHtml(d.path)}"><button type="button">${escapeHtml(d.title)}</button></li>`).join('');
+    $('#docs-list').addEventListener('click', (e) => {
+      const li = e.target.closest('li[data-path]');
+      if (li) loadDoc(li.dataset.path);
+    });
+    const first = docState.list.find((d) => d.path.includes('00-')) || docState.list[0];
+    if (first) loadDoc(first.path);
+  } catch (err) {
+    $('#docs-reader').innerHTML = `<p class="docs-hint">could not list docs — ${escapeHtml(err.message)}</p>`;
+  }
+}
+
 function showView(view) {
   state.view = view;
   $('#view-dashboard').hidden = view !== 'dashboard';
   $('#view-code').hidden = view !== 'code';
   $('#view-play').hidden = view !== 'play';
+  $('#view-docs').hidden = view !== 'docs';
   $('#run-field').hidden = view !== 'dashboard';
   $('#phase').hidden = view !== 'dashboard';
   $('.foot-dashboard').hidden = view !== 'dashboard';
@@ -1591,6 +1687,7 @@ function showView(view) {
   if (view !== 'play') clearTimeout(play.statusTimer);
   if (view === 'code') openCodeTab();
   else if (view === 'play') openPlayTab();
+  else if (view === 'docs') openDocsTab();
   else { schedule(0); drawCharts(); }   /* charts sized while hidden measure as zero */
 }
 
@@ -1643,7 +1740,7 @@ async function refresh() {
 function schedule(delay) {
   clearTimeout(state.timer);
   if (document.hidden) return;  // a background tab does not need to poll
-  if (state.view === 'code') return;  // nor does a dashboard nobody is looking at
+  if (state.view === 'code' || state.view === 'docs') return;  // nor a dashboard nobody is looking at
   const ms = delay != null ? delay : pollInterval(state.status ? state.status.phase : 'idle');
   state.timer = setTimeout(refresh, ms);
 }
@@ -2308,7 +2405,7 @@ function wire() {
   });
 }
 
-const VIEWS = ['dashboard', 'play', 'code'];
+const VIEWS = ['dashboard', 'play', 'code', 'docs'];
 
 async function boot() {
   wire();

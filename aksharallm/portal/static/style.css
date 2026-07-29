@@ -673,3 +673,22 @@ button.preset:hover { background: var(--wash); color: var(--ink); }
 .badge-pipe-done    { background: #059669; color: #fff; }
 .stage-running { border-color: #d97706; }
 .stage-done    { border-color: #059669; }
+
+/* Docs tab: a chapter list beside a rendered-markdown reader (with mermaid diagrams) */
+.docs-layout { display: grid; grid-template-columns: 240px 1fr; gap: 1rem; align-items: start; }
+.docs-nav { position: sticky; top: 1rem; max-height: calc(100vh - 6rem); overflow: auto; }
+.docs-list { list-style: none; margin: .5rem 0 0; padding: 0; }
+.docs-list li { margin: 0; }
+.docs-list button { width: 100%; text-align: left; background: none; border: 0; color: inherit;
+  padding: .4rem .5rem; border-radius: 6px; cursor: pointer; font-size: .9rem; }
+.docs-list button:hover { background: var(--panel-2, rgba(255,255,255,.05)); }
+.docs-list li.on button { background: #2563eb; color: #fff; }
+.docs-reader { padding: 1.25rem 1.5rem; max-width: 60rem; line-height: 1.6; overflow-x: auto; }
+.docs-reader h2 { margin-top: 1.6rem; }
+.docs-reader h3, .docs-reader h4 { margin-top: 1.2rem; }
+.docs-reader table { border-collapse: collapse; margin: .8rem 0; display: block; overflow-x: auto; }
+.docs-reader th, .docs-reader td { border: 1px solid var(--line, #2a2f3a); padding: .3rem .6rem; }
+.docs-reader pre.md-code { overflow-x: auto; }
+.docs-reader .mermaid { margin: 1rem 0; text-align: center; }
+.docs-hint { opacity: .6; }
+@media (max-width: 700px) { .docs-layout { grid-template-columns: 1fr; } .docs-nav { position: static; } }

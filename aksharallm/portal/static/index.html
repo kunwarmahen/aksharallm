@@ -19,6 +19,7 @@
     <button class="tab" data-view="dashboard" type="button" aria-current="page">Dashboard</button>
     <button class="tab" data-view="play" type="button">Playground</button>
     <button class="tab" data-view="code" type="button">Code</button>
+    <button class="tab" data-view="docs" type="button">Docs</button>
   </nav>
 
   <div class="topbar-right">
@@ -470,6 +471,20 @@ skipped. phase2.sh ignores the skip when there is no checkpoint to resume.">
 
   </section>
 </div><!-- /view-code -->
+
+<div id="view-docs" class="view" hidden>
+  <section class="docs-layout">
+    <nav class="docs-nav panel" aria-label="documentation">
+      <div class="panel-head"><h2>Docs</h2>
+        <span class="panel-note">the same docs/*.md, with diagrams</span></div>
+      <ul id="docs-list" class="docs-list"></ul>
+    </nav>
+    <article id="docs-reader" class="docs-reader panel markdown">
+      <p class="docs-hint">Pick a chapter — the human-written guide to this project,
+      rendered with its diagrams.</p>
+    </article>
+  </section>
+</div><!-- /view-docs -->
 
 <footer class="footer">
   <span id="foot-root">–</span>
