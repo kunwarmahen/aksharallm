@@ -656,3 +656,20 @@ button.preset:hover { background: var(--wash); color: var(--ink); }
   .play-layout { grid-template-columns: 1fr; }
   .play-layout > .panel { height: auto; max-height: 70vh; }
 }
+
+/* Post-training pipeline panel (SFT -> DPO / GRPO) */
+.pipeline-stages { display: flex; flex-wrap: wrap; gap: .75rem; }
+.stage { flex: 1 1 180px; border: 1px solid var(--line, #2a2f3a); border-radius: 8px;
+         padding: .6rem .7rem; background: var(--panel-2, rgba(255,255,255,.02)); }
+.stage-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.stage-name { font-weight: 600; letter-spacing: .02em; }
+.stage-sub { font-size: .82rem; opacity: .75; margin: .35rem 0 .55rem; min-height: 2.2em; }
+.stage-actions { display: flex; gap: .4rem; }
+.stage-actions button { flex: 1; }
+.stage-actions button:disabled { opacity: .45; cursor: not-allowed; }
+.badge-pipe-blocked { background: #4b5563; color: #e5e7eb; }
+.badge-pipe-ready   { background: #2563eb; color: #fff; }
+.badge-pipe-running { background: #d97706; color: #fff; }
+.badge-pipe-done    { background: #059669; color: #fff; }
+.stage-running { border-color: #d97706; }
+.stage-done    { border-color: #059669; }

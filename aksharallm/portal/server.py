@@ -45,6 +45,7 @@ from ..infer.engine import SamplingParams
 from ..infer.playground import Playground
 from .explain import ExplainConfig, Ollama, SourceTree, build_messages
 from .gpu import Sampler, snapshot
+from .pipeline import Pipeline
 from .runs import PHASE_LAUNCHING, PHASE_TRAINING, LAUNCHERS, RunError, RunStore, repo_root
 from .schedule import Rule, Schedule, Scheduler, parse_days
 
@@ -69,13 +70,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def __init__(self, *args, store: RunStore, scheduler: Scheduler, sampler: Sampler,
                  source: SourceTree, explain: ExplainConfig, playground: Playground,
-                 quiet: bool = True, **kw):
+                 pipeline: Pipeline, quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
         self.sampler = sampler
         self.source = source
         self.explain_cfg = explain
         self.playground = playground
+        self.pipeline = pipeline
         self.quiet = quiet
         super().__init__(*args, **kw)
 
@@ -182,6 +184,13 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(self.store.stop(
                         run, mode=str(data.get("mode", "now")),
                         steps=self._int(data, "steps")))
+            # post-training: /api/pipeline/<base>/<stage>/<start|stop>
+            if len(parts) == 5 and parts[:2] == ["api", "pipeline"]:
+                base, stage, action = parts[2], parts[3], parts[4]
+                if action == "start":
+                    return self._json(self.pipeline.start(base, stage))
+                if action == "stop":
+                    return self._json(self.pipeline.stop(base, stage))
         except (RunError, InferError) as exc:
             return self._error(409, str(exc))
         except Exception as exc:
@@ -200,6 +209,9 @@ class Handler(BaseHTTPRequestHandler):
             name = (query.get("file") or [None])[0]
             lines = int((query.get("lines") or [300])[0])
             return self._json(self.store.log_tail(parts[1], name=name, lines=lines))
+        if len(parts) == 2 and parts[0] == "pipeline":
+            # post-training stages + gating for a base run: /api/pipeline/<base>
+            return self._json(self.pipeline.status(parts[1]))
         if parts == ["gpu"]:
             window = (query.get("window") or ["3600"])[0]
             return self._json(snapshot(
@@ -503,8 +515,10 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
                 if store.summary(r).get("phase") in (PHASE_TRAINING, PHASE_LAUNCHING)]
 
     playground = Playground(store.root, busy_cb=busy)
+    pipeline = Pipeline(store.root)
     handler = partial(Handler, store=store, scheduler=scheduler, sampler=sampler,
-                      source=source, explain=explain, playground=playground, quiet=quiet)
+                      source=source, explain=explain, playground=playground,
+                      pipeline=pipeline, quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True

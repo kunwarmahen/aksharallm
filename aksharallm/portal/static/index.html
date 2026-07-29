@@ -154,6 +154,14 @@ before the real run. Skipping is only sane when resuming a config that has alrea
     <div class="scroll-x" id="sessions"></div>
   </section>
 
+  <section class="panel" aria-label="post-training">
+    <div class="panel-head">
+      <h2>Post-training</h2>
+      <span class="panel-note">SFT → DPO / GRPO — each unlocks when its prerequisite finishes; everything runs scripts/stage.sh</span>
+    </div>
+    <div id="pipeline-stages" class="pipeline-stages"></div>
+  </section>
+
   <section class="panel" aria-label="gpu">
     <div class="panel-head">
       <h2>GPU</h2>

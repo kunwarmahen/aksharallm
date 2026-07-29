@@ -512,6 +512,43 @@ function renderSessions(s) {
       { className: 'chart-empty', textContent: 'No sessions logged yet.' }));
 }
 
+/** The base run for a stage run: 'small-code-sft' -> 'small-code'. */
+function baseOf(run) {
+  return (run || '').replace(/-(sft|dpo|grpo)$/, '');
+}
+
+const escHtml = (s) => String(s == null ? '' : s).replace(/[&<>"]/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/** The post-training panel: SFT -> DPO / GRPO, each gated on its prerequisite checkpoint.
+ * Buttons post to /api/pipeline/<base>/<stage>/<action>, which shells out to stage.sh.  A
+ * blocked stage's Start is disabled with the reason as its tooltip. */
+function renderPipeline(p) {
+  const host = $('#pipeline-stages');
+  if (!host) return;
+  if (!p || !p.stages) { host.innerHTML = ''; return; }
+  host.innerHTML = p.stages.map((s) => {
+    const m = s.metric || {};
+    const val = m.value == null ? '' : (m.key === 'reward'
+      ? `reward ${fmt.num(m.value, 3)}` : `val ${fmt.num(m.value, 4)}`);
+    const sub = s.step == null ? s.blurb
+      : `step ${fmt.int(s.step)}${val ? ` · ${val}` : ''}`;
+    const startAttrs = s.can_start ? '' : `disabled title="${escHtml(s.reason || '')}"`;
+    return `
+      <div class="stage stage-${s.phase}">
+        <div class="stage-head">
+          <span class="stage-name">${s.stage.toUpperCase()}</span>
+          <span class="badge badge-pipe-${s.phase}">${s.phase}</span>
+        </div>
+        <div class="stage-sub">${escHtml(sub)}</div>
+        <div class="stage-actions">
+          <button data-base="${escHtml(p.base)}" data-stage="${s.stage}" data-action="start" ${startAttrs}>${s.done ? 'Re-run' : 'Start'}</button>
+          <button data-base="${escHtml(p.base)}" data-stage="${s.stage}" data-action="stop" ${s.can_stop ? '' : 'disabled'}>Stop</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
 function renderConfig(s) {
   const c = s.config || {};
   const dl = $('#config');
@@ -1569,12 +1606,14 @@ async function refresh() {
   if (!state.run) return;
   try {
     const q = state.logFile ? `?lines=400&file=${encodeURIComponent(state.logFile)}` : '?lines=400';
-    const [status, log, runs, sched, gpu] = await Promise.all([
+    const [status, log, runs, sched, gpu, pipeline] = await Promise.all([
       api(`/api/run/${encodeURIComponent(state.run)}`),
       api(`/api/run/${encodeURIComponent(state.run)}/log${q}`),
       api('/api/runs'),
       api('/api/schedule'),
       api(`/api/gpu?window=${encodeURIComponent(state.gpuWindow)}`),
+      // never let a pipeline hiccup break the dashboard
+      api(`/api/pipeline/${encodeURIComponent(baseOf(state.run))}`).catch(() => null),
     ]);
     state.status = status;
     state.log = log;
@@ -1591,6 +1630,7 @@ async function refresh() {
     renderLog(log);
     renderGpu(gpu);
     renderSchedule(sched);
+    renderPipeline(pipeline);
     live(`updated ${new Date().toLocaleTimeString()}`, 'on');
   } catch (err) {
     document.body.classList.add('stale');
@@ -2177,6 +2217,16 @@ function wire() {
       stop_after: after ? Number(after) : null,
       skip_smoke: $('#skip-smoke').checked,
     }), 'Launching.');
+  });
+
+  // Post-training panel: one delegated handler for all SFT/DPO/GRPO start/stop buttons.
+  $('#pipeline-stages').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn || btn.disabled) return;
+    const { base, stage, action } = btn.dataset;
+    if (action === 'stop' && !confirm(`Stop '${base} · ${stage}'?`)) return;
+    act(() => post(`/api/pipeline/${encodeURIComponent(base)}/${stage}/${action}`, {}),
+      action === 'start' ? `Starting ${stage.toUpperCase()}.` : 'Stop requested.');
   });
 
   $('#btn-stop').addEventListener('click', () => {
