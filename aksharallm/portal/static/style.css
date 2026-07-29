@@ -89,8 +89,8 @@ body {
 }
 .brand { display: flex; align-items: baseline; gap: 10px; }
 .brand .mark {
-  width: 10px; height: 10px; border-radius: 2px;
-  background: var(--series-1); align-self: center;
+  width: 22px; height: 22px; border-radius: 6px; align-self: center;
+  background: url('/static/favicon.svg') center / contain no-repeat;
 }
 .brand-name { font-weight: 650; letter-spacing: -0.01em; }
 .brand-sub { color: var(--ink-muted); }
