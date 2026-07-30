@@ -46,6 +46,7 @@ from ..infer.playground import Playground
 from .explain import ExplainConfig, Ollama, SourceTree, build_messages
 from .gpu import Sampler, snapshot
 from .pipeline import Pipeline
+from .quantize import QuantJobs
 from .runs import PHASE_LAUNCHING, PHASE_TRAINING, LAUNCHERS, RunError, RunStore, repo_root
 from .schedule import Rule, Schedule, Scheduler, parse_days
 
@@ -70,7 +71,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def __init__(self, *args, store: RunStore, scheduler: Scheduler, sampler: Sampler,
                  source: SourceTree, explain: ExplainConfig, playground: Playground,
-                 pipeline: Pipeline, quiet: bool = True, **kw):
+                 pipeline: Pipeline, quant: QuantJobs, quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
         self.sampler = sampler
@@ -78,6 +79,7 @@ class Handler(BaseHTTPRequestHandler):
         self.explain_cfg = explain
         self.playground = playground
         self.pipeline = pipeline
+        self.quant = quant
         self.quiet = quiet
         super().__init__(*args, **kw)
 
@@ -184,6 +186,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(self.store.stop(
                         run, mode=str(data.get("mode", "now")),
                         steps=self._int(data, "steps")))
+            # quantization: /api/quant/<start|stop>
+            if len(parts) == 3 and parts[:2] == ["api", "quant"]:
+                if parts[2] == "start":
+                    return self._json(self.quant.start(data))
+                if parts[2] == "stop":
+                    return self._json(self.quant.stop())
             # post-training: /api/pipeline/<base>/<stage>/<start|stop>
             if len(parts) == 5 and parts[:2] == ["api", "pipeline"]:
                 base, stage, action = parts[2], parts[3], parts[4]
@@ -209,6 +217,11 @@ class Handler(BaseHTTPRequestHandler):
             name = (query.get("file") or [None])[0]
             lines = int((query.get("lines") or [300])[0])
             return self._json(self.store.log_tail(parts[1], name=name, lines=lines))
+        if parts == ["quant"]:
+            lines = int((query.get("lines") or [200])[0])
+            return self._json(self.quant.status(tail=max(0, lines)))
+        if parts == ["quant", "checkpoints"]:
+            return self._json({"checkpoints": self.quant.checkpoints()})
         if len(parts) == 2 and parts[0] == "pipeline":
             # post-training stages + gating for a base run: /api/pipeline/<base>
             return self._json(self.pipeline.status(parts[1]))
@@ -538,9 +551,10 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
 
     playground = Playground(store.root, busy_cb=busy)
     pipeline = Pipeline(store.root)
+    quant = QuantJobs(store.root)
     handler = partial(Handler, store=store, scheduler=scheduler, sampler=sampler,
                       source=source, explain=explain, playground=playground,
-                      pipeline=pipeline, quiet=quiet)
+                      pipeline=pipeline, quant=quant, quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True

@@ -720,3 +720,80 @@ button.preset:hover { background: var(--wash); color: var(--ink); }
 .docs-reader blockquote { margin: 1rem 0; padding: .5rem 1rem; border-left: 3px solid var(--series-1);
   background: var(--wash); border-radius: 0 6px 6px 0; opacity: .95; }
 .docs-reader blockquote p { margin: 0; }
+
+/* ---------------------------------------------------------------- quantize tab ------- */
+/* Two columns: the form you fill in on the left, what it measured on the right. Same
+   full-height-scrolling-panels shape as the Code and Playground tabs. */
+.quant-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: var(--gap);
+  padding: var(--gap) clamp(16px, 3vw, 32px);
+  max-width: 1800px; margin: 0 auto;
+  align-items: start;
+}
+.quant-layout > .panel {
+  height: calc(100vh - 150px); min-height: 420px;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.quant-form { overflow-y: auto; gap: 10px; }
+.quant-form .field { margin-top: 4px; }
+.quant-main { gap: 10px; }
+
+.q-hint {
+  font-size: 12px; color: var(--ink-muted); line-height: 1.45;
+  margin: -2px 0 6px;
+}
+.q-hint.warn { color: var(--serious); }
+.q-hint code { font-family: var(--mono); font-size: 11px; word-break: break-all; }
+.q-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+.q-checks { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 4px; }
+.q-check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; cursor: pointer; }
+.q-check input { margin-top: 2px; flex: none; }
+.q-check em { color: var(--ink-muted); font-style: normal; font-size: 12px; display: block; }
+
+.q-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 4px; }
+
+/* results */
+.q-results { overflow-y: auto; flex: 1 1 auto; min-height: 120px; }
+.q-empty { color: var(--ink-muted); font-size: 13px; line-height: 1.5; padding: 8px 2px; }
+.q-run { border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 10px; }
+.q-run > summary {
+  cursor: pointer; padding: 8px 10px; display: flex; gap: 10px;
+  align-items: baseline; justify-content: space-between; flex-wrap: wrap;
+}
+.q-run-name { font-family: var(--mono); font-size: 12px; }
+.q-run-when { color: var(--ink-muted); font-size: 11px; }
+
+.q-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.q-table th, .q-table td {
+  text-align: right; padding: 5px 10px; border-top: 1px solid var(--border);
+  white-space: nowrap;
+}
+.q-table th:first-child, .q-table td:first-child { text-align: left; }
+.q-table th { color: var(--ink-muted); font-weight: 500; }
+.q-table code { font-family: var(--mono); font-size: 11px; }
+.q-table tr.q-baseline { background: var(--wash); }
+.q-good { color: var(--good); }
+.q-warn { color: var(--warning); }
+.q-bad  { color: var(--serious); }
+.q-dim  { color: var(--ink-muted); }
+.q-extra {
+  font-size: 12px; color: var(--ink-muted); padding: 6px 10px 8px; line-height: 1.45;
+}
+.q-extra code { font-family: var(--mono); font-size: 11px; }
+
+/* the job's own stdout, tailed */
+.q-logwrap { display: flex; flex-direction: column; min-height: 160px; flex: 0 0 auto; }
+.q-log {
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.5;
+  background: var(--plane); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px; margin: 0; overflow: auto; height: 190px; white-space: pre-wrap;
+  color: var(--ink-2);
+}
+
+@media (max-width: 900px) {
+  .quant-layout { grid-template-columns: 1fr; }
+  .quant-layout > .panel { height: auto; min-height: 0; }
+}

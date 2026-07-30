@@ -136,6 +136,7 @@ flowchart TD
     end
     Play[Playground: talk to the model *while it trains*]
     Code[Code: a local model explains the source back to you]
+    Quant[Quantize: make it smaller, and see what that cost]
     Docs[Docs: read this guide in the browser, diagrams and all]
 ```
 
@@ -164,6 +165,12 @@ The panels, in plain terms:
   can watch it get better week over week (for a code model, it runs the generated function
   in the sandbox and shows pass/fail). See [doc 6](06-inference.md).
 - **Code** — a local model reads a source file and explains it back to you.
+- **Quantize** — turn a checkpoint into a 4-bit or 8-bit one and measure what it cost:
+  size, perplexity against the bf16 baseline, tokens per second. **Compare all** runs every
+  method (RTN / AWQ / GPTQ) on the same evaluation batches, which is the only honest way to
+  read these numbers. Like every other button it shells out — here to
+  `python -m aksharallm.quant` — and it drops to the CPU while a run is training, because a
+  GPTQ job can allocate more than the card has left. See [doc 10](10-quantization.md).
 - **Docs** — this guide, read right in the browser: the sidebar lists every chapter, and the
   reader renders the same `docs/*.md` files **with their diagrams** (the mermaid library is
   vendored locally and loaded only when you open this tab). Same files, no duplication.
@@ -182,11 +189,13 @@ Everything a button does, you can do from a terminal — the button just runs th
 | DPO / GRPO (after SFT) | `scripts/stage.sh dpo\|grpo small-code` | Post-training → Start |
 | watch it | `tail -f train_small-code.log` | Dashboard (live) |
 | talk to it mid-training | `python -m aksharallm.infer.cli small-code` | Playground |
+| make it 4-bit and measure it | `python -m aksharallm.quant small-code/ckpt_best.pt --compare` | Quantize → Compare all |
 
 ---
 
-This is the last chapter. You now have the whole arc: [data](01-data.md) →
+You now have the whole arc: [data](01-data.md) →
 [tokenizer](02-tokenizer.md) → [model](03-model.md) → [pretraining](04-pretraining.md) →
 [post-training](05-posttraining.md) → [inference](06-inference.md) →
 [scaling](07-scaling.md), with [troubleshooting](08-troubleshooting.md) and this operations
-guide alongside. Everything is hand-written, tested, and yours to change.
+guide alongside. Then [quantization](10-quantization.md) makes the finished model four
+times smaller. Everything is hand-written, tested, and yours to change.

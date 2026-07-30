@@ -20,6 +20,7 @@
     <button class="tab" data-view="dashboard" type="button" aria-current="page">Dashboard</button>
     <button class="tab" data-view="play" type="button">Playground</button>
     <button class="tab" data-view="code" type="button">Code</button>
+    <button class="tab" data-view="quant" type="button">Quantize</button>
     <button class="tab" data-view="docs" type="button">Docs</button>
   </nav>
 
@@ -488,6 +489,93 @@ skipped. phase2.sh ignores the skip when there is no checkpoint to resume.">
   </section>
 </div><!-- /view-docs -->
 
+
+<!-- The Quantize tab: make a trained model smaller, and see exactly what it cost. Every
+     button here shells out to `python -m aksharallm.quant`, so a job started in the
+     browser and one started in a terminal produce identical artifacts. -->
+<div id="view-quant" class="view" hidden>
+  <section class="quant-layout">
+
+    <aside class="panel quant-form">
+      <div class="panel-head">
+        <h2>Quantize</h2>
+        <span class="panel-note">int8 / int4, from scratch</span>
+      </div>
+
+      <label class="field wide">
+        <span class="field-label">checkpoint</span>
+        <select id="q-ckpt" aria-label="checkpoint"></select>
+      </label>
+      <div class="q-hint" id="q-ckpt-note"></div>
+
+      <label class="field wide">
+        <span class="field-label">method</span>
+        <select id="q-method" aria-label="method"></select>
+      </label>
+      <div class="q-hint" id="q-method-note"></div>
+
+      <div class="q-row">
+        <label class="field">
+          <span class="field-label">bits</span>
+          <select id="q-bits" aria-label="bits">
+            <option value="4" selected>4</option>
+            <option value="8">8</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">group</span>
+          <select id="q-group" aria-label="group size"></select>
+        </label>
+      </div>
+      <div class="q-hint" id="q-group-note"></div>
+
+      <label class="field wide" id="q-steps-field" hidden>
+        <span class="field-label">QAT steps</span>
+        <input id="q-steps" type="number" min="50" max="20000" step="50" value="800">
+      </label>
+
+      <label class="field wide">
+        <span class="field-label">device</span>
+        <select id="q-device" aria-label="device">
+          <option value="">auto</option>
+          <option value="cuda">cuda</option>
+          <option value="cpu">cpu</option>
+        </select>
+      </label>
+      <div class="q-hint" id="q-device-note"></div>
+
+      <div class="q-checks">
+        <label class="q-check"><input type="checkbox" id="q-bench" checked>
+          <span>measure perplexity + speed <em>(slower, but a size with no perplexity beside it means nothing)</em></span></label>
+        <label class="q-check"><input type="checkbox" id="q-save">
+          <span>write the quantized checkpoint to disk</span></label>
+      </div>
+
+      <div class="q-actions">
+        <button id="q-run" type="button">Quantize</button>
+        <button id="q-compare" class="ghost" type="button"
+                title="every method and group size on one table, against the bf16 baseline">Compare all</button>
+        <button id="q-stop" class="ghost" type="button" hidden>Stop</button>
+      </div>
+      <div class="q-hint" id="q-cmd"></div>
+    </aside>
+
+    <section class="panel quant-main">
+      <div class="panel-head">
+        <h2 id="q-title">Results</h2>
+        <span class="panel-note" id="q-state">nothing running</span>
+      </div>
+      <div id="q-results" class="q-results"></div>
+      <div class="q-logwrap">
+        <div class="panel-head"><h2>Job output</h2>
+          <span class="panel-note">live, from <code>logs/quant/</code></span></div>
+        <pre id="q-log" class="q-log">Pick a checkpoint and press Quantize.</pre>
+      </div>
+    </section>
+
+  </section>
+</div><!-- /view-quant -->
+
 <footer class="footer">
   <span id="foot-root">–</span>
   <span class="foot-dashboard">Stopping is safe at any step: the trainer saves
@@ -496,6 +584,10 @@ skipped. phase2.sh ignores the skip when there is no checkpoint to resume.">
   <span class="foot-code" hidden>The explainer runs on your machine through Ollama and
   writes nothing. It shares the GPU with training — <code>configs/portal.yaml</code> keeps
   its context small and unloads the model a few minutes after you stop asking.</span>
+  <span class="foot-quant" hidden>Every job shells out to
+  <code>python -m aksharallm.quant</code> — the same command you would type — and writes its
+  measurements to <code>logs/quant/</code>. int8 is free; int4 costs perplexity and
+  <em>saves memory, not time</em>. See docs/10 for why smaller is not faster.</span>
   <span class="foot-play" hidden>Every generation is recorded in
   <code>logs/playground.jsonl</code> with the step and loss of the checkpoint that produced
   it, so the same prompt at step 7,000 and step 30,000 can be put side by side. While a run
