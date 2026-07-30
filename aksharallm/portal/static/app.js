@@ -991,7 +991,10 @@ function renderMarkdown(src) {
   const inline = (s) => escapeHtml(s)
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+    .replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+    // [text](url) -> a link. The Docs tab rewires .md links to load in the reader and
+    // sends http(s) links to a new tab (see loadDoc); elsewhere they're plain anchors.
+    .replace(/(^|[^!])\[([^\]]+)\]\(([^)]+)\)/g, '$1<a href="$3">$2</a>');
 
   const parts = src.split(/```/);
   parts.forEach((block, i) => {
@@ -1637,6 +1640,18 @@ async function renderDocDiagrams(container) {
   try { await mermaid.run({ nodes }); } catch { /* a bad diagram just shows its source */ }
 }
 
+/** Resolve a doc-relative link ('02-tokenizer.md' from within 'docs/01-data.md') to a
+ *  repo-relative path ('docs/02-tokenizer.md'), handling ./ and ../ and a #fragment. */
+function resolveDocPath(base, href) {
+  const target = href.split('#')[0];
+  const parts = base.includes('/') ? base.slice(0, base.lastIndexOf('/')).split('/') : [];
+  for (const seg of target.split('/')) {
+    if (seg === '..') parts.pop();
+    else if (seg && seg !== '.') parts.push(seg);
+  }
+  return parts.join('/');
+}
+
 async function loadDoc(path) {
   docState.path = path;
   for (const li of $$('#docs-list li')) li.classList.toggle('on', li.dataset.path === path);
@@ -1645,6 +1660,13 @@ async function loadDoc(path) {
   try {
     const res = await api(`/api/source/file?path=${encodeURIComponent(path)}`);
     reader.innerHTML = renderMarkdown(res.text || '');
+    // Rewire links: another doc (.md) loads in this reader; anything external opens in a
+    // new tab so a click never navigates the portal away from itself.
+    for (const a of reader.querySelectorAll('a[href]')) {
+      const href = a.getAttribute('href');
+      if (/^https?:/i.test(href)) { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+      else if (/\.md(#|$)/i.test(href)) { a.dataset.doc = resolveDocPath(path, href); a.setAttribute('href', '#'); }
+    }
     reader.scrollTop = 0;
     await renderDocDiagrams(reader);
   } catch (err) {
@@ -1663,6 +1685,11 @@ async function openDocsTab() {
     $('#docs-list').addEventListener('click', (e) => {
       const li = e.target.closest('li[data-path]');
       if (li) loadDoc(li.dataset.path);
+    });
+    // In-reader links to other docs load in place (rewired in loadDoc to data-doc).
+    $('#docs-reader').addEventListener('click', (e) => {
+      const a = e.target.closest('a[data-doc]');
+      if (a) { e.preventDefault(); loadDoc(a.dataset.doc); }
     });
     const first = docState.list.find((d) => d.path.includes('00-')) || docState.list[0];
     if (first) loadDoc(first.path);
