@@ -1029,6 +1029,17 @@ function renderMarkdown(src) {
           + '</tbody></table>');
         continue;
       }
+      // Blockquote: one or more consecutive `>` lines become one <blockquote>.
+      if (/^>\s?/.test(line)) {
+        closePara(); closeList();
+        const buf = [];
+        while (li < lines.length && /^>\s?/.test(lines[li])) {
+          buf.push(lines[li].replace(/^>\s?/, '')); li++;
+        }
+        li--;  // the for-loop increment steps past the last quoted line
+        out.push(`<blockquote>${inline(buf.join(' '))}</blockquote>`);
+        continue;
+      }
       const h = line.match(/^(#{1,4})\s+(.*)$/);
       if (h) {
         closePara(); closeList();

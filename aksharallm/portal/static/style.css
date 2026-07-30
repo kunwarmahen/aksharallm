@@ -659,8 +659,8 @@ button.preset:hover { background: var(--wash); color: var(--ink); }
 
 /* Post-training pipeline panel (SFT -> DPO / GRPO) */
 .pipeline-stages { display: flex; flex-wrap: wrap; gap: .75rem; }
-.stage { flex: 1 1 180px; border: 1px solid var(--line, #2a2f3a); border-radius: 8px;
-         padding: .6rem .7rem; background: var(--panel-2, rgba(255,255,255,.02)); }
+.stage { flex: 1 1 180px; border: 1px solid var(--border); border-radius: 8px;
+         padding: .6rem .7rem; background: var(--wash); }
 .stage-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 .stage-name { font-weight: 600; letter-spacing: .02em; }
 .stage-sub { font-size: .82rem; opacity: .75; margin: .35rem 0 .55rem; min-height: 2.2em; }
@@ -668,7 +668,7 @@ button.preset:hover { background: var(--wash); color: var(--ink); }
 .stage-actions button { flex: 1; }
 .stage-actions button:disabled { opacity: .45; cursor: not-allowed; }
 .badge-pipe-blocked { background: #4b5563; color: #e5e7eb; }
-.badge-pipe-ready   { background: #2563eb; color: #fff; }
+.badge-pipe-ready   { background: var(--series-1); color: #fff; }
 .badge-pipe-running { background: #d97706; color: #fff; }
 .badge-pipe-done    { background: #059669; color: #fff; }
 .stage-running { border-color: #d97706; }
@@ -681,14 +681,17 @@ button.preset:hover { background: var(--wash); color: var(--ink); }
 .docs-list li { margin: 0; }
 .docs-list button { width: 100%; text-align: left; background: none; border: 0; color: inherit;
   padding: .4rem .5rem; border-radius: 6px; cursor: pointer; font-size: .9rem; }
-.docs-list button:hover { background: var(--panel-2, rgba(255,255,255,.05)); }
-.docs-list li.on button { background: #2563eb; color: #fff; }
+.docs-list button:hover { background: var(--wash); }
+.docs-list li.on button { background: var(--series-1); color: #fff; }
 .docs-reader { padding: 1.25rem 1.5rem; max-width: 60rem; line-height: 1.6; overflow-x: auto; }
 .docs-reader h2 { margin-top: 1.6rem; }
 .docs-reader h3, .docs-reader h4 { margin-top: 1.2rem; }
 .docs-reader table { border-collapse: collapse; margin: .8rem 0; display: block; overflow-x: auto; }
-.docs-reader th, .docs-reader td { border: 1px solid var(--line, #2a2f3a); padding: .3rem .6rem; }
+.docs-reader th, .docs-reader td { border: 1px solid var(--border); padding: .3rem .6rem; }
 .docs-reader pre.md-code { overflow-x: auto; }
 .docs-reader .mermaid { margin: 1rem 0; text-align: center; }
 .docs-hint { opacity: .6; }
 @media (max-width: 700px) { .docs-layout { grid-template-columns: 1fr; } .docs-nav { position: static; } }
+.docs-reader blockquote { margin: 1rem 0; padding: .5rem 1rem; border-left: 3px solid var(--series-1);
+  background: var(--wash); border-radius: 0 6px 6px 0; opacity: .95; }
+.docs-reader blockquote p { margin: 0; }
