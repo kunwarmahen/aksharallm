@@ -504,12 +504,19 @@ function renderSessions(s) {
       : x.unmarked ? 'before session markers' : 'no end record (killed or crashed)'),
   ]);
   const host = $('#sessions');
+  $('#sessions-count').textContent = rows.length
+    ? `${rows.length} session${rows.length === 1 ? '' : 's'} · newest first`
+    : '';
+  // The poll re-renders this table; keep where the reader had scrolled to.
+  const { scrollTop, scrollLeft } = host;
   host.textContent = '';
   host.appendChild(rows.length
     ? table(['#', 'started', 'steps', 'loss (ema)', 'best val', 'tok/s', 'wall', 'ended'], rows,
       { currentRow: s.pid ? 0 : -1 })
     : Object.assign(document.createElement('div'),
       { className: 'chart-empty', textContent: 'No sessions logged yet.' }));
+  host.scrollTop = scrollTop;
+  host.scrollLeft = scrollLeft;
 }
 
 /** The base run for a stage run: 'small-code-sft' -> 'small-code'. */

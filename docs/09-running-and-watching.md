@@ -144,7 +144,8 @@ The panels, in plain terms:
 - **Controls / Progress** — Start, Stop, or Resume the base run, and watch loss fall in
   real time.
 - **Sessions** — every launch as a row, so a run trained over ten evenings is ten
-  comparable lines.
+  comparable lines. Newest first, and the panel keeps a fixed height: past about ten rows
+  the table scrolls inside itself (header row pinned) rather than stretching the page.
 - **Post-training** — the three stages as cards. Each **Start** button is live only when its
   prerequisite checkpoint exists; otherwise it's greyed out with the reason as a tooltip
   ("needs …-sft/sft_best.pt — run SFT first"). This is the gate above, made visible.
