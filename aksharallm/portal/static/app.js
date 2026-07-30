@@ -1665,7 +1665,11 @@ async function loadDoc(path) {
     for (const a of reader.querySelectorAll('a[href]')) {
       const href = a.getAttribute('href');
       if (/^https?:/i.test(href)) { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+      else if (/^#/.test(href)) { /* in-page anchor: harmless, leave it */ }
       else if (/\.md(#|$)/i.test(href)) { a.dataset.doc = resolveDocPath(path, href); a.setAttribute('href', '#'); }
+      // any other repo-relative link is a source file -> open it in the Code tab, never
+      // let it navigate the portal to a dead URL like /aksharallm/data/prepare.py
+      else { a.dataset.src = resolveDocPath(path, href); a.setAttribute('href', '#'); }
     }
     reader.scrollTop = 0;
     await renderDocDiagrams(reader);
@@ -1686,10 +1690,18 @@ async function openDocsTab() {
       const li = e.target.closest('li[data-path]');
       if (li) loadDoc(li.dataset.path);
     });
-    // In-reader links to other docs load in place (rewired in loadDoc to data-doc).
+    // In-reader links: another doc loads in place; a source file opens in the Code tab.
     $('#docs-reader').addEventListener('click', (e) => {
-      const a = e.target.closest('a[data-doc]');
-      if (a) { e.preventDefault(); loadDoc(a.dataset.doc); }
+      const doc = e.target.closest('a[data-doc]');
+      if (doc) { e.preventDefault(); loadDoc(doc.dataset.doc); return; }
+      const src = e.target.closest('a[data-src]');
+      if (src) {
+        e.preventDefault();
+        const p = src.dataset.src;
+        localStorage.setItem('aksharallm-code-path', p);  // so lazy init opens THIS file
+        showView('code');
+        openFile(p);
+      }
     });
     const first = docState.list.find((d) => d.path.includes('00-')) || docState.list[0];
     if (first) loadDoc(first.path);
