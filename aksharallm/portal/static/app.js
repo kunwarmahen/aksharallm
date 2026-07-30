@@ -89,12 +89,26 @@ function niceTicks(min, max, count = 5) {
   return out;
 }
 
+/** Points inside [a, b], plus the one on each side, so a clipped line still reaches the
+ * edges of the plot instead of stopping short.  Empty when the window holds no data. */
+function clipPts(pts, a, b) {
+  const first = pts.findIndex(([x]) => x >= a);
+  if (first < 0 || pts[first][0] > b) return [];
+  let last = pts.length - 1;
+  while (pts[last][0] > b) last--;
+  return pts.slice(Math.max(0, first - 1), last + 2);
+}
+
+let clipUid = 0;
+
 /**
  * Draw a line chart into `host`.
  *
  * spec = {
  *   series: [{ name, color, x:[], y:[], faint?, dots?, fmt? }],
- *   yFmt, xFmt, height, rules: [{ y, label }], legend: bool
+ *   yFmt, xFmt, height, rules: [{ y, label }], legend: bool,
+ *   zoom: { x0, x1 } | null,   // the visible x-window, in data units
+ *   onZoom: (win|null) => {}   // drag committed a new window, or a reset
  * }
  *
  * Marks are thin, the grid is a hairline one shade off the surface, and a crosshair layer
@@ -148,12 +162,27 @@ function lineChart(host, spec) {
   const pw = width - pad.l - pad.r;
   const ph = height - pad.t - pad.b;
 
+  /* The x-window: the whole run, or whatever the reader dragged out.  A zoom that lands on
+   * a gap in the data (or on a run that has since been switched out) is ignored, so the
+   * chart can never come back blank. */
   const xs = series.flatMap((s) => s.pts.map((p) => p[0]));
-  const ys = series.flatMap((s) => s.pts.map((p) => p[1]))
-    .concat((spec.rules || []).map((r) => r.y));
   let [x0, x1] = [Math.min(...xs), Math.max(...xs)];
-  let [y0, y1] = [Math.min(...ys), Math.max(...ys)];
+  let view = series;
+  if (spec.zoom && spec.zoom.x1 > spec.zoom.x0) {
+    const a = Math.max(x0, spec.zoom.x0);
+    const b = Math.min(x1, spec.zoom.x1);
+    const win = series.map((s) => ({ ...s, pts: clipPts(s.pts, a, b) })).filter((s) => s.pts.length);
+    if (b > a && win.length) { x0 = a; x1 = b; view = win; }
+  }
+  const zoomed = view !== series;
   if (x1 === x0) x1 = x0 + 1;
+
+  /* y refits to what is inside the window — that is the whole point of zooming a loss
+   * curve.  The kept neighbours are excluded, or one off-screen spike would set the scale;
+   * so is a threshold rule, which would otherwise pin the axis to the clip value. */
+  const ys = view.flatMap((s) => s.pts.filter(([x]) => x >= x0 && x <= x1).map((p) => p[1]))
+    .concat(zoomed ? [] : (spec.rules || []).map((r) => r.y));
+  let [y0, y1] = [Math.min(...ys), Math.max(...ys)];
   const yPad = (y1 - y0) * 0.08 || Math.abs(y1) * 0.1 || 1;
   y0 -= yPad; y1 += yPad;
   if (spec.yMin != null) y0 = Math.min(y0, spec.yMin);
@@ -203,15 +232,22 @@ function lineChart(host, spec) {
     el('text', { class: 'rule-label', x: pad.l + 4, y: sy(r.y) - 5 }, svg).textContent = r.label;
   }
 
-  for (const s of series) {
+  /* Marks live in a clipped group: zoomed in, the kept neighbours sit outside the plot and
+   * their segments must be trimmed at the frame, not drawn over the axis. */
+  const clipId = `plot-clip-${++clipUid}`;
+  el('rect', { x: pad.l, y: pad.t, width: pw, height: ph },
+    el('clipPath', { id: clipId }, el('defs', {}, svg)));
+  const plot = el('g', { 'clip-path': `url(#${clipId})` }, svg);
+
+  for (const s of view) {
     const d = s.pts.map(([x, y], i) => `${i ? 'L' : 'M'}${sx(x).toFixed(1)} ${sy(y).toFixed(1)}`).join(' ');
-    const path = el('path', { class: 'series-line' + (s.faint ? ' faint' : ''), d }, svg);
+    const path = el('path', { class: 'series-line' + (s.faint ? ' faint' : ''), d }, plot);
     path.style.stroke = `var(${s.color})`;
     /* Sparse series (validation loss lands every 1000 steps) get markers: a 3-point line
      * is hard to see, and the markers carry a second, non-colour cue. */
     if (s.dots && s.pts.length <= 80) {
       for (const [x, y] of s.pts) {
-        const dot = el('circle', { class: 'series-dot', cx: sx(x), cy: sy(y), r: 4.5 }, svg);
+        const dot = el('circle', { class: 'series-dot', cx: sx(x), cy: sy(y), r: 4.5 }, plot);
         dot.style.fill = `var(${s.color})`;
       }
     }
@@ -219,7 +255,8 @@ function lineChart(host, spec) {
      * never two at once: on a converged run the ema and the validation loss land on the
      * same pixel and the two labels overprint each other. The rest is in the tooltip. */
     if (s.label === true) {
-      const [lx, ly] = s.pts[s.pts.length - 1];
+      /* The newest point *in the window*, not the neighbour kept beyond its right edge. */
+      const [lx, ly] = s.pts.filter(([x]) => x <= x1).pop() || s.pts[s.pts.length - 1];
       const tx = el('text', {
         class: 'axis-label', x: Math.min(sx(lx) + 6, pad.l + pw), y: sy(ly) - 7,
         'text-anchor': sx(lx) > pad.l + pw - 46 ? 'end' : 'start',
@@ -230,10 +267,13 @@ function lineChart(host, spec) {
   }
 
   /* ---- crosshair + tooltip ---- */
-  const primary = series.reduce((a, b) => (b.pts.length > a.pts.length ? b : a));
+  const primary = view.reduce((a, b) => (b.pts.length > a.pts.length ? b : a));
+  /* The drag-to-zoom selection, under the crosshair so the readout stays legible. */
+  const sel = el('rect', { class: 'zoom-band', x: 0, y: pad.t, width: 0, height: ph }, svg);
+  sel.style.display = 'none';
   const cross = el('line', { class: 'crosshair', y1: pad.t, y2: pad.t + ph, x1: 0, x2: 0 }, svg);
   cross.style.display = 'none';
-  const marks = series.map((s) => {
+  const marks = view.map((s) => {
     const c = el('circle', { class: 'series-dot', r: 4.5, cx: 0, cy: 0 }, svg);
     c.style.fill = `var(${s.color})`;
     c.style.display = 'none';
@@ -243,10 +283,16 @@ function lineChart(host, spec) {
   /* The hit area is the whole plot, so there is nothing to land on precisely. */
   const hit = el('rect', { class: 'hit', x: pad.l, y: pad.t, width: pw, height: ph }, svg);
 
-  const show = (evt) => {
+  /* Pointer x in viewBox pixels and in data units — the chart is drawn at a fixed viewBox
+   * width and scaled by CSS, so the two differ by the element's own scale factor. */
+  const xAt = (evt) => {
     const box = svg.getBoundingClientRect();
-    const xPix = ((evt.clientX - box.left) / box.width) * width;
-    const xVal = x0 + ((xPix - pad.l) / pw) * (x1 - x0);
+    const px = ((evt.clientX - box.left) / box.width) * width;
+    return { px, val: x0 + ((px - pad.l) / pw) * (x1 - x0) };
+  };
+
+  const show = (evt) => {
+    const xVal = xAt(evt).val;
     let bi = 0;
     for (let i = 1; i < primary.pts.length; i++) {
       if (Math.abs(primary.pts[i][0] - xVal) < Math.abs(primary.pts[bi][0] - xVal)) bi = i;
@@ -257,7 +303,7 @@ function lineChart(host, spec) {
     cross.style.display = '';
 
     let html = `<div class="tt-head">step ${fmt.int(step)}</div>`;
-    series.forEach((s, i) => {
+    view.forEach((s, i) => {
       /* Nearest reading at or before the crosshair — series are sampled at different rates. */
       let hitPt = null;
       for (const p of s.pts) {
@@ -284,9 +330,70 @@ function lineChart(host, spec) {
     marks.forEach((m) => { m.style.display = 'none'; });
     tip.hidden = true;
   };
-  hit.addEventListener('pointermove', show);
   hit.addEventListener('pointerleave', hide);
   svg.addEventListener('pointerleave', hide);
+
+  /* ---- drag across the plot to zoom into that x-window ----
+   * The y-axis refits to the selection on redraw, so this is a real zoom, not a crop.
+   * Double-click anywhere in the chart goes back to the whole run. */
+  if (!spec.onZoom) {
+    hit.addEventListener('pointermove', show);
+    return;
+  }
+  let from = null;
+  /* The five-second poll redraws this chart from scratch. Mid-drag that would throw the
+   * selection away under the reader's finger, so the flag holds the redraw off. */
+  const clearDrag = () => { from = null; sel.style.display = 'none'; delete host.dataset.dragging; };
+
+  hit.addEventListener('pointerdown', (evt) => {
+    if (evt.button) return;                       /* left button only */
+    from = xAt(evt);
+    host.dataset.dragging = '1';
+    hit.setPointerCapture(evt.pointerId);
+    hide();
+  });
+  hit.addEventListener('pointermove', (evt) => {
+    if (!from) { show(evt); return; }
+    const now = xAt(evt);
+    const a = Math.max(Math.min(from.px, now.px), pad.l);
+    const b = Math.min(Math.max(from.px, now.px), pad.l + pw);
+    sel.setAttribute('x', a);
+    sel.setAttribute('width', Math.max(b - a, 0));
+    sel.style.display = '';
+  });
+  hit.addEventListener('pointerup', (evt) => {
+    if (!from) return;
+    const now = xAt(evt);
+    const start = from;
+    clearDrag();
+    /* Under a few pixels this was a click, not a drag — zooming there would be a trap. */
+    if (Math.abs(now.px - start.px) < 6) return;
+    spec.onZoom({ x0: Math.min(start.val, now.val), x1: Math.max(start.val, now.val) });
+  });
+  hit.addEventListener('pointercancel', clearDrag);
+  /* Capture lost some other way (a tab switch mid-drag) must not leave redraws blocked. */
+  hit.addEventListener('lostpointercapture', clearDrag);
+  svg.addEventListener('dblclick', () => spec.onZoom(null));
+
+  /* The corner control: a hint on hover, or the way back out once zoomed. */
+  const tools = document.createElement('div');
+  tools.className = 'chart-tools';
+  if (zoomed) {
+    const xFmt = spec.xFmt || fmt.compact;
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.className = 'ghost zoom-reset';
+    reset.textContent = `${xFmt(x0)}–${xFmt(x1)} ✕`;
+    reset.title = 'back to the whole run (or double-click the chart)';
+    reset.addEventListener('click', () => spec.onZoom(null));
+    tools.appendChild(reset);
+  } else {
+    const hint = document.createElement('span');
+    hint.className = 'zoom-hint';
+    hint.textContent = 'drag to zoom';
+    tools.appendChild(hint);
+  }
+  host.appendChild(tools);
 }
 
 /** The table twin of a chart: every plotted value, reachable without hovering anything. */
@@ -339,6 +446,7 @@ const state = {
   logFile: null,     // null = whichever file was written most recently
   timer: null,
   charts: {},        // last spec per chart, so a resize can redraw without a fetch
+  zoom: {},          // per chart: the dragged-out { x0, x1 } window, or absent for all of it
   busy: false,
   view: 'dashboard', // 'dashboard' | 'code'
 };
@@ -483,12 +591,27 @@ function renderCharts(s) {
 }
 
 function drawCharts() {
-  for (const [key, spec] of Object.entries(state.charts)) {
-    const host = $(`.chart[data-chart="${key}"]`);
-    const tableHost = $(`.chart-table[data-table="${key}"]`);
-    if (!host) continue;
-    if (host.hidden) chartTable(tableHost, spec); else lineChart(host, spec);
-  }
+  for (const key of Object.keys(state.charts)) drawChart(key);
+}
+
+/** One chart. The zoom window lives in state, keyed by chart, so the five-second poll
+ * redraws into the window the reader chose instead of snapping back to the whole run. */
+function drawChart(key) {
+  const spec = state.charts[key];
+  const host = $(`.chart[data-chart="${key}"]`);
+  const tableHost = $(`.chart-table[data-table="${key}"]`);
+  if (!spec || !host || host.dataset.dragging) return;
+  /* The table twin always lists every reading — it is the accessible path to the data,
+   * and a zoom is a way of looking, not a filter. */
+  if (host.hidden) { chartTable(tableHost, spec); return; }
+  lineChart(host, {
+    ...spec,
+    zoom: state.zoom[key],
+    onZoom: (win) => {
+      if (win) state.zoom[key] = win; else delete state.zoom[key];
+      drawChart(key);
+    },
+  });
 }
 
 function renderSessions(s) {
@@ -640,6 +763,8 @@ function renderRuns(runs) {
 const timeFmt = (t) => new Date(t * 1000).toLocaleTimeString(undefined,
   { hour: '2-digit', minute: '2-digit' });
 
+const GPU_CHARTS = ['gutil', 'gmem', 'gtemp', 'gpower'];
+
 function renderGpu(gpu) {
   state.gpu = gpu;
   const tiles = ['util', 'mem', 'temp', 'power'];
@@ -651,8 +776,8 @@ function renderGpu(gpu) {
       $(`#g-${t}-note`).textContent = '';
     }
     $('#gpu-summary').textContent = '';
-    for (const key of ['gutil', 'gmem', 'gtemp', 'gpower']) delete state.charts[key];
-    for (const key of ['gutil', 'gmem', 'gtemp', 'gpower']) {
+    for (const key of GPU_CHARTS) delete state.charts[key];
+    for (const key of GPU_CHARTS) {
       const host = $(`.chart[data-chart="${key}"]`);
       if (host) {
         host.textContent = '';
@@ -751,6 +876,8 @@ function wireGpu() {
   for (const btn of $$('.gpu-window button')) {
     btn.addEventListener('click', () => {
       state.gpuWindow = btn.dataset.window;
+      /* The window buttons are the coarse zoom; a drag inside the old one would fight it. */
+      for (const key of GPU_CHARTS) delete state.zoom[key];
       localStorage.setItem('aksharallm-gpu-window', state.gpuWindow);
       markGpuWindow();
       schedule(0);
@@ -2350,6 +2477,7 @@ function selectRun(run) {
   state.run = run;
   state.logFile = null;
   state.status = null;
+  state.zoom = {};        /* another run's step range means nothing here */
   flash('');
   $('#log-select').dataset.run = '';
   schedule(0);

@@ -143,6 +143,14 @@ The panels, in plain terms:
 
 - **Controls / Progress** — Start, Stop, or Resume the base run, and watch loss fall in
   real time.
+- **The curves** — loss, throughput, gradient norm, learning rate. Hover for a crosshair
+  readout across every series at that step. **Drag sideways across a chart to zoom into
+  that stretch of steps**: the y-axis refits to what is inside the window, which is the only
+  way to see anything once a converged run has flattened at the bottom of a 0–10 axis. The
+  window sticks through the five-second refresh, so you can watch one region live.
+  Double-click the chart — or the range button in its corner — to go back to the whole run.
+  Each chart zooms on its own, the GPU charts included; the `table` twin always lists every
+  reading, zoomed or not.
 - **Sessions** — every launch as a row, so a run trained over ten evenings is ten
   comparable lines. Newest first, and the panel keeps a fixed height: past about ten rows
   the table scrolls inside itself (header row pinned) rather than stretching the page.

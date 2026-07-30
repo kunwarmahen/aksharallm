@@ -248,8 +248,25 @@ main {
 .series-line.faint { stroke-width: 1.25; opacity: 0.75; }
 .series-dot { stroke: var(--surface); stroke-width: 2; }
 .crosshair { stroke: var(--axis); stroke-width: 1; }
-.hit { fill: transparent; }
+/* The crosshair reads on hover; the crosshair cursor says the plot is also draggable. */
+.hit { fill: transparent; cursor: crosshair; touch-action: none; }
 .chart-empty { color: var(--ink-muted); padding: 28px 4px; font-size: 13px; }
+
+/* ---- drag to zoom ---- */
+.zoom-band { fill: var(--series-1); opacity: 0.14; }
+.chart-tools {
+  position: absolute; top: 0; right: 0; display: flex; align-items: center; gap: 6px;
+}
+/* The hint is an affordance, not chrome: it appears when the pointer is on the card. */
+.zoom-hint {
+  color: var(--ink-muted); font-size: 11px; pointer-events: none;
+  opacity: 0; transition: opacity 0.12s ease-in;
+}
+.chart-card:hover .zoom-hint, .chart:hover .zoom-hint { opacity: 1; }
+button.zoom-reset {
+  font-size: 11px; padding: 2px 8px; font-variant-numeric: tabular-nums;
+  border-color: var(--series-1); color: var(--series-1);
+}
 
 .tooltip {
   position: fixed; z-index: 60; pointer-events: none;

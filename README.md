@@ -205,8 +205,9 @@ scripts/portal.sh --restart     # stop and start again (never touches a training
 ```
 
 A local page with the progress against the budget and an ETA, live loss / throughput /
-gradient-norm / LR curves, the per-session table, the tail of the log, and buttons for
-start, stop, "stop after N more steps" and "stop at step N". Three tabs, each with its own
+gradient-norm / LR curves (drag sideways across one to zoom into that stretch of steps —
+the y-axis refits to the window; double-click to go back), the per-session table, the tail
+of the log, and buttons for start, stop, "stop after N more steps" and "stop at step N". Three tabs, each with its own
 address so a view can be bookmarked: **Dashboard** (the run), **Playground** (talk to the
 checkpoint it is producing) and **Code** (have the source explained to you).
 
