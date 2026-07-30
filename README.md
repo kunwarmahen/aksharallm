@@ -98,6 +98,7 @@ Read these in order. They assume no prior knowledge of machine learning.
 | 7 | [Scaling up](docs/07-scaling.md) | Phase 2: a 300M model on 10B tokens, and how to size your own |
 | 8 | [Troubleshooting](docs/08-troubleshooting.md) | Loss spikes, NaNs, OOM, slow training |
 | 9 | [Running & watching it](docs/09-running-and-watching.md) | The scripts, stop/resume, the gated post-training stages, and the **portal** — with diagrams |
+| 10 | [Quantization](docs/10-quantization.md) | Storing weights in 4 bits: group scales, RTN/GPTQ/AWQ/QAT, a fused Triton kernel, and why smaller isn't faster |
 
 ---
 
@@ -120,6 +121,16 @@ aksharallm/
 │   │   └── loader.py         memmap batch sampling (TokenDataset, MixedTokenDataset)
 │   ├── model/
 │   │   └── transformer.py    the whole architecture, ~300 lines
+│   ├── quant/            int8/int4 from scratch — see docs/10
+│   │   ├── qtensor.py        group scales, zero-points, 4-bit packing
+│   │   ├── qlinear.py        QuantLinear: a drop-in for nn.Linear that stores bytes
+│   │   ├── rtn.py            round-to-nearest baseline
+│   │   ├── calib.py          forward hooks: Hessians and per-channel activation energy
+│   │   ├── gptq.py           Hessian-guided error compensation
+│   │   ├── awq.py            activation-aware scaling, folded into the preceding op
+│   │   ├── qat.py            straight-through estimator + fine-tune loop
+│   │   ├── kernels.py        fused dequantize-and-matmul, in Triton
+│   │   └── convert.py        model surgery, save/load quantized checkpoints
 │   ├── train/
 │   │   ├── pretrain.py       next-token prediction (single- or blended-source)
 │   │   ├── sft.py            instruction tuning
@@ -196,6 +207,62 @@ scripts/sessions.py small-code          # compare the sessions afterwards
 Each session gets its own `logs/<run>/train_<timestamp>.log` (never overwritten), and
 `train_<run>.log` symlinks to the newest one.
 
+### Making it smaller: quantization
+
+A trained model is a few hundred million numbers stored in 16 bits each. Store them in 4
+instead and the 300M model goes from **599 MB to 213 MB**. The trick is that weights come
+in tightly clustered groups, so one shared scale per 64 weights lets each individual weight
+be a 4-bit integer.
+
+There are four ways to choose those integers, all written from scratch here — round to
+nearest, [GPTQ](docs/10-quantization.md) (push each rounding error into the columns you
+haven't done yet), AWQ (scale the channels that matter up before rounding), and
+quantization-aware training (put the rounding inside the training loop). Measured on the
+300M model, against a bf16 perplexity of 13.519:
+
+| | size | perplexity |
+|---|---|---|
+| bf16 | 599 MB | 13.519 |
+| int8 | 342 MB | 13.519 — **free** |
+| int4, round-to-nearest | 213 MB | +0.253 |
+| int4, GPTQ | 213 MB | **+0.163** |
+
+There is also a hand-written Triton kernel that unpacks the 4-bit weights *inside* the
+matmul, which makes decoding 1.6× faster than the naive quantized path. It still does not
+beat plain bf16 — and the reason turned out to be the most interesting thing in the
+chapter, so [it is written up honestly](docs/10-quantization.md#the-fused-kernel-and-an-honest-performance-story)
+rather than quietly omitted.
+
+### What comes after that
+
+In order, all written from scratch: **GRPO** ✅ (RL on a reward the code sandbox actually
+verifies) → **quantization** ✅ → **LoRA/QLoRA** → a **real eval harness** (GSM8K/MMLU plus
+a model-judged suite) → **diffusion training** → export and serving.
+
+Two of those are worth explaining, because they are not the usual list.
+
+**Diffusion training.** Everything above is autoregressive: predict the next token from the
+ones before it. A masked diffusion language model throws that away — it corrupts a sequence
+by masking tokens at random, learns to denoise it with *bidirectional* attention, and
+generates by unmasking positions in any order until none are left. The whole training
+objective is: mask each token with probability `t ~ U(0,1)`, run the model with the causal
+mask off, and take cross-entropy on the masked positions weighted by `1/t`.
+
+It will be trained at Phase 1 scale (13.8M params, TinyStories) against the autoregressive
+baseline that is already there — same data, same size, same budget. Not because it will win:
+masked diffusion needs several times the compute of autoregression to reach the same
+quality. It is there because it can do two things autoregression structurally cannot —
+**infilling** (given a prefix *and* a suffix, write the middle) and **parallel generation**
+(watch a whole sequence resolve from all-masked to text in about 32 steps).
+
+**A learning path.** This repo is meant to be learned from, and right now the docs are a
+reading order with nothing to do. The plan is a set of lessons that each pair a doc section
+with an exercise and a check that has to go from red to green — usually *break this on
+purpose and watch what fails.* The best material is already in the repo's own history: the
+silent data-truncation bug, and the masking bug that trained perfectly and generated
+nonsense. Lessons will reference files rather than line numbers, and each one's check is a
+real test in the suite — so if a lesson goes stale, the test run says so.
+
 ### Watching it in a browser
 
 ```bash
@@ -207,9 +274,11 @@ scripts/portal.sh --restart     # stop and start again (never touches a training
 A local page with the progress against the budget and an ETA, live loss / throughput /
 gradient-norm / LR curves (drag sideways across one to zoom into that stretch of steps —
 the y-axis refits to the window; double-click to go back), the per-session table, the tail
-of the log, and buttons for start, stop, "stop after N more steps" and "stop at step N". Three tabs, each with its own
+of the log, and buttons for start, stop, "stop after N more steps" and "stop at step N". Five tabs, each with its own
 address so a view can be bookmarked: **Dashboard** (the run), **Playground** (talk to the
-checkpoint it is producing) and **Code** (have the source explained to you).
+checkpoint it is producing), **Code** (have the source explained to you), **Quantize**
+(make it 4-bit and measure what that cost) and **Docs** (read this guide in the browser,
+diagrams and all).
 
 It is a **view over the same files**, and it presses the same buttons: it starts runs with
 `scripts/phase2.sh` and stops them with `scripts/stop.sh`, so a run launched from a terminal

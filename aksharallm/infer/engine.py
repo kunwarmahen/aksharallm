@@ -423,13 +423,22 @@ class Engine:
         # weights_only=False: the payload carries the run's config dicts alongside the
         # tensors. These files are written by this project's own trainer, on this machine.
         ckpt = torch.load(info.path, map_location="cpu", weights_only=False)
-        model = Transformer(ModelConfig(**ckpt["model_config"]))
-        model.load_state_dict(ckpt["model"])
-        # bf16 on the card (what it trained in, and half the memory); float32 on the CPU,
-        # where bf16 matmuls are emulated and *slower* than the wider type.
-        model = model.to(device=device, dtype=torch.bfloat16 if device == "cuda"
-                         else torch.float32)
-        model.eval()
+        # A quantized checkpoint needs its QuantLinears built *before* the weights load:
+        # `qweight/scales/qzeros` do not fit an nn.Linear's `weight` slot. Without this
+        # branch a quantized .pt dropped into checkpoints/ is listed by the picker and
+        # then fails on load, which is a confusing way to find out.
+        from ..quant.convert import build_from_checkpoint, is_quantized_checkpoint
+
+        if is_quantized_checkpoint(ckpt):
+            model = build_from_checkpoint(ckpt, device=device)
+        else:
+            model = Transformer(ModelConfig(**ckpt["model_config"]))
+            model.load_state_dict(ckpt["model"])
+            # bf16 on the card (what it trained in, and half the memory); float32 on the
+            # CPU, where bf16 matmuls are emulated and *slower* than the wider type.
+            model = model.to(device=device, dtype=torch.bfloat16 if device == "cuda"
+                             else torch.float32)
+            model.eval()
 
         tok_path = self._tokenizer_path(info, ckpt)
         del ckpt                                # release the 1.2 GB staging copy promptly
