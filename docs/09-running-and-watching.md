@@ -190,8 +190,9 @@ gone from every screenful you scroll through. Left to wrap on its own it took th
 171px on a phone — a fifth of the screen, and enough to hide the entire control band behind
 it the moment you scrolled, so the Start/Stop rectangle looked like it was behaving
 differently from everything else on the page. Below 1100px the tab strip therefore takes a
-row of its own, giving a bar of one predictable height instead of one that re-wraps with
-every tab added: **83px** on a desktop, 133px on a tablet, **100px** on a phone.
+row of its own, giving a bar that no longer re-wraps every time a tab is added: **83px** on a
+desktop, 133px on a tablet, and 100–130px on a phone depending on how wide the selected
+run's name makes the run picker.
 
 Anything else that sticks has to clear it, and the number is not knowable in CSS — it
 depends on how the bar wrapped. `trackTopbarHeight()` in `app.js` measures the bar with a
@@ -220,11 +221,31 @@ that, and both are the same mistake seen from different sides:
   Below `--page-max` the `max()` is zero and it degrades to plain padding, so there is no
   breakpoint to maintain.
 
+Those bands finish in a curve (`--sheet-radius`) rather than a hard edge, so the chrome
+reads as a sheet the page scrolls under. Only the bottom corners — it is anchored to the top
+of the window. The dashboard is the one view that stacks a second band under the bar, and
+two curves at that seam would notch the page background in between them, so
+`.topbar:has(+ .view:not([hidden]) > .controls)` drops the bar's curve and lets the control
+band carry it for both.
+
 The column is one width for the whole portal. It used to be 1500px for the dashboard and
 1800px for the working tabs, which meant the shared top bar could not align with both.
 
-That last property is easy to lose by accident, because CSS has two ways to set a floor
-under a page that are invisible on a desktop:
+That last property is easy to lose by accident, because CSS has three ways to set a floor
+under a page that are invisible on a desktop — and the third is invisible on an *empty* page
+too, which is worse:
+
+- **A grid item's automatic minimum size is the min-content width of its contents.** Wrapping
+  a wide table in `<div class="scroll-x">` is not enough: the `.panel` around that scroller
+  is the grid item, it is not itself a scroll container, so it inherits the table's full
+  width as a floor. The track grows, the page grows, and the `.scroll-x` never scrolls —
+  because the page scrolls first. The sessions table alone held the document at 859px on a
+  390px screen. Every grid that holds panels therefore sets `min-width: 0` on its children,
+  which hands the scrolling back to the element built to do it.
+
+  This one only appears with **real data**. A portal served without its API renders every
+  table empty and measures perfectly clean, so check it against a running portal with a real
+  run selected, not against the static files.
 
 - `grid-template-columns: repeat(auto-fit, minmax(420px, 1fr))` never lets a track shrink
   below 420px. Narrower than that and the track — and every panel beside it — hangs off the
@@ -234,10 +255,16 @@ under a page that are invisible on a desktop:
   wide, so it dragged the whole page out to 558px until it was given `min-width: 0` and its
   own `overflow-x: auto` — now it scrolls in place instead of scrolling the page.
 
-The check, when touching this stylesheet: at a 390px viewport
-`document.body.scrollWidth` must equal `document.documentElement.clientWidth`. If it is
-larger, something has a floor under it — find it by giving each element `width: min-content`
-and reporting the ones that measure wider than the viewport.
+The check, when touching this stylesheet: point a browser at a **running portal with a real
+run selected**, at a 390px viewport, and `document.body.scrollWidth` must equal
+`document.documentElement.clientWidth`. If it is larger, find the floor by hiding each
+section in turn and re-measuring — the section whose removal shrinks the document is the one
+holding it open. (`width: min-content` is a tempting way to measure this and it lies about
+scroll containers, reporting their contents' width rather than zero.)
+
+Note that Chrome's `--window-size` will not go below about 485px and so cannot trigger a
+`max-width: 640px` media query at all. A real phone viewport needs
+`Emulation.setDeviceMetricsOverride` over the DevTools protocol.
 
 ---
 

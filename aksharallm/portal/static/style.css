@@ -27,6 +27,9 @@
   --critical:     #d03b3b;
 
   --radius: 10px;
+  /* The full-bleed chrome curves harder than a panel does: at that width a 10px corner
+   * reads as a rendering artefact rather than a choice. */
+  --sheet-radius: 18px;
   --gap: 16px;
   /* Height of the sticky top bar, so anything that sticks below it can clear it. The bar
    * wraps to two rows on a phone, so app.js keeps this measured rather than guessed; the
@@ -100,7 +103,16 @@ body {
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   position: sticky; top: 0; z-index: 20;
+  /* The chrome is a sheet the page scrolls under, so it ends in a curve rather than a hard
+   * edge. Bottom corners only — the sheet is anchored to the top of the window. Where the
+   * control band sits directly beneath, both are --surface and the seam is invisible, so
+   * the two read as one sheet with one curve at the end of it. */
+  border-radius: 0 0 var(--sheet-radius) var(--sheet-radius);
 }
+/* The dashboard is the one view that puts a second band under the bar. Two curves stacked
+ * would notch the page background in at the seam, so the bar keeps its square edge there
+ * and the control band below it carries the curve for both. */
+.topbar:has(+ .view:not([hidden]) > .controls) { border-radius: 0; }
 .brand { display: flex; align-items: baseline; gap: 10px; }
 .brand .mark {
   width: 22px; height: 22px; border-radius: 6px; align-self: center;
@@ -116,6 +128,7 @@ body {
   padding: 14px var(--page-gutter);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+  border-radius: 0 0 var(--sheet-radius) var(--sheet-radius);
 }
 .control-group { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
 .control-status { margin-left: auto; align-items: center; }
@@ -191,6 +204,18 @@ main {
   border-radius: var(--radius);
   padding: 18px 20px;
   margin: 0;
+}
+
+/* A grid item's automatic minimum size is the min-content width of what is inside it, so a
+ * panel wrapping a wide table sets a floor under its track — and therefore under the whole
+ * page. The `.scroll-x` inside that panel then never scrolls, because the page scrolls
+ * first: on a phone the sessions table alone held the document at 859px. `min-width: 0`
+ * hands the scrolling back to the element that was built to do it. Every grid that holds
+ * panels needs this; it is invisible until real data arrives and a row gets wide. */
+main > *,
+.chart-grid > *, .tiles > *,
+.code-layout > *, .play-layout > *, .quant-layout > *, .lora-layout > *, .docs-layout > * {
+  min-width: 0;
 }
 .panel-head {
   display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 12px;
