@@ -119,6 +119,51 @@ after fixing it produced **identical numbers**. It was caught only by a test ass
 asymmetric must beat symmetric on a deliberately skewed group, and by another asserting a
 constant group round-trips. Latent, real, and invisible to measurement on this data.
 
+## A second grid: NF4
+
+Everything so far assumes the 16 levels are spaced **evenly** across the group's range.
+That is the right assumption if you know nothing about the weights — and the wrong one if
+you know they are roughly Gaussian, which trained weights are. An even grid spends as many
+levels on the sparse tails as on the dense middle.
+
+**NF4** ("normal float") puts its 16 levels at the *quantiles of a normal distribution*
+instead: closely spaced near zero where the mass is, widely spaced in the tails.
+
+```
+int4 asym:  |----|----|----|----|----|----|----|----|   evenly spaced
+NF4:        |--|-|-||||||||-|--|                        dense in the middle
+           -1                 0                 +1
+```
+
+The levels are fixed constants, so a group stores only an absmax scale and **no zero-point
+at all** — which makes NF4 both more accurate *and* smaller than int4 at the same group
+size. `QuantScheme(dtype="nf4")` selects it, and every method here (RTN, GPTQ, AWQ, QAT)
+works with either grid, because they all go through `quantize_group`.
+
+Two details worth knowing:
+
+* The levels are **derived**, not pasted in — `_derive_nf4_levels` maps evenly spaced
+  probabilities through the inverse normal CDF using `erfinv`. Even spacing in
+  *probability* means even spacing in *mass*, so each level represents about the same
+  number of weights. The derivation reproduces the published table to 1.2e-7.
+* The split is **7 negative levels, one zero, 8 positive**. Sixteen cannot be divided
+  evenly around a zero that must itself be representable, so one side gets the spare. Zero
+  being exact matters: padding, masked positions and dead weights quantize to exactly 0.0.
+
+### Double quantization
+
+At group 64 the fp16 scales cost `16/64 = 0.25` bits per weight — about 6% of a 4-bit
+model. `double_quant=True` quantizes the *scales*: int8 codes with one fp32 scale and one
+fp32 mean per block of 256, taking 0.25 down to 0.129 bits/weight.
+
+Subtracting the block mean first is what makes it nearly lossless. Scales are all positive,
+so a symmetric int8 grid would waste its whole negative half — a bit thrown away before it
+starts. And the last block is padded with the *last value* rather than zeros, which would
+drag that block's mean and absmax down and cost precision on every real scale in it.
+
+This is the datatype QLoRA fine-tunes on top of; see
+[11-lora.md](11-lora.md).
+
 ## The tied-embedding trap
 
 Our models set `tie_embeddings: true`, so `lm_head.weight` **is** `tok_emb.weight` — one
@@ -305,11 +350,14 @@ difference is signal, not batch luck).
 | gptq int4 per-chan | 11.8 MB | 2.34× | 4.439 | +0.100 | 77 |
 | **qat** int4 per-chan | 11.8 MB | 2.34× | 4.434 | **+0.096** | — |
 
-### 300M blended model at step 15,000 — bf16 perplexity 13.519
+### 300M blended model at step 15,000
 
-(That perplexity is measured on a fixed 80-sequence slice of `val.bin`, which is a smaller
-sample than the trainer's own eval — so it is not the same number as `best_val` in the
-training log. It is the same slice for every row below, which is what matters here.)
+Two measurements, months apart on the same checkpoint. The perplexities are measured on a
+fixed slice of `val.bin`, which is a smaller sample than the trainer's own eval — so
+neither is the same number as `best_val` in the training log, and only rows measured in the
+*same* run are comparable to each other. That is precisely why `--compare` exists.
+
+**First measurement** (80-sequence slice, bf16 perplexity 13.519), before NF4 existed:
 
 | scheme | size | ratio | perplexity | Δ |
 |---|---|---|---|---|
@@ -322,10 +370,36 @@ training log. It is the same slice for every row below, which is what matters he
 | **gptq** int4 g64 | 213 MB | 2.81× | **13.682** | **+0.163** |
 | gptq int4 per-chan | 201 MB | 2.98× | 13.864 | +0.345 |
 
+**Second measurement, 2026-07-30** (40 batches, bf16 perplexity 15.076), adding the NF4
+rows:
+
+| scheme | size | ratio | perplexity | Δ |
+|---|---|---|---|---|
+| bf16 baseline | 599.1 MB | 1.00× | 15.076 | — |
+| rtn int8 g64 | 341.6 MB | 1.75× | 15.077 | **+0.001** |
+| rtn int4 g64 | 212.8 MB | 2.81× | 15.362 | +0.286 |
+| rtn int4 g128 | 208.2 MB | 2.88× | 15.405 | +0.329 |
+| rtn int4 per-chan | 201.0 MB | 2.98× | 15.675 | +0.600 |
+| **rtn nf4 g64** | 208.7 MB | 2.87× | 15.310 | **+0.234** |
+| **rtn nf4 g64 +dq** | **204.7 MB** | **2.93×** | 15.309 | **+0.234** |
+| **awq** int4 g64 | 212.8 MB | 2.81× | 15.296 | +0.221 |
+| **gptq** int4 g64 | 212.8 MB | 2.81× | 15.261 | +0.185 |
+| **gptq nf4 g64** | 208.7 MB | 2.87× | **15.249** | **+0.173** |
+| gptq int4 per-chan | 201.0 MB | 2.98× | 15.458 | +0.383 |
+
 Read across: **int8 is free**, at both scales, to three decimal places. At int4 the
 ordering RTN → AWQ → GPTQ holds at both scales, with GPTQ recovering about a third of the
-degradation (36% at 300M). Coarser groups hurt more, and the methods help more where there
-is more to fix.
+degradation. Coarser groups hurt more, and the methods help more where there is more to fix.
+
+And three things the NF4 rows add:
+
+1. **NF4 beats int4 at the same group size, and is smaller.** RTN +0.234 vs +0.286;
+   GPTQ +0.173 vs +0.185. The gain comes from *where the levels sit*, not from spending
+   more bits — and dropping the zero-point pays for the scale storage.
+2. **Double quantization is genuinely free**: 15.310 → 15.309 (noise) for 4 MB. A small
+   real win; anyone claiming it is significant at this scale is overselling it.
+3. **The best 4-bit configuration is GPTQ-NF4 g64**: +0.173 at 2.87×. The grid and the
+   rounding algorithm are independent axes, and stacking them works.
 
 ## The fused kernel, and an honest performance story
 
@@ -429,6 +503,10 @@ python -m aksharallm.quant small-code/ckpt_best.pt --method awq  --bench
 # quantization-aware fine-tune (needs training data and GPU time)
 python -m aksharallm.quant tiny/ckpt_best.pt --method qat --qat-steps 800 --bench
 
+# NF4 — the normal-quantile grid, plus compressed scales
+python -m aksharallm.quant small-code/ckpt_best.pt --dtype nf4 --double-quant --bench
+python -m aksharallm.quant small-code/ckpt_best.pt --method gptq --dtype nf4  # best 4-bit
+
 # force a backend to compare paths
 python -m aksharallm.quant small-code/ckpt_best.pt --bits 4 --bench --backend torch
 ```
@@ -456,15 +534,21 @@ has been trained to do.
    look like a much worse method rather than a mistake.
 5. **Quantized weights are buffers, not Parameters.** Registering them as Parameters would
    let an optimiser update bytes that are then reinterpreted as packed nibbles.
-6. **Triton `BLOCK_M=16` costs ~100 seconds to compile** with the 3D broadcast reduce, on
+6. **NF4 codes are indices, not grid points.** Dequantizing one with the uniform formula
+   produces plausible small numbers rather than an error — so `dequantize` takes an
+   explicit `nf4=` flag rather than inferring it.
+7. **Triton `BLOCK_M=16` costs ~100 seconds to compile** with the 3D broadcast reduce, on
    schemes that have nothing else in common. Capped at 4; decode is one row anyway.
 
 ## Where this sits
 
-Quantization is the second item in the from-scratch backend sequence: GRPO ✅ → **quantization
-✅** → LoRA/QLoRA → eval harness → diffusion → export/serving. QLoRA next is the natural
-follow-on, since it is fine-tuning *on top of* the 4-bit weights this chapter produces —
-`QuantLinear` is already the frozen base it needs.
+Quantization is the second item in the from-scratch backend sequence: GRPO ✅ →
+**quantization ✅** → **LoRA/QLoRA ✅** → eval harness → diffusion → export/serving.
 
-Read next: [06-inference.md](06-inference.md) for the KV cache and generation loop the
-kernel plugs into, and [03-model.md](03-model.md) for the Linear layers being replaced.
+LoRA/QLoRA followed directly from this chapter and composes with it: QLoRA is literally the
+`QuantLinear` built here, used as a frozen base with small trainable adapters beside it.
+NF4 and double quantization were added for it.
+
+Read next: [11-lora.md](11-lora.md) for fine-tuning on top of these weights,
+[06-inference.md](06-inference.md) for the KV cache and generation loop the kernel plugs
+into, and [03-model.md](03-model.md) for the Linear layers being replaced.

@@ -330,7 +330,12 @@ def _cast_float_only(model: nn.Module, dtype: torch.dtype):
     for mod in model.modules():
         if isinstance(mod, QuantLinear):
             mod.out_dtype = dtype
-            mod.scales.data = mod.scales.data.to(torch.float16)
+            # Only the plain-fp16 case has a buffer to normalise; with double quantization
+            # the scales are int8 codes and `.scales` is a freshly built temporary, so
+            # writing to it would change nothing.
+            buf = mod._buffers.get("scales")
+            if buf is not None:
+                buf.data = buf.data.to(torch.float16)
             continue
         for n, p in list(mod.named_parameters(recurse=False)):
             if p.is_floating_point():

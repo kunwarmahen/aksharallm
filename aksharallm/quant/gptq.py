@@ -47,7 +47,14 @@ import torch.nn as nn
 
 from .calib import Calibration, damped_hessian
 from .qlinear import QuantLinear
-from .qtensor import QuantScheme, pack, quantize_group, resolve_group_size
+from .qtensor import (
+    NF4_BOUNDARIES,
+    NF4_LEVELS,
+    QuantScheme,
+    pack,
+    quantize_group,
+    resolve_group_size,
+)
 
 #: Columns processed per block. The inner loop is sequential and column-at-a-time; the
 #: block exists so the *trailing* update (the expensive one) is a single big matmul over
@@ -69,7 +76,16 @@ def _group_params(w_block: torch.Tensor, scheme: QuantScheme):
 
 def _quantize_column(w: torch.Tensor, scale: torch.Tensor, zero: torch.Tensor | None,
                      scheme: QuantScheme):
-    """One column -> integer codes and the dequantized value. w, scale: (out,)."""
+    """One column -> integer codes and the dequantized value. w, scale: (out,).
+
+    Both grids are handled here, and this is the only place GPTQ needs to know which one
+    it is on: everything above works in terms of "quantize this column, tell me the
+    error", which is grid-agnostic.
+    """
+    if scheme.is_nf4:
+        bounds = NF4_BOUNDARIES.to(device=w.device, dtype=w.dtype)
+        q = torch.bucketize((w / scale).clamp(-1.0, 1.0), bounds)
+        return q.to(w.dtype), NF4_LEVELS.to(w.device)[q.long()] * scale
     if zero is None:
         q = torch.round(w / scale)
     else:
@@ -117,8 +133,8 @@ def gptq_quantize_weight(
 
     Q = torch.zeros_like(W)
     scales = torch.zeros(out_f, n_groups, device=dev, dtype=torch.float32)
-    zeros = None if scheme.sym else torch.zeros(out_f, n_groups, device=dev,
-                                                dtype=torch.float32)
+    zeros = (torch.zeros(out_f, n_groups, device=dev, dtype=torch.float32)
+             if scheme.has_zeros else None)
     # One block == one group. Aligning them is what keeps the scale fitting honest: at
     # the top of a block, `W[:, i1:i2]` has already absorbed the error of every preceding
     # block, so the scale is fitted to the weights this group will actually be storing.

@@ -104,7 +104,7 @@ if _HAVE_TRITON:
 
     @triton.jit
     def _qgemv_kernel(
-        X, QW, SC, ZP, Y,
+        X, QW, SC, ZP, LUT, Y,
         M, N, K,
         stride_xm, stride_xk,
         stride_qn, stride_qk,
@@ -114,6 +114,7 @@ if _HAVE_TRITON:
         PER_CHANNEL: tl.constexpr,
         GROUP_TILE: tl.constexpr,
         HAS_ZERO: tl.constexpr,
+        NF4: tl.constexpr,
         BITS: tl.constexpr,
         BLOCK_M: tl.constexpr,
         BLOCK_N: tl.constexpr,
@@ -202,6 +203,12 @@ if _HAVE_TRITON:
                         mask=mask_n[:, None] & mask_k[None, :], other=0,
                     ).to(tl.float32)
                 w = (codes - zp) * sc
+            elif NF4:
+                # The non-uniform grid costs one extra load: the code is an *index* into
+                # the 16-entry level table rather than a point on an even grid. The table
+                # is 64 bytes and every program reads all of it, so it lands in L1 after
+                # the first access and the gather is effectively free.
+                w = tl.load(LUT + codes.to(tl.int32)) * sc
             else:
                 # Symmetric 4-bit codes were shifted by +8 at pack time to keep the
                 # nibble unsigned; undo that here rather than in a separate pass.
@@ -221,6 +228,20 @@ def _next_pow2(n: int) -> int:
     while p < n:
         p *= 2
     return p
+
+
+#: One fp32 copy of the NF4 levels per device, built once. Rebuilding a 16-element tensor
+#: on every decode step would be a host-side allocation in the hottest loop we have.
+_LUT_CACHE: dict[torch.device, torch.Tensor] = {}
+
+
+def _nf4_lut(device: torch.device) -> torch.Tensor:
+    key = torch.device(device)
+    if key not in _LUT_CACHE:
+        from .qtensor import NF4_LEVELS
+
+        _LUT_CACHE[key] = NF4_LEVELS.to(device=key, dtype=torch.float32).contiguous()
+    return _LUT_CACHE[key]
 
 
 def qlinear_forward(x: torch.Tensor, layer) -> torch.Tensor:
@@ -256,7 +277,13 @@ def qlinear_forward(x: torch.Tensor, layer) -> torch.Tensor:
         return F.linear(x, layer.dequantize_weight(x.dtype))
 
     y = torch.empty((M, N), dtype=torch.float32, device=x.device)
-    zp = layer.qzeros if layer.qzeros is not None else layer.scales  # unused when sym
+    # `.scales` is a property: with double quantization it rebuilds fp16 scales from int8
+    # codes here, once per call, rather than inside the kernel. The scales are 1/64th the
+    # size of the weights, so this costs little -- but it does mean double quantization is
+    # a size-on-disk and size-at-rest win, not a bandwidth win. The docs say so.
+    scales = layer.scales
+    zp = layer.qzeros if layer.qzeros is not None else scales  # unused when sym/nf4
+    lut = _nf4_lut(x.device) if scheme.is_nf4 else scales  # unused when not nf4
     # Rows beyond BLOCK_M get their own program: capping BLOCK_M without gridding over M
     # would silently leave the rest of the output uninitialised.
     #
@@ -270,16 +297,17 @@ def qlinear_forward(x: torch.Tensor, layer) -> torch.Tensor:
     grid = (triton.cdiv(N, block_n), triton.cdiv(M, block_m))
 
     _qgemv_kernel[grid](
-        x2, layer.qweight, layer.scales, zp, y,
+        x2, layer.qweight, scales, zp, lut, y,
         M, N, K,
         x2.stride(0), x2.stride(1),
         layer.qweight.stride(0), layer.qweight.stride(1),
-        layer.scales.stride(0), layer.scales.stride(1),
+        scales.stride(0), scales.stride(1),
         y.stride(0), y.stride(1),
         GROUP_SIZE=g,
         PER_CHANNEL=(g >= K),
         GROUP_TILE=(block_k == g),
         HAS_ZERO=layer.qzeros is not None,
+        NF4=scheme.is_nf4,
         BITS=scheme.bits,
         BLOCK_M=block_m,
         BLOCK_N=block_n,

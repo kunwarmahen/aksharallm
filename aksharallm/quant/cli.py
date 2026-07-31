@@ -42,8 +42,13 @@ COMPARE = (
     ("rtn", QuantScheme(bits=4, group_size=64, sym=False, method="rtn")),
     ("rtn", QuantScheme(bits=4, group_size=128, sym=False, method="rtn")),
     ("rtn", QuantScheme(bits=4, group_size=-1, sym=False, method="rtn")),
+    # Same bits, same group, same method as the second row -- only the *grid* differs.
+    # That pairing is the point: it isolates what the NF4 levels are worth on their own.
+    ("rtn", QuantScheme(bits=4, group_size=64, dtype="nf4", method="rtn")),
+    ("rtn", QuantScheme(bits=4, group_size=64, dtype="nf4", double_quant=True, method="rtn")),
     ("awq", QuantScheme(bits=4, group_size=64, sym=False, method="awq")),
     ("gptq", QuantScheme(bits=4, group_size=64, sym=False, method="gptq")),
+    ("gptq", QuantScheme(bits=4, group_size=64, dtype="nf4", method="gptq")),
     ("gptq", QuantScheme(bits=4, group_size=-1, sym=False, method="gptq")),
 )
 
@@ -211,6 +216,14 @@ def main(argv: list[str] | None = None) -> int:
                          "divide in_features — 128 does not divide d_ff=2752 on "
                          "small-code, so that layer falls back to 64 and says so.")
     ap.add_argument("--sym", action="store_true", help="symmetric (scale only, no zero-point)")
+    ap.add_argument("--dtype", default="int", choices=("int", "nf4"),
+                    help="'int' spaces the 16 levels evenly; 'nf4' puts them at the "
+                         "quantiles of a normal distribution, which is what trained "
+                         "weights actually look like. nf4 implies 4 bits and no "
+                         "zero-point. This is the datatype QLoRA fine-tunes on top of.")
+    ap.add_argument("--double-quant", action="store_true",
+                    help="also quantize the scales (int8 + one fp32 scale and mean per "
+                         "256). Saves ~0.12 bits/weight at group 64 — real, and small.")
     ap.add_argument("--method", default="rtn", choices=("rtn", "gptq", "awq", "qat"))
     ap.add_argument("--qat-steps", type=int, default=200,
                     help="quantization-aware fine-tuning steps (method=qat)")
@@ -251,8 +264,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.compare:
         return _compare(args, src, payload)
 
-    scheme = QuantScheme(bits=args.bits, group_size=args.group, sym=args.sym,
-                         method=args.method)
+    try:
+        scheme = QuantScheme(bits=args.bits, group_size=args.group, sym=args.sym,
+                             method=args.method, dtype=args.dtype,
+                             double_quant=args.double_quant)
+    except ValueError as e:
+        raise SystemExit(f"bad scheme: {e}")
     results, base = [], None
 
     if args.bench:

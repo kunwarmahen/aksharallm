@@ -40,7 +40,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .qtensor import (
+    DQ_BLOCK,
     QuantScheme,
+    compress_scales,
+    decompress_scales,
     dequantize,
     pack,
     packed_shape,
@@ -84,17 +87,31 @@ class QuantLinear(nn.Module):
         qw_shape = packed_shape(out_features, in_features, scheme)
         qw_dtype = torch.uint8 if (scheme.packed or not scheme.sym) else torch.int8
         # Buffers, not Parameters: these carry no gradient and must not be picked up by
-        # the optimiser or weight decay if a quantized model is ever fine-tuned.
+        # the optimiser or weight decay if a quantized model is ever fine-tuned. That is
+        # not hypothetical any more -- QLoRA fine-tunes on top of exactly these bytes, and
+        # relies on them staying out of `parameters()`.
         self.register_buffer("qweight", torch.zeros(qw_shape, dtype=qw_dtype, device=device))
-        self.register_buffer(
-            "scales", torch.zeros((out_features, n_groups), dtype=torch.float16, device=device)
-        )
-        if scheme.sym:
-            self.register_buffer("qzeros", None)
+        self.scales_shape = (out_features, n_groups)
+        if scheme.double_quant:
+            # Scales live compressed; `self.scales` is a property that rebuilds them.
+            n_scales = out_features * n_groups
+            n_blocks = (n_scales + DQ_BLOCK - 1) // DQ_BLOCK
+            self.register_buffer("scales_code",
+                                 torch.zeros(n_blocks * DQ_BLOCK, dtype=torch.int8, device=device))
+            self.register_buffer("scales_absmax",
+                                 torch.zeros(n_blocks, dtype=torch.float32, device=device))
+            self.register_buffer("scales_mean",
+                                 torch.zeros(n_blocks, dtype=torch.float32, device=device))
         else:
+            self.register_buffer(
+                "scales", torch.zeros(self.scales_shape, dtype=torch.float16, device=device)
+            )
+        if scheme.has_zeros:
             self.register_buffer(
                 "qzeros", torch.zeros((out_features, n_groups), dtype=torch.uint8, device=device)
             )
+        else:
+            self.register_buffer("qzeros", None)
 
     # ---- construction ------------------------------------------------------------
 
@@ -125,9 +142,34 @@ class QuantLinear(nn.Module):
         q.load_quantized(qweight, scales, zeros)
         return q
 
+    # ---- scales ------------------------------------------------------------------
+    #
+    # `scales` is a property rather than always a buffer because double quantization
+    # stores them as int8 codes plus a per-block scale and mean. Everything downstream --
+    # the torch path, the Triton kernel, GPTQ, the tests -- asks for `.scales` and gets
+    # fp16 back either way, so double quantization is invisible above this line.
+    #
+    # A property on the class takes precedence over nn.Module's buffer lookup, which is
+    # what makes the non-compressed case still return the real buffer (and stay writable).
+
+    @property
+    def scales(self) -> torch.Tensor:
+        buf = self._buffers.get("scales")
+        if buf is not None:
+            return buf
+        return decompress_scales(
+            self.scales_code, self.scales_absmax, self.scales_mean, self.scales_shape
+        ).to(torch.float16)
+
     def load_quantized(self, qweight, scales, zeros):
         self.qweight.copy_(qweight.to(self.qweight.dtype))
-        self.scales.copy_(scales.to(self.scales.dtype))
+        if self.scheme.double_quant:
+            codes, absmax, mean = compress_scales(scales.reshape(self.scales_shape))
+            self.scales_code.copy_(codes)
+            self.scales_absmax.copy_(absmax)
+            self.scales_mean.copy_(mean)
+        else:
+            self._buffers["scales"].copy_(scales.to(torch.float16))
         if self.qzeros is not None:
             if zeros is None:
                 raise ValueError("asymmetric scheme needs zero-points")
@@ -141,7 +183,8 @@ class QuantLinear(nn.Module):
         codes = unpack(self.qweight, self.scheme)
         zeros = None if self.qzeros is None else self.qzeros.to(torch.int16)
         g = self.in_features if self.group_size == -1 else self.group_size
-        return dequantize(codes, self.scales, zeros, g, dtype=dtype or self.out_dtype)
+        return dequantize(codes, self.scales, zeros, g, dtype=dtype or self.out_dtype,
+                          nf4=self.scheme.is_nf4)
 
     def _use_triton(self, x: torch.Tensor) -> bool:
         if self.backend == "torch":
@@ -169,7 +212,10 @@ class QuantLinear(nn.Module):
 
     def nbytes(self) -> int:
         n = self.qweight.numel() * self.qweight.element_size()
-        n += self.scales.numel() * self.scales.element_size()
+        for name in ("scales", "scales_code", "scales_absmax", "scales_mean"):
+            buf = self._buffers.get(name)
+            if buf is not None:
+                n += buf.numel() * buf.element_size()
         if self.qzeros is not None:
             n += self.qzeros.numel() * self.qzeros.element_size()
         return n
@@ -180,8 +226,10 @@ class QuantLinear(nn.Module):
 
     def extra_repr(self) -> str:
         g = "chan" if self.group_size == -1 else self.group_size
+        kind = "nf4" if self.scheme.is_nf4 else (
+            f"int{self.scheme.bits}-{'sym' if self.scheme.sym else 'asym'}")
+        dq = ", dq" if self.scheme.double_quant else ""
         return (
-            f"in={self.in_features}, out={self.out_features}, bits={self.scheme.bits}, "
-            f"group={g}, {'sym' if self.scheme.sym else 'asym'}, "
+            f"in={self.in_features}, out={self.out_features}, {kind}, group={g}{dq}, "
             f"{self.nbytes() / self.float_nbytes():.2f}x of bf16"
         )
