@@ -7,6 +7,31 @@ that works at all, and what it costs — measured on our own models, not quoted.
 Everything here is post-training except the last method: the model is already finished and
 we are re-encoding it. Nothing is retrained (until QAT), no architecture changes.
 
+## When this happens
+
+Quantization is the **last** step, not something you do to a model mid-flight:
+
+```
+pretrain  ->  SFT  ->  DPO / GRPO  ->  QUANTIZE  ->  serve
+                                       ^^^^^^^^
+                             here, on the finished model
+```
+
+That ordering has practical consequences, and they are easy to get wrong:
+
+- **The model you quantize is usually a chat model, not a base model.** Everything below
+  applies unchanged — but the *data* you hand it must match. See "Calibrating the right
+  model" further down; there is a guard in the CLI because one of these mistakes is
+  silent and destructive.
+- **The GPU is free when you do this.** Nothing in `aksharallm/quant/` knows or cares
+  whether a training run exists; the CLI never checks. The only place that looks is the
+  portal's Quantize tab, and only as a guard against pressing the button by accident
+  during an overnight session.
+- **The numbers below are provisional.** They were measured on Phase 2 at **step 15,000
+  of 40,000** — a half-trained model — because that is what existed when this was built.
+  Re-measure on the finished model before trusting any of them. `--compare` is one
+  command; the shape of the results should hold, the exact deltas will not.
+
 ## The one observation everything rests on
 
 Take any small run of consecutive weights from a trained matrix and look at them:
@@ -216,8 +241,30 @@ real sequences through the model and record, per Linear layer, statistics of its
 - **channel energy** `E[x_j²]`, just the diagonal — all AWQ needs, and vastly cheaper.
 
 128 sequences is plenty; these are second moments of a distribution the model has seen
-millions of times. Calibrate on data resembling what the model will *do* — calibrating a
-code model purely on prose measures the wrong activations.
+millions of times.
+
+### Calibrating the right model
+
+Calibration measures what a layer's inputs *actually look like*, so the calibration set has
+to resemble the model's real traffic. Calibrating a code model purely on prose measures the
+wrong activations. And since quantization happens after SFT, the common case is subtler:
+
+**an SFT checkpoint records the base run's data config.** `sft.py` carries it forward so
+downstream tools can still find the tokenizer — which means `sft_best.pt` points at raw
+pretraining text, not at the chat data it was actually fine-tuned on. Two consequences:
+
+- For **GPTQ and AWQ** this costs quality, nothing worse: a chat model sees ChatML turns at
+  inference, so calibrating on FineWeb prose fits the wrong activations. The CLI prints a
+  note; pass `--calib-bin` with SFT-format data.
+- For **QAT it is destructive**, and silently so. Several hundred steps of next-token
+  prediction on pretraining text against a model fine-tuned to answer questions will undo
+  the fine-tune. It would not error, and the perplexity — measured on that same pretraining
+  split — would *improve* while the model forgot how to hold a conversation. So the CLI
+  **refuses** QAT on any checkpoint past the base stage unless `--train-bin` names the data
+  explicitly.
+
+If you want a smaller chat model and do not have its training data to hand, `--method gptq`
+is the strongest option that never touches what the weights mean.
 
 ### GPTQ — push the error into the columns you have not done yet
 
@@ -480,10 +527,11 @@ Two behaviours worth knowing:
   over a gigabyte of Hessians; doing that inside the portal would put a heavy job in the
   same address space as the page and the scheduler that starts training at 22:00. A
   separate process fails alone.
-- **It moves to the CPU while a run is training**, and says so. Unlike the playground —
-  where the model is small and the worst case is a slow tab — a quantization job can
-  allocate a lot, and the downside of getting it wrong is the *training run* dying at 3am.
-  Choosing `cuda` explicitly overrides it, which is right when nothing is training.
+- **It moves to the CPU if a run happens to be training** — a guard, not a workflow. You
+  would normally quantize when nothing is training, and then it uses the GPU. But this
+  repo starts runs on a schedule, so the button can be pressed at 22:05 by someone who
+  forgot; a quantization job can allocate more than the card has left, and the downside is
+  the *training run* dying at 3am rather than a slow tab. `cuda` overrides it.
 
 One job at a time, for the same reason the trainer allows one run at a time.
 

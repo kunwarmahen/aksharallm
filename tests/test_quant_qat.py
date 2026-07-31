@@ -202,3 +202,78 @@ def test_every_scheme_survives_prepare_and_convert(scheme):
     with torch.no_grad():
         b, _ = model(x, targets=x)
     assert torch.allclose(a, b, atol=1e-4)
+
+
+# ---- stage-aware data guards ---------------------------------------------------------
+# Quantization runs at the *end* of the pipeline, so the checkpoint is usually a chat
+# model. These pin the guards that keep QAT from quietly undoing SFT.
+
+class _Args:
+    train_bin = None
+    calib_bin = None
+    val_bin = None
+    calib_seqs = 8
+    calib_batch = 2
+    device = "cpu"
+
+
+def test_qat_refuses_an_sft_checkpoint_without_explicit_data():
+    """The dangerous default. `sft.py` carries the *base run's* data config forward, so an
+    SFT checkpoint's train_bin is raw pretraining text. Running QAT on that fine-tunes a
+    chat model back towards next-token prediction — and the perplexity number, measured on
+    that same pretraining split, would *improve* while the model forgot how to converse."""
+    from pathlib import Path
+
+    from aksharallm.quant.cli import _train_bin
+
+    ckpt = {"config": {"data": {"train_bin": "data/blend/fineweb.bin"}}}
+    with pytest.raises(SystemExit, match="undo the SFT"):
+        _train_bin(ckpt, Path("checkpoints/x/sft_best.pt"), _Args())
+
+
+@pytest.mark.parametrize("name", ["sft_best.pt", "dpo_best.pt", "code_best.pt"])
+def test_every_post_base_stage_is_guarded(name):
+    from pathlib import Path
+
+    from aksharallm.quant.cli import _train_bin
+
+    with pytest.raises(SystemExit):
+        _train_bin({"config": {"data": {"train_bin": "x.bin"}}},
+                   Path(f"checkpoints/x/{name}"), _Args())
+
+
+def test_explicit_train_bin_satisfies_the_guard():
+    """Naming the data is the intended escape hatch — it is the *silent* default that is
+    dangerous, not QAT on a chat model per se."""
+    from pathlib import Path
+
+    from aksharallm.quant.cli import _train_bin
+
+    args = _Args()
+    args.train_bin = "data/sft/train.bin"
+    assert _train_bin({}, Path("checkpoints/x/sft_best.pt"), args) == "data/sft/train.bin"
+
+
+def test_a_base_checkpoint_still_resolves_its_own_data(tmp_path):
+    from pathlib import Path
+
+    from aksharallm.quant.cli import _train_bin
+
+    bin_path = tmp_path / "train.bin"
+    bin_path.write_bytes(b"\x00\x00")
+    got = _train_bin({"config": {"data": {"train_bin": str(bin_path)}}},
+                     Path("checkpoints/x/ckpt_best.pt"), _Args())
+    assert got == str(bin_path)
+
+
+def test_train_sources_are_used_without_shadowing_the_checkpoint_path(tmp_path):
+    """Regression: the blended-source loop used to rebind `src`, the checkpoint path."""
+    from pathlib import Path
+
+    from aksharallm.quant.cli import _train_bin
+
+    bin_path = tmp_path / "fineweb.bin"
+    bin_path.write_bytes(b"\x00\x00")
+    got = _train_bin({"config": {"data": {"train_sources": [{"bin": str(bin_path)}]}}},
+                     Path("checkpoints/x/ckpt_best.pt"), _Args())
+    assert got == str(bin_path)

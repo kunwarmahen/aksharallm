@@ -20,7 +20,7 @@ from pathlib import Path
 import torch
 
 from ..config import ModelConfig
-from ..infer.checkpoints import CheckpointStore
+from ..infer.checkpoints import CheckpointStore, stage_for
 from ..model.transformer import Transformer
 from . import bench as bench_mod
 from .awq import apply_awq
@@ -84,20 +84,48 @@ def _val_bin(ckpt: dict, override: str | None) -> str | None:
     return v if v and Path(v).is_file() else None
 
 
-def _train_bin(ckpt: dict, args) -> str:
+def _train_bin(ckpt: dict, src: Path, args) -> str:
     """Data for QAT. Prefers an explicit --train-bin, then the run's own train split,
-    then the val split (with a warning -- fine-tuning on val makes the val number a lie)."""
+    then the val split (with a warning -- fine-tuning on val makes the val number a lie).
+
+    The refusal below is the important part. Quantization happens at the *end* of the
+    pipeline -- base -> SFT -> DPO -> quantize -- so the checkpoint being quantized is
+    usually a chat model. But `sft.py` carries the *base run's* data config forward (so
+    downstream tools can still find the tokenizer), which means an SFT checkpoint's
+    `train_bin` points at raw pretraining text.
+
+    Left alone, `--method qat` on `sft_best.pt` would run several hundred steps of
+    next-token prediction on FineWeb against a model that was fine-tuned to answer
+    questions -- quietly undoing the SFT. It would not error. It would not even look
+    wrong: perplexity is measured on that same pretraining split, so the number would
+    *improve* while the model forgot how to hold a conversation.
+
+    So for anything past the base stage, QAT requires the data to be named explicitly.
+    """
     if args.train_bin:
         return args.train_bin
+
+    stage = stage_for(src.name)
+    if stage != "base":
+        raise SystemExit(
+            f"{src.name} is a {stage.upper()} checkpoint, and it records the *base run's*\n"
+            f"training data — raw pretraining text. Running QAT on that would fine-tune a\n"
+            f"chat model back towards next-token prediction and undo the {stage.upper()},\n"
+            f"silently, while the perplexity number improved.\n\n"
+            f"Pass the data this model was actually trained on:\n"
+            f"    --train-bin data/sft/train.bin\n\n"
+            f"Or quantize it without training: --method gptq is the strongest option that\n"
+            f"never touches the weights' meaning.")
+
     data = (ckpt.get("config") or {}).get("data") or {}
     for key in ("train_bin",):
         v = data.get(key)
         if v and Path(v).is_file():
             return v
     srcs = data.get("train_sources") or []
-    for src in srcs:
-        if Path(src.get("bin", "")).is_file():
-            return src["bin"]
+    for source in srcs:          # not `src` — that is the checkpoint path parameter
+        if Path(source.get("bin", "")).is_file():
+            return source["bin"]
     v = data.get("val_bin")
     if v and Path(v).is_file():
         print("  warning: no training split on disk, fine-tuning on the VALIDATION split."
@@ -119,13 +147,23 @@ def _out_path(src: Path, scheme: QuantScheme, out: str | None) -> Path:
     return src.with_name(f"{src.stem}-{scheme.label()}.pt")
 
 
-def _calibrate(model, ckpt: dict, args, want_hessian: bool):
+def _calibrate(model, ckpt: dict, args, want_hessian: bool, stage: str = "base"):
     """Run calibration text through the model, or explain why we cannot."""
     val_bin = _val_bin(ckpt, args.calib_bin or args.val_bin)
     if not val_bin:
         raise SystemExit(
             "this method needs calibration data, and the checkpoint's val split is not on "
             "disk. Pass --calib-bin with a tokenized .bin from the same tokenizer.")
+    # GPTQ and AWQ measure what each layer's inputs actually look like, so the
+    # calibration set has to resemble the model's real traffic. A chat model sees ChatML
+    # turns at inference; calibrating it on the pretraining prose its config still points
+    # at measures the wrong activations. Not destructive like the QAT case above -- the
+    # weights keep their meaning -- but it leaves quality on the table.
+    if stage != "base" and not (args.calib_bin or args.val_bin):
+        print(f"  note: {stage.upper()} checkpoint calibrating on {val_bin}, which is the "
+              f"base run's\n  pretraining split. This model sees chat-formatted text at "
+              f"inference, so\n  --calib-bin with SFT-format data will fit its activations "
+              f"better.", file=sys.stderr)
     print(f"  calibrating on {args.calib_seqs} sequences from {val_bin}"
           f"{' (+Hessians)' if want_hessian else ''}...", flush=True)
     return collect(model, val_bin, _seq_len(ckpt), n_sequences=args.calib_seqs,
@@ -174,18 +212,18 @@ def _build(src: Path, method: str, scheme: QuantScheme, args):
     quantizer = None
 
     if method == "awq":
-        calib = _calibrate(model, ckpt, args, want_hessian=False)
+        calib = _calibrate(model, ckpt, args, want_hessian=False, stage=stage_for(src.name))
         print("  searching AWQ scales...", flush=True)
         extra["awq"] = apply_awq(model, calib, scheme)
         print(f"  scaled {extra['awq']['n_sites']} sites, "
               f"mean alpha {extra['awq']['mean_alpha']:.2f}, "
               f"predicted error x{extra['awq']['mean_gain']:.2f} better")
     elif method == "gptq":
-        calib = _calibrate(model, ckpt, args, want_hessian=True)
+        calib = _calibrate(model, ckpt, args, want_hessian=True, stage=stage_for(src.name))
         print("  running GPTQ...", flush=True)
         quantizer = make_gptq_quantizer(calib, damp=args.damp)
     elif method == "qat":
-        train_bin = _train_bin(ckpt, args)
+        train_bin = _train_bin(ckpt, src, args)
         wrapped = prepare_qat(model, scheme, quantize_head=args.quantize_head, skip=skip)
         print(f"  fake-quantizing {len(wrapped)} layers, fine-tuning "
               f"{args.qat_steps} steps on {train_bin}...", flush=True)
