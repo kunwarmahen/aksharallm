@@ -1,0 +1,274 @@
+<div id="view-dashboard" class="view">
+
+<!-- One control row above everything it scopes. -->
+<section class="controls" aria-label="run controls">
+  <div class="control-group">
+    <button id="btn-start" class="primary" type="button">Start run</button>
+    <button id="btn-budget" class="budget" type="button"
+            title="How much this session gets: a step count, a stretch of time, or the whole
+budget. The trainer saves and exits when it lands, so the resume continues with no loss spike.">
+      <span class="field-label">this session</span>
+      <span class="budget-value" id="budget-label">to budget</span>
+    </button>
+    <label class="check" title="Pre-flight normally runs the tests and a 50-step smoke test
+before the real run. Skipping is only sane when resuming a config that has already trained.">
+      <input id="skip-smoke" type="checkbox">
+      <span>skip smoke test</span>
+    </label>
+  </div>
+
+  <div class="control-group">
+    <button id="btn-stop" type="button">Stop now</button>
+    <button id="btn-stop-at" type="button">Stop at…</button>
+    <button id="btn-cancel-stop" class="ghost" type="button">Cancel queued stop</button>
+  </div>
+
+  <div class="control-group control-status">
+    <span id="live" class="live" title="polling">
+      <span class="dot"></span><span id="live-label">connecting…</span>
+    </span>
+  </div>
+</section>
+
+<div id="flash" class="flash" role="status" aria-live="polite" hidden></div>
+
+<main>
+  <!-- Progress: the headline number is a step count, not a chart. -->
+  <section class="panel progress-panel">
+    <div class="progress-head">
+      <div>
+        <div class="hero" id="hero-step">–</div>
+        <div class="hero-sub" id="hero-sub">no log for this run yet</div>
+      </div>
+      <div class="progress-eta">
+        <div class="eta-label">eta to finish</div>
+        <div class="eta-value" id="eta">–</div>
+      </div>
+    </div>
+    <div class="meter" role="img" aria-label="training progress">
+      <div class="meter-fill" id="meter-fill"></div>
+      <div class="meter-mark" id="meter-stop" hidden title="queued stop"></div>
+    </div>
+    <div class="meter-legend">
+      <span id="meter-left">–</span>
+      <span id="meter-right">–</span>
+    </div>
+  </section>
+
+  <section class="tiles" aria-label="latest readings">
+    <div class="tile"><div class="tile-label">loss (ema)</div>
+      <div class="tile-value" id="t-ema">–</div><div class="tile-note" id="t-ema-note">–</div></div>
+    <div class="tile"><div class="tile-label">best val loss</div>
+      <div class="tile-value" id="t-val">–</div><div class="tile-note" id="t-val-note">–</div></div>
+    <div class="tile"><div class="tile-label">throughput</div>
+      <div class="tile-value" id="t-tok">–</div><div class="tile-note" id="t-tok-note">–</div></div>
+    <div class="tile"><div class="tile-label">MFU</div>
+      <div class="tile-value" id="t-mfu">–</div><div class="tile-note" id="t-mfu-note">–</div></div>
+    <div class="tile"><div class="tile-label">tokens seen</div>
+      <div class="tile-value" id="t-tokens">–</div><div class="tile-note" id="t-tokens-note">–</div></div>
+    <div class="tile"><div class="tile-label">session up</div>
+      <div class="tile-value" id="t-up">–</div><div class="tile-note" id="t-up-note">–</div></div>
+  </section>
+
+  <section class="chart-grid" aria-label="training curves">
+    <figure class="panel chart-card" id="card-loss">
+      <figcaption>
+        <span class="chart-title">Training loss</span>
+        <span class="chart-note">lower is better · the ema smooths the per-step noise · validation is the honest one</span>
+        <button class="ghost view-toggle" data-target="loss" type="button">table</button>
+      </figcaption>
+      <div class="chart" data-chart="loss"></div>
+      <div class="chart-table" data-table="loss" hidden></div>
+    </figure>
+
+    <figure class="panel chart-card" id="card-tok">
+      <figcaption>
+        <span class="chart-title">Throughput</span>
+        <span class="chart-note">thousand tokens per second · MFU is this same curve as a % of peak</span>
+        <button class="ghost view-toggle" data-target="tok" type="button">table</button>
+      </figcaption>
+      <div class="chart" data-chart="tok"></div>
+      <div class="chart-table" data-table="tok" hidden></div>
+    </figure>
+
+    <figure class="panel chart-card" id="card-gnorm">
+      <figcaption>
+        <span class="chart-title">Gradient norm</span>
+        <span class="chart-note">spikes are the thing to watch; the rule is the clip threshold</span>
+        <button class="ghost view-toggle" data-target="gnorm" type="button">table</button>
+      </figcaption>
+      <div class="chart" data-chart="gnorm"></div>
+      <div class="chart-table" data-table="gnorm" hidden></div>
+    </figure>
+
+    <figure class="panel chart-card" id="card-lr">
+      <figcaption>
+        <span class="chart-title">Learning rate</span>
+        <span class="chart-note">warmup, then the cosine decay to the floor</span>
+        <button class="ghost view-toggle" data-target="lr" type="button">table</button>
+      </figcaption>
+      <div class="chart" data-chart="lr"></div>
+      <div class="chart-table" data-table="lr" hidden></div>
+    </figure>
+  </section>
+
+  <section class="panel" aria-label="sessions">
+    <div class="panel-head">
+      <h2>Sessions</h2>
+      <span class="panel-note">one row per launch — a run trained over evenings is many processes</span>
+      <span class="panel-note" id="sessions-count"></span>
+    </div>
+    <div class="scroll-x scroll-y" id="sessions"></div>
+  </section>
+
+  <section class="panel" aria-label="post-training">
+    <div class="panel-head">
+      <h2>Post-training</h2>
+      <span class="panel-note">SFT → DPO / GRPO — each unlocks when its prerequisite finishes; everything runs scripts/stage.sh</span>
+    </div>
+    <div id="pipeline-stages" class="pipeline-stages"></div>
+  </section>
+
+  <section class="panel" aria-label="gpu">
+    <div class="panel-head">
+      <h2>GPU</h2>
+      <span class="panel-note" id="gpu-status">–</span>
+      <!-- One filter row above everything it scopes: the tiles and all four charts. -->
+      <div class="control-group gpu-window" role="group" aria-label="time window">
+        <button class="ghost" data-window="900" type="button">15m</button>
+        <button class="ghost" data-window="3600" type="button">1h</button>
+        <button class="ghost" data-window="21600" type="button">6h</button>
+        <button class="ghost" data-window="86400" type="button">24h</button>
+        <button class="ghost" data-window="all" type="button">all</button>
+      </div>
+    </div>
+
+    <div class="tiles gpu-tiles">
+      <div class="tile"><div class="tile-label">utilisation</div>
+        <div class="tile-value" id="g-util">–</div><div class="tile-note" id="g-util-note">–</div></div>
+      <div class="tile"><div class="tile-label">memory</div>
+        <div class="tile-value" id="g-mem">–</div><div class="tile-note" id="g-mem-note">–</div></div>
+      <div class="tile"><div class="tile-label">temperature</div>
+        <div class="tile-value" id="g-temp">–</div><div class="tile-note" id="g-temp-note">–</div></div>
+      <div class="tile"><div class="tile-label">power</div>
+        <div class="tile-value" id="g-power">–</div><div class="tile-note" id="g-power-note">–</div></div>
+    </div>
+
+    <div class="scroll-x" id="gpu-summary"></div>
+
+    <div class="chart-grid gpu-charts">
+      <figure class="panel chart-card">
+        <figcaption>
+          <span class="chart-title">Utilisation</span>
+          <span class="chart-note">percent of the time the GPU had work</span>
+          <button class="ghost view-toggle" data-target="gutil" type="button">table</button>
+        </figcaption>
+        <div class="chart" data-chart="gutil"></div>
+        <div class="chart-table" data-table="gutil" hidden></div>
+      </figure>
+      <figure class="panel chart-card">
+        <figcaption>
+          <span class="chart-title">Memory used</span>
+          <span class="chart-note">gigabytes of the card’s VRAM</span>
+          <button class="ghost view-toggle" data-target="gmem" type="button">table</button>
+        </figcaption>
+        <div class="chart" data-chart="gmem"></div>
+        <div class="chart-table" data-table="gmem" hidden></div>
+      </figure>
+      <figure class="panel chart-card">
+        <figcaption>
+          <span class="chart-title">Temperature</span>
+          <span class="chart-note">°C — a plateau near the limit means it is throttling</span>
+          <button class="ghost view-toggle" data-target="gtemp" type="button">table</button>
+        </figcaption>
+        <div class="chart" data-chart="gtemp"></div>
+        <div class="chart-table" data-table="gtemp" hidden></div>
+      </figure>
+      <figure class="panel chart-card">
+        <figcaption>
+          <span class="chart-title">Power draw</span>
+          <span class="chart-note">watts against the card’s limit</span>
+          <button class="ghost view-toggle" data-target="gpower" type="button">table</button>
+        </figcaption>
+        <div class="chart" data-chart="gpower"></div>
+        <div class="chart-table" data-table="gpower" hidden></div>
+      </figure>
+    </div>
+  </section>
+
+  <section class="panel" aria-label="schedule">
+    <div class="panel-head">
+      <h2>Schedule</h2>
+      <button id="sched-arm" class="ghost" type="button">–</button>
+      <span class="panel-note" id="sched-status">–</span>
+    </div>
+
+    <form class="sched-form" id="sched-form">
+      <label class="field">
+        <span class="field-label">run</span>
+        <select id="sched-run"></select>
+      </label>
+      <label class="field">
+        <span class="field-label">what</span>
+        <select id="sched-mode">
+          <option value="window">training window (start + stop)</option>
+          <option value="start">start only</option>
+          <option value="stop">stop only</option>
+        </select>
+      </label>
+      <label class="field">
+        <span class="field-label" id="sched-from-label">start at</span>
+        <input id="sched-from" type="time" value="22:00" step="60" required>
+      </label>
+      <label class="field" id="sched-to-field">
+        <span class="field-label">stop at</span>
+        <input id="sched-to" type="time" value="06:30" step="60">
+      </label>
+      <div class="field">
+        <span class="field-label">days</span>
+        <div class="days" id="sched-days" role="group" aria-label="days"></div>
+      </div>
+      <label class="field" id="sched-steps-field">
+        <span class="field-label">steps (optional)</span>
+        <input id="sched-steps" type="number" min="1" step="100" placeholder="to budget">
+      </label>
+      <label class="check" id="sched-smoke-field"
+             title="A scheduled start is normally a resume, so the 50-step smoke test is
+skipped. phase2.sh ignores the skip when there is no checkpoint to resume.">
+        <input id="sched-smoke" type="checkbox">
+        <span>run the smoke test</span>
+      </label>
+      <button class="primary" id="sched-add" type="submit">Add</button>
+    </form>
+
+    <div class="scroll-x" id="sched-rules"></div>
+
+    <details class="sched-events">
+      <summary>Scheduler activity</summary>
+      <pre id="sched-log" class="log"></pre>
+    </details>
+  </section>
+
+  <section class="panel" aria-label="log">
+    <div class="panel-head">
+      <h2>Log</h2>
+      <label class="field">
+        <span class="field-label">file</span>
+        <select id="log-select"></select>
+      </label>
+      <label class="check"><input id="log-follow" type="checkbox" checked><span>follow</span></label>
+      <span class="panel-note" id="log-note"></span>
+    </div>
+    <pre id="log" class="log" tabindex="0">…</pre>
+  </section>
+
+  <section class="panel" aria-label="run detail">
+    <div class="panel-head">
+      <h2>Configuration</h2>
+      <span class="panel-note">a run is a YAML plus overrides — this is what the trainer read</span>
+    </div>
+    <dl class="kv" id="config"></dl>
+    <div class="scroll-x" id="checkpoints"></div>
+  </section>
+</main>
+</div><!-- /view-dashboard -->

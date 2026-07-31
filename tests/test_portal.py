@@ -407,9 +407,32 @@ def get(url, **kw):
 def test_page_and_assets_are_served(server):
     status, body = get(server + "/")
     assert status == 200 and b"aksharallm" in body
-    for asset in ("/static/app.js", "/static/style.css"):
+    for asset in ("/static/js/main.js", "/static/css/base.css"):
         status, body = get(server + asset)
         assert status == 200 and body
+
+
+def test_index_includes_are_expanded(server):
+    """The page is assembled from static/parts/, so a marker must never reach the browser."""
+    status, body = get(server + "/")
+    assert status == 200
+    assert b"<!--#include" not in body
+    # Every view's markup arrives, not just the one that happens to be visible first.
+    for view in ("dashboard", "play", "code", "docs", "quant", "lora"):
+        assert f'id="view-{view}"'.encode() in body
+
+
+def test_static_serves_only_its_own_folders(server):
+    """One nested level is reachable; nothing else is, and nothing escapes static/."""
+    for path in (
+        "/static/js/../server.py",
+        "/static/../server.py",
+        "/static/parts/dashboard.html",   # partials are assembled, never served raw
+        "/static/js/nope.js",
+    ):
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            get(server + path)
+        assert excinfo.value.code == 404
 
 
 def test_api_lists_runs_and_reports_one(server):

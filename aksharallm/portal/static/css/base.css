@@ -1,0 +1,130 @@
+/* aksharallm portal — the palette, the theme, and the page frame.
+ *
+ * Colour comes from a validated palette: two categorical hues only (blue for the series
+ * being watched, orange for validation loss), plus greys for chrome and a reserved status
+ * set. Both light and dark steps are chosen for their own surface, not flipped.
+ * Every value below is a role, so a theme change is one block, not a hunt.
+ *
+ * Loaded first: everything else in css/ builds on these tokens. */
+
+:root {
+  color-scheme: light dark;
+
+  --surface:      #fcfcfb;   /* panels and chart surface */
+  --plane:        #f9f9f7;   /* the page behind them */
+  --ink:          #0b0b0b;
+  --ink-2:        #52514e;
+  --ink-muted:    #898781;
+  --grid:         #e1e0d9;   /* hairline gridlines */
+  --axis:         #c3c2b7;
+  --border:       rgba(11, 11, 11, 0.10);
+  --wash:         rgba(11, 11, 11, 0.04);
+
+  --series-1:     #2a78d6;   /* categorical slot 1 — blue */
+  --series-2:     #eb6834;   /* categorical slot 2 — orange */
+
+  --good:         #0ca30c;
+  --warning:      #fab219;
+  --serious:      #ec835a;
+  --critical:     #d03b3b;
+
+  --radius: 10px;
+  /* The full-bleed chrome curves harder than a panel does: at that width a 10px corner
+   * reads as a rendering artefact rather than a choice. */
+  --sheet-radius: 18px;
+  --gap: 16px;
+  /* Height of the sticky top bar, so anything that sticks below it can clear it. The bar
+   * wraps to two rows on a phone, so app.js keeps this measured rather than guessed; the
+   * value here is the one-row desktop case, used until the first measurement lands. */
+  --topbar-h: 57px;
+
+  /* One content column for the whole portal. Every view is capped at --page-max and
+   * centred, so a tab switch never moves the left edge. The bands that run edge to edge —
+   * the top bar, the control row, the flash message — keep their background full-bleed but
+   * take --page-gutter, which is the same padding *plus* whatever the centred column is
+   * inset by. Without it, on a monitor wider than the column, the Start button sat 210px
+   * to the left of the panels it controls. */
+  --page-max: 1800px;
+  --page-pad: clamp(16px, 3vw, 32px);
+  --page-gutter: calc(var(--page-pad) + max(0px, (100% - var(--page-max)) / 2));
+  --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+/* Dark values are declared under both scopes: the media query covers the OS setting, the
+ * data-theme scope covers this page's own toggle, which must win in both directions. */
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface: #1a1a19;
+    --plane:   #0d0d0d;
+    --ink:     #ffffff;
+    --ink-2:   #c3c2b7;
+    --ink-muted: #898781;
+    --grid:    #2c2c2a;
+    --axis:    #383835;
+    --border:  rgba(255, 255, 255, 0.10);
+    --wash:    rgba(255, 255, 255, 0.05);
+    --series-1: #3987e5;
+    --series-2: #d95926;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: #1a1a19;
+  --plane:   #0d0d0d;
+  --ink:     #ffffff;
+  --ink-2:   #c3c2b7;
+  --ink-muted: #898781;
+  --grid:    #2c2c2a;
+  --axis:    #383835;
+  --border:  rgba(255, 255, 255, 0.10);
+  --wash:    rgba(255, 255, 255, 0.05);
+  --series-1: #3987e5;
+  --series-2: #d95926;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0 0 48px;
+  background: var(--plane);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- layout ------------------------------------------------------------------------ */
+main {
+  display: grid; gap: var(--gap);
+  padding: var(--gap) var(--page-pad);
+  max-width: var(--page-max); margin: 0 auto;
+}
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  margin: 0;
+}
+
+/* A grid item's automatic minimum size is the min-content width of what is inside it, so a
+ * panel wrapping a wide table sets a floor under its track — and therefore under the whole
+ * page. The `.scroll-x` inside that panel then never scrolls, because the page scrolls
+ * first: on a phone the sessions table alone held the document at 859px. `min-width: 0`
+ * hands the scrolling back to the element that was built to do it. Every grid that holds
+ * panels needs this; it is invisible until real data arrives and a row gets wide. */
+main > *,
+.chart-grid > *, .tiles > *,
+.code-layout > *, .play-layout > *, .quant-layout > *, .lora-layout > *, .docs-layout > * {
+  min-width: 0;
+}
+.panel-head {
+  display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 12px;
+}
+.panel-head h2 { font-size: 14px; font-weight: 650; margin: 0; }
+.panel-note { color: var(--ink-muted); font-size: 12px; }
+#sessions-count { margin-left: auto; }

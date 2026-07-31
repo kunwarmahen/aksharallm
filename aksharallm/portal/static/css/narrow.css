@@ -1,0 +1,50 @@
+/* Narrow screens. Loaded last, so these overrides win over every panel above. */
+
+/* ---- narrow screens ------------------------------------------------------------------
+ * The top bar is sticky, so its height is spent permanently — and left to wrap on its own
+ * it went to three rows and 171px, a fifth of a phone screen and tall enough to swallow
+ * the whole control band as soon as the page scrolled, which reads as the controls
+ * behaving differently from everything else on the page. Below the width where all three
+ * groups fit on one line, the tab strip takes a row of its own instead: two rows, one
+ * predictable height, no wrapping that depends on how many tabs exist.
+ */
+@media (max-width: 1100px) {
+  .tabs { order: 3; flex: 1 0 100%; margin-left: -4px; }
+}
+
+/* A phone drops what the screen already tells you, and lets each control group have a
+ * full-width row of its own. */
+@media (max-width: 640px) {
+  /* One narrower gutter for the whole page, set once — the column, the full-bleed bands
+   * and the footer all read it, so they cannot drift apart. */
+  :root { --page-pad: clamp(12px, 4vw, 16px); }
+  .topbar { padding: 10px var(--page-gutter); gap: 8px 12px; }
+  .brand-sub { display: none; }              /* the mark and the name already say it */
+  .topbar-right { gap: 10px; }
+  /* The select carries `aria-label="run"`, so the printed label is pure height. */
+  #run-field .field-label { display: none; }
+
+  /* The control band. Each group takes its own full-width row in the order you reach for
+   * them, and the poll status rejoins the flow rather than sitting stranded off to the
+   * right of a row of its own. */
+  .controls { padding: 12px var(--page-gutter); gap: 12px; }
+  .control-group { width: 100%; }
+  .control-group .field { flex: 1 1 120px; }
+  .controls input[type="number"] { width: 100%; }
+  .control-status { margin-left: 0; }
+  button.budget { flex: 1 1 120px; }
+
+  /* The dialog gives up its side padding before it gives up the dial, and its buttons go
+   * full width — a 44px target beats a tidy row on a screen held in one hand. */
+  dialog.bound { padding: 16px; }
+  .bound-actions button { flex: 1 1 100%; padding: 10px 13px; }
+
+  /* Stacked, the LoRA nodes are an equation read downwards, so the operators belong on
+   * their own centred line rather than stranded to the right of each box. */
+  .lora-plus, .lora-eq { flex: 1 0 100%; justify-content: center; }
+
+  /* Panels keep their border and radius but stop spending 40px of a 390px screen on
+   * padding. */
+  .panel { padding: 14px; }
+  .docs-reader { padding: 14px; }
+}

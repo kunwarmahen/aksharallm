@@ -1,0 +1,91 @@
+/* Chart cards, the drag-to-zoom affordance, and the data tables that are their twin.
+ * Pairs with js/charts.js. */
+
+/* ---- charts ----------------------------------------------------------------------- */
+/* As many charts per row as fit at 420px each — four on a wide monitor, one on a phone.
+ * See the note on `.tiles` for why the floor is `min(420px, 100%)` rather than `420px`. */
+.chart-grid { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); }
+.chart-card figcaption {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px;
+}
+.chart-title { font-size: 14px; font-weight: 650; }
+.chart-note { color: var(--ink-muted); font-size: 12px; flex: 1 1 140px; }
+.view-toggle { font-size: 12px; padding: 3px 8px; }
+/* The card grows with the chart, including the x-axis band — never a nested scrollbar. */
+.chart { position: relative; width: 100%; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+
+.legend { display: flex; gap: 16px; flex-wrap: wrap; margin: 2px 0 6px; font-size: 12px; color: var(--ink-2); }
+.legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.legend-swatch { width: 12px; height: 3px; border-radius: 2px; }
+.legend-swatch.dot { width: 9px; height: 9px; border-radius: 50%; }
+
+.axis-label { fill: var(--ink-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.grid-line { stroke: var(--grid); stroke-width: 1; }
+.axis-line { stroke: var(--axis); stroke-width: 1; }
+.rule-line { stroke: var(--axis); stroke-width: 1; stroke-dasharray: 4 4; }
+.rule-label { fill: var(--ink-muted); font-size: 10px; }
+.series-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.series-line.faint { stroke-width: 1.25; opacity: 0.75; }
+.series-dot { stroke: var(--surface); stroke-width: 2; }
+.crosshair { stroke: var(--axis); stroke-width: 1; }
+/* The crosshair reads on hover; the crosshair cursor says the plot is also draggable. */
+.hit { fill: transparent; cursor: crosshair; touch-action: none; }
+.chart-empty { color: var(--ink-muted); padding: 28px 4px; font-size: 13px; }
+
+/* ---- drag to zoom ---- */
+.zoom-band { fill: var(--series-1); opacity: 0.14; }
+.chart-tools {
+  position: absolute; top: 0; right: 0; display: flex; align-items: center; gap: 6px;
+}
+/* The hint is an affordance, not chrome: it appears when the pointer is on the card. */
+.zoom-hint {
+  color: var(--ink-muted); font-size: 11px; pointer-events: none;
+  opacity: 0; transition: opacity 0.12s ease-in;
+}
+.chart-card:hover .zoom-hint, .chart:hover .zoom-hint { opacity: 1; }
+button.zoom-reset {
+  font-size: 11px; padding: 2px 8px; font-variant-numeric: tabular-nums;
+  border-color: var(--series-1); color: var(--series-1);
+}
+
+.tooltip {
+  position: fixed; z-index: 60; pointer-events: none;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+  padding: 8px 10px; font-size: 12px; min-width: 130px;
+}
+.tooltip .tt-head { color: var(--ink-muted); margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+.tooltip .tt-row { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+.tooltip .tt-row span:last-child { font-variant-numeric: tabular-nums; font-weight: 600; }
+.tooltip .tt-key { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
+.tooltip .tt-swatch { width: 9px; height: 3px; border-radius: 2px; }
+
+/* ---- tables ----------------------------------------------------------------------- */
+.scroll-x { overflow-x: auto; }
+/* A long table scrolls in place instead of pushing the rest of the page down. */
+.scroll-y { overflow-y: auto; max-height: 320px; }
+.scroll-y table.data thead th {
+  position: sticky; top: 0; z-index: 1; background: var(--surface);
+  /* border-collapse drops the sticky row's own border, so draw it as a shadow. */
+  border-bottom: 0; box-shadow: inset 0 -1px 0 var(--border);
+}
+table.data { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+table.data th, table.data td {
+  text-align: right; padding: 6px 10px; white-space: nowrap;
+  border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums;
+}
+table.data th {
+  color: var(--ink-muted); font-weight: 600; font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.05em; font-variant-numeric: normal;
+}
+table.data th:first-child, table.data td:first-child { text-align: left; }
+table.data tbody tr:last-child td { border-bottom: 0; }
+table.data tr.current td { background: var(--wash); }
+.chart-table { max-height: 320px; overflow: auto; }
+
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 18px; margin: 0 0 14px; }
+.kv dt { color: var(--ink-muted); font-size: 12px; }
+.kv dd { margin: 0; font-size: 13px; }
+.kv dd code, code { font-family: var(--mono); font-size: 12px; }

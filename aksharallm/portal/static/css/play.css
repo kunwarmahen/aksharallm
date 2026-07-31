@@ -1,0 +1,134 @@
+/* The playground: configure, converse, compare. Pairs with js/play.js. */
+
+/* ---- playground tab -------------------------------------------------------------------- */
+/* Three columns again, and for the same reason as the Code tab: the thing you configure,
+ * the thing you read, and the thing you compare against. The middle column is the only one
+ * that grows, because the transcript is what the tab is for. */
+.play-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1.6fr) minmax(280px, 0.9fr);
+  gap: var(--gap);
+  padding: var(--gap) var(--page-pad);
+  max-width: var(--page-max); margin: 0 auto;
+  align-items: start;
+}
+.play-layout > .panel {
+  height: calc(100vh - 150px); min-height: 420px;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.play-setup, .play-history { overflow-y: auto; }
+/* `.field` sets `display: flex`, which beats the user agent's `[hidden] { display: none }`
+ * — so a field toggled with `.hidden = true` stays stubbornly on screen. Anything this
+ * stylesheet gives an explicit display to has the same problem; making the rule global is
+ * the version that cannot be forgotten the next time a panel is added. */
+[hidden] { display: none !important; }
+
+.field.wide { width: 100%; }
+.field.wide select, .field.wide input {
+  width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--plane); color: var(--ink); font: inherit; font-size: 12.5px;
+}
+
+/* What this checkpoint is. A definition list, because every row is a term and its value —
+ * and because the output above it means nothing without the step it came from. */
+.play-meta {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px;
+  margin: 10px 0; font-size: 12px;
+}
+.play-meta > div { display: flex; justify-content: space-between; gap: 6px; }
+.play-meta dt { color: var(--ink-muted); margin: 0; }
+.play-meta dd { margin: 0; font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
+.play-meta .hint, .play-meta .err { grid-column: 1 / -1; }
+
+/* Where it will run and why — the one thing on this tab that can cost you a training run. */
+.play-warn {
+  font-size: 12px; line-height: 1.5; color: var(--ink-2);
+  padding: 8px 10px; margin-bottom: 10px;
+  border: 1px solid var(--border); border-left: 3px solid var(--good);
+  border-radius: 8px; background: var(--wash);
+}
+.play-warn.warn-slow { border-left-color: var(--warning); }
+
+.modes { margin: 4px 0 2px; }
+.modes .ghost.on { background: var(--wash); color: var(--ink); border-color: var(--border); }
+.modes .ghost:disabled { opacity: 0.4; }
+.play-modenote { font-size: 11.5px; color: var(--ink-muted); margin: 0 0 10px; line-height: 1.5; }
+
+.play-presets { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
+.play-presets .panel-head { width: 100%; margin-bottom: 2px; }
+.play-presets h3 { font-size: 12px; font-weight: 650; margin: 0; color: var(--ink-2); }
+button.preset {
+  padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px;
+  font-family: var(--mono); font-size: 11.5px; color: var(--ink-2);
+}
+button.preset:hover { background: var(--wash); color: var(--ink); }
+
+.play-knobs { margin-bottom: 10px; }
+.play-knobs summary { cursor: pointer; font-size: 12px; color: var(--ink-muted); padding: 2px 0; }
+.knob-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin: 8px 0; }
+.knob-grid input {
+  width: 100%; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--plane); color: var(--ink); font-family: var(--mono); font-size: 12px;
+}
+.hint { font-size: 11.5px; color: var(--ink-muted); line-height: 1.5; margin: 6px 0 0; }
+
+/* The transcript. Scrolls on its own so the compose box never leaves the screen. */
+.play-transcript { flex: 1; overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
+.turn { margin-bottom: 14px; }
+.turn-meta {
+  font-family: var(--mono); font-size: 10.5px; color: var(--ink-muted);
+  margin-bottom: 3px; letter-spacing: 0.01em;
+}
+.turn-body { white-space: pre-wrap; font-size: 13.5px; line-height: 1.6; }
+.turn-user .turn-body {
+  color: var(--ink-2); border-left: 2px solid var(--border); padding-left: 10px;
+}
+.turn-model .turn-body { color: var(--ink); }
+.turn.mono .turn-body { font-family: var(--mono); font-size: 12.5px; line-height: 1.5; }
+
+/* The sandbox verdict. Colour carries a second signal (the word) so it is never the only
+ * thing distinguishing a pass from a failure. */
+.play-test {
+  margin-top: 8px; padding: 7px 10px; border-radius: 8px; font-size: 12px;
+  border: 1px solid var(--border); border-left: 3px solid var(--axis); background: var(--wash);
+}
+.play-test.ok { border-left-color: var(--good); }
+.play-test.bad { border-left-color: var(--critical); }
+.play-test.warn { border-left-color: var(--warning); }
+.play-test summary { cursor: pointer; color: var(--ink-muted); margin-top: 4px; }
+.play-test pre {
+  white-space: pre-wrap; font-family: var(--mono); font-size: 11px; color: var(--ink-2);
+  background: var(--surface); border-radius: 6px; padding: 7px 9px; margin: 5px 0 0;
+  max-height: 220px; overflow-y: auto;
+}
+
+.play-compose { margin-top: 12px; }
+#play-prompt {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--plane); color: var(--ink); font: inherit; font-size: 13px;
+  font-family: var(--mono); resize: vertical; margin-bottom: 8px;
+}
+.grow { flex: 1; }
+
+/* History: the reason checkpoints are not archived. Each row carries the step and loss of
+ * the model that produced it, so two rows are a comparison. */
+.play-hist { overflow-y: auto; flex: 1; margin: 8px -4px 0; padding: 0 4px; }
+.hist-row {
+  border-top: 1px solid var(--border); padding: 8px 0; font-size: 12px;
+}
+.hist-row header { font-family: var(--mono); font-size: 11px; color: var(--ink); }
+.hist-row.cmp header { color: var(--series-1); font-weight: 650; }
+.hist-when { font-size: 10.5px; color: var(--ink-muted); margin: 2px 0 4px; }
+.hist-prompt { color: var(--ink-2); margin: 0 0 3px; font-size: 11.5px; }
+.hist-out { color: var(--ink); margin: 0; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
+.pill {
+  display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px;
+  font-family: var(--mono); border: 1px solid var(--border);
+}
+.pill.ok { color: var(--good); border-color: var(--good); }
+.pill.bad { color: var(--critical); border-color: var(--critical); }
+
+@media (max-width: 1180px) {
+  .play-layout { grid-template-columns: 1fr; }
+  .play-layout > .panel { height: auto; max-height: 70vh; }
+}

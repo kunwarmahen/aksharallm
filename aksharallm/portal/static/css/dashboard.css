@@ -1,0 +1,136 @@
+/* The dashboard's own panels: progress, stat tiles, schedule, log, GPU, and the
+ * post-training pipeline. Pairs with js/dashboard.js. */
+
+/* ---- progress --------------------------------------------------------------------- */
+.progress-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--gap); flex-wrap: wrap; }
+/* Proportional figures on the hero number: tabular digits look loose at display size. */
+.hero { font-size: clamp(28px, 4vw, 40px); font-weight: 620; letter-spacing: -0.02em; line-height: 1.1; }
+.hero-sub { color: var(--ink-2); margin-top: 2px; }
+.progress-eta { text-align: right; }
+.eta-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); }
+.eta-value { font-size: 20px; font-weight: 600; }
+
+.meter {
+  position: relative; height: 8px; margin-top: 16px;
+  background: var(--wash); border-radius: 4px; overflow: hidden;
+}
+.meter-fill {
+  height: 100%; width: 0; background: var(--series-1);
+  border-radius: 4px; transition: width 400ms ease;
+}
+.meter-mark {
+  position: absolute; top: -2px; width: 2px; height: 12px;
+  background: var(--serious); border-radius: 1px;
+}
+/* A stop queued by wall-clock lands at a step nobody can know in advance, so its mark is
+ * drawn as a dotted column rather than a solid rule: the same information, minus the claim
+ * of precision. */
+.meter-mark.is-estimate {
+  background: repeating-linear-gradient(
+    to bottom, var(--serious) 0 3px, transparent 3px 5px);
+}
+.meter-legend {
+  display: flex; justify-content: space-between;
+  margin-top: 6px; color: var(--ink-muted); font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- stat tiles ------------------------------------------------------------------- */
+/* `min(…, 100%)` on the track floor, not a bare pixel value: `minmax(150px, …)` never
+ * shrinks below 150px, so on a phone the track stays wider than the screen and drags the
+ * whole page into a horizontal scroll. The `min()` lets the last column collapse instead. */
+.tiles { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); }
+.tile {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px 16px;
+}
+.tile-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-muted); }
+.tile-value { font-size: 24px; font-weight: 600; letter-spacing: -0.01em; margin-top: 2px; }
+.tile-note { color: var(--ink-muted); font-size: 12px; }
+
+/* ---- schedule ----------------------------------------------------------------------- */
+.sched-form {
+  display: flex; flex-wrap: wrap; gap: 12px 16px; align-items: flex-end;
+  padding-bottom: 16px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.sched-form input[type="time"] {
+  font: inherit; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--axis); border-radius: 8px; padding: 6px 9px;
+  font-variant-numeric: tabular-nums;
+}
+/* Seven toggles plus the presets are wider than a phone; they wrap onto a second line
+ * rather than setting a floor under the schedule panel. */
+.days { display: flex; gap: 6px 4px; flex-wrap: wrap; }
+/* Day toggles carry their state in aria-pressed and a filled background, never colour
+ * alone — and each keeps its initial letter, so the pattern is readable at a glance. */
+.day {
+  width: 30px; padding: 6px 0; text-align: center;
+  border: 1px solid var(--axis); border-radius: 7px;
+  background: var(--surface); color: var(--ink-muted);
+  font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.day[aria-pressed="true"] {
+  background: var(--series-1); border-color: var(--series-1); color: #fff;
+}
+.day-presets { display: flex; gap: 6px; margin-left: 4px; }
+.day-presets button { padding: 5px 9px; font-size: 12px; font-weight: 500; }
+
+.sched-events { margin-top: 14px; }
+.sched-events summary {
+  cursor: pointer; color: var(--ink-2); font-size: 12px; margin-bottom: 8px;
+}
+.sched-events .log { max-height: 200px; }
+.rule-paused td { opacity: 0.5; }
+.row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.row-actions button { padding: 3px 9px; font-size: 12px; }
+
+/* ---- log -------------------------------------------------------------------------- */
+.log {
+  margin: 0; padding: 12px 14px; max-height: 380px; overflow: auto;
+  background: var(--plane); border: 1px solid var(--border); border-radius: 8px;
+  font-family: var(--mono); font-size: 12px; line-height: 1.5;
+  white-space: pre; color: var(--ink-2);
+}
+
+.footer {
+  display: flex; gap: 10px 24px; flex-wrap: wrap;
+  max-width: var(--page-max); margin: 0 auto; padding: 4px var(--page-pad);
+  color: var(--ink-muted); font-size: 12px;
+}
+
+/* A refetch holds the previous render at reduced opacity — no skeleton flash, no jump. */
+.stale main { opacity: 0.72; transition: opacity 200ms ease; }
+
+/* ---- gpu ------------------------------------------------------------------------------ */
+/* The training band is context, not a series: a neutral wash that the lines sit on top of,
+ * with a legend entry so it is never an unexplained grey stripe. */
+.span-band { fill: var(--ink-muted); opacity: 0.11; }
+.legend-swatch.band {
+  width: 12px; height: 10px; border-radius: 2px;
+  background: var(--ink-muted); opacity: 0.35;
+}
+.gpu-window { margin-left: auto; gap: 4px; }
+.gpu-window button { padding: 4px 10px; font-size: 12px; }
+.gpu-tiles { margin-bottom: var(--gap); }
+.gpu-tiles .tile { border-color: var(--border); }
+/* Nested panels inside the GPU section shouldn't double up on chrome. */
+.gpu-charts .panel { padding: 14px 16px; }
+#gpu-summary { margin-bottom: var(--gap); }
+
+/* Post-training pipeline panel (SFT -> DPO / GRPO) */
+.pipeline-stages { display: flex; flex-wrap: wrap; gap: .75rem; }
+.stage { flex: 1 1 180px; border: 1px solid var(--border); border-radius: 8px;
+         padding: .6rem .7rem; background: var(--wash); }
+.stage-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.stage-name { font-weight: 600; letter-spacing: .02em; }
+.stage-sub { font-size: .82rem; opacity: .75; margin: .35rem 0 .55rem; min-height: 2.2em; }
+.stage-actions { display: flex; gap: .4rem; }
+.stage-actions button { flex: 1; }
+.stage-actions button:disabled { opacity: .45; cursor: not-allowed; }
+.badge-pipe-blocked { background: #4b5563; color: #e5e7eb; }
+.badge-pipe-ready   { background: var(--series-1); color: #fff; }
+.badge-pipe-running { background: #d97706; color: #fff; }
+.badge-pipe-done    { background: #059669; color: #fff; }
+.stage-running { border-color: #d97706; }
+.stage-done    { border-color: #059669; }

@@ -148,7 +148,11 @@ aksharallm/
 │   │   ├── gpu.py            nvidia-smi sampling, history, training-vs-idle summary
 │   │   ├── explain.py        source browser + a local Ollama model that explains it
 │   │   ├── server.py         stdlib http.server + a small JSON API
-│   │   └── static/           one page, hand-written SVG charts, no dependencies
+│   │   └── static/           the client: no build step, no framework, no dependencies
+│   │       ├── index.html        the shell; server fills its <!--#include --> markers
+│   │       ├── parts/<tab>.html  markup, one file per view
+│   │       ├── js/<tab>.js       ES modules, one per view (+ core/state/router/charts)
+│   │       └── css/<tab>.css     rules, one per view (+ base/chrome/controls/narrow)
 │   ├── eval/evaluate.py  perplexity, HellaSwag, sample generations
 │   └── infer/            talking to a checkpoint, and judging what comes back
 │       ├── generate.py       KV-cache sampling loop (streaming + one-shot)

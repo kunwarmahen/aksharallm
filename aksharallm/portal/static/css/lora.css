@@ -1,0 +1,93 @@
+/* The finetune tab. Pairs with js/lora.js. */
+
+/* ---------------------------------------------------------------- finetune tab -------
+ * Same two-column shape as Quantize, with one addition above it: the "what this does"
+ * strip. LoRA is the one feature here whose point is a diagram rather than a number, so
+ * the tab spends a row of vertical space explaining `y = Wx + BAx` before offering any
+ * controls.
+ */
+.lora-why {
+  padding: var(--gap) var(--page-pad) 0;
+  max-width: var(--page-max); margin: 0 auto;
+}
+.lora-diagram {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.lora-node {
+  flex: 1 1 180px; min-width: 160px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 3px;
+}
+.lora-node strong { font-size: 12px; font-weight: 600; }
+.lora-node span { font-size: 11px; color: var(--ink-muted); font-family: var(--mono); }
+/* Frozen vs trained is the distinction the whole technique rests on, so it is the one
+ * thing here that gets colour. */
+.lora-frozen { background: var(--wash); }
+.lora-trained { border-color: var(--series-1); }
+.lora-out { border-style: dashed; }
+.lora-plus, .lora-eq {
+  display: flex; align-items: center; color: var(--ink-muted);
+  font-size: 16px; font-weight: 500; flex: none;
+}
+
+/* The prose, one click away. Sits inline at the end of the diagram row so opening it does
+   not shove the controls down until someone actually asks for it. */
+.lora-explain { flex: none; font-size: 12px; }
+.lora-explain > summary {
+  cursor: pointer; color: var(--ink-muted); padding: 4px 2px;
+  list-style: none; white-space: nowrap;
+}
+.lora-explain > summary::-webkit-details-marker { display: none; }
+/* A dotted underline rather than a "?" glyph: the label already asks the question, and a
+   marker beside it read as a double question mark. */
+.lora-explain > summary { text-decoration: underline dotted; text-underline-offset: 3px; }
+.lora-explain > summary:hover { color: var(--ink); }
+.lora-explain[open] > summary { margin-bottom: 2px; }
+.lora-explain[open] { flex: 1 1 100%; }
+.lora-explain > p {
+  margin: 6px 0 0; font-size: 13px; line-height: 1.6;
+  color: var(--ink-2); max-width: 76ch;
+}
+
+.lora-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: var(--gap);
+  padding: var(--gap) var(--page-pad);
+  max-width: var(--page-max); margin: 0 auto;
+  align-items: start;
+}
+.lora-layout > .panel {
+  height: calc(100vh - 210px); min-height: 380px;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.lora-form { overflow-y: auto; gap: 10px; }
+.lora-form .field { margin-top: 4px; }
+.lora-main { gap: 10px; overflow-y: auto; }
+/* Every block in the results column sizes to its own content and the *panel* scrolls.
+ * Without this the flex children shrink below their content and the budget note lands on
+ * top of the heading beneath it. */
+.lora-main > * { flex: 0 0 auto; }
+.lora-sep { margin-top: 14px; }
+
+.lora-headline {
+  font-size: 13px; line-height: 1.5; color: var(--ink);
+  padding: 8px 10px; border-radius: var(--radius); background: var(--wash);
+  margin-bottom: 8px;
+}
+.lora-headline:empty { display: none; }
+.lora-budget, .lora-adapters { min-height: 60px; }
+
+/* A width-proportional bar in the last column: the 15x gap between full fine-tuning and
+ * QLoRA is far easier to see than to read off six-figure byte counts. */
+.q-table td.bar-cell { width: 22%; padding-left: 4px; }
+.q-table .bar {
+  display: block; height: 8px; border-radius: 4px;
+  background: var(--series-1); opacity: 0.55;
+}
+.q-table tr.q-baseline .bar { background: var(--series-2); opacity: 0.7; }
+
+@media (max-width: 900px) {
+  .lora-layout { grid-template-columns: 1fr; }
+  .lora-layout > .panel { height: auto; max-height: 70vh; }
+}

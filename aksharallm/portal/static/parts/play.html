@@ -1,0 +1,102 @@
+<!-- The Playground tab: talk to the model you are training. Two columns — what to ask on
+     the left, what it said on the right — plus a history drawer, because the interesting
+     question is never "what did it say" but "is that better than last week". -->
+<div id="view-play" class="view" hidden>
+  <section class="play-layout">
+
+    <aside class="panel play-setup">
+      <div class="panel-head">
+        <h2>Model</h2>
+        <span class="panel-note" id="play-count">–</span>
+      </div>
+
+      <label class="field wide">
+        <span class="field-label">checkpoint</span>
+        <select id="play-ckpt" aria-label="checkpoint"></select>
+      </label>
+      <!-- One base model, several specialisations. Switching this is the fastest way to
+           hear what a fine-tune actually did: same weights, same prompt, one 4 MB file
+           different. -->
+      <label class="field wide" id="play-adapter-field" hidden>
+        <span class="field-label">adapter</span>
+        <select id="play-adapter" aria-label="adapter"></select>
+      </label>
+      <div class="play-meta" id="play-meta"></div>
+      <div class="play-warn" id="play-warn" role="status" hidden></div>
+
+      <div class="control-group modes" id="play-modes" role="group" aria-label="mode">
+        <button class="ghost on" type="button" data-mode="complete">Complete</button>
+        <button class="ghost" type="button" data-mode="chat">Chat</button>
+        <button class="ghost" type="button" data-mode="code">Python</button>
+      </div>
+      <p class="play-modenote" id="play-modenote"></p>
+
+      <div class="play-presets" id="play-presets"></div>
+
+      <details class="play-knobs">
+        <summary>sampling</summary>
+        <div class="knob-grid">
+          <label class="field"><span class="field-label">max tokens</span>
+            <input id="k-max" type="number" min="1" max="1024" step="16"></label>
+          <label class="field"><span class="field-label">temperature</span>
+            <input id="k-temp" type="number" min="0" max="2" step="0.05"></label>
+          <label class="field"><span class="field-label">top-k</span>
+            <input id="k-topk" type="number" min="0" max="1000" step="1"></label>
+          <label class="field"><span class="field-label">top-p</span>
+            <input id="k-topp" type="number" min="0" max="1" step="0.01"></label>
+          <label class="field"><span class="field-label">rep. penalty</span>
+            <input id="k-rep" type="number" min="0.5" max="3" step="0.05"></label>
+          <label class="field"><span class="field-label">seed</span>
+            <input id="k-seed" type="number" placeholder="random"></label>
+        </div>
+        <p class="hint">Temperature 0 is greedy — the setting to use when comparing two
+          checkpoints, since it removes the sampling luck. A fixed seed does the same for
+          temperature above 0.</p>
+      </details>
+
+      <label class="field wide" id="play-system-field" hidden>
+        <span class="field-label">system prompt</span>
+        <input id="play-system" type="text" autocomplete="off">
+      </label>
+
+      <div class="control-group">
+        <button id="play-unload" class="ghost" type="button">Unload model</button>
+      </div>
+      <p class="hint" id="play-resident">–</p>
+    </aside>
+
+    <section class="panel play-main">
+      <div class="panel-head">
+        <h2 id="play-title">Completion</h2>
+        <span class="panel-note" id="play-status"></span>
+      </div>
+
+      <div id="play-transcript" class="play-transcript" aria-live="polite"></div>
+
+      <form id="play-form" class="play-compose">
+        <textarea id="play-prompt" rows="3" autocomplete="off"
+                  placeholder="Type a prompt and the model continues it…"></textarea>
+        <div class="control-group">
+          <button id="play-go" class="primary" type="submit">Generate</button>
+          <button id="play-stop" class="ghost" type="button" hidden>Stop</button>
+          <button id="play-clear" class="ghost" type="button">Clear</button>
+          <span class="grow"></span>
+          <button id="play-suite" class="ghost" type="button">Run the whole suite</button>
+        </div>
+      </form>
+    </section>
+
+    <aside class="panel play-history">
+      <div class="panel-head">
+        <h2>History</h2>
+        <span class="panel-note" id="play-hist-note">–</span>
+      </div>
+      <label class="field wide">
+        <span class="field-label">compare a probe across steps</span>
+        <select id="play-compare" aria-label="compare probe"></select>
+      </label>
+      <div id="play-hist" class="play-hist"></div>
+    </aside>
+
+  </section>
+</div><!-- /view-play -->

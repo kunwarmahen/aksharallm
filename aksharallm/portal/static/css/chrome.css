@@ -1,0 +1,52 @@
+/* The chrome that never changes: the sticky top bar, and the tab strip inside it. */
+
+/* ---- top bar ------------------------------------------------------------------------ */
+.topbar {
+  display: flex; flex-wrap: wrap; gap: var(--gap);
+  align-items: center; justify-content: space-between;
+  padding: 14px var(--page-gutter);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: sticky; top: 0; z-index: 20;
+  /* The chrome is a sheet the page scrolls under, so it ends in a curve rather than a hard
+   * edge. Bottom corners only — the sheet is anchored to the top of the window. Where the
+   * control band sits directly beneath, both are --surface and the seam is invisible, so
+   * the two read as one sheet with one curve at the end of it. */
+  border-radius: 0 0 var(--sheet-radius) var(--sheet-radius);
+}
+/* The dashboard is the one view that puts a second band under the bar. Two curves stacked
+ * would notch the page background in at the seam, so the bar keeps its square edge there
+ * and the control band below it carries the curve for both. */
+.topbar:has(+ .view:not([hidden]) > .controls) { border-radius: 0; }
+.brand { display: flex; align-items: baseline; gap: 10px; }
+.brand .mark {
+  width: 22px; height: 22px; border-radius: 6px; align-self: center;
+  background: url('/static/favicon.svg') center / contain no-repeat;
+}
+.brand-name { font-weight: 650; letter-spacing: -0.01em; }
+.brand-sub { color: var(--ink-muted); }
+.topbar-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+
+/* ---- tabs ----------------------------------------------------------------------------- */
+/* Two views, one page. The tab strip sits in the top bar so the brand, the view and the
+ * run selector read as one line of context. */
+/* Six tabs are wider than a phone. A flex item refuses to shrink past its content, so
+ * without `min-width: 0` the strip sets a floor under the whole page and every panel
+ * inherits the overflow. Instead the strip scrolls sideways on its own: `overflow-x`
+ * makes its min-content zero, and the padding/negative-margin pair keeps room for the
+ * focus ring, which the scroll container would otherwise clip. */
+.tabs {
+  display: flex; gap: 4px;
+  min-width: 0; overflow-x: auto; overscroll-behavior-x: contain;
+  padding: 4px; margin: -4px -4px -4px 4px;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  padding: 6px 14px; border-color: transparent; color: var(--ink-2);
+  font-weight: 550; flex: none;
+}
+.tab:hover:not(.on) { border-color: var(--border); }
+.tab.on {
+  background: var(--wash); color: var(--ink); border-color: var(--border);
+}

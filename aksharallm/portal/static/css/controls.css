@@ -1,0 +1,148 @@
+/* The dashboard's control row, and the bound picker it opens — the dialog that says how
+ * far the next launch should run. */
+
+/* ---- controls ---------------------------------------------------------------------- */
+.controls {
+  display: flex; flex-wrap: wrap; gap: var(--gap) 24px; align-items: flex-end;
+  padding: 14px var(--page-gutter);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 0 0 var(--sheet-radius) var(--sheet-radius);
+}
+.control-group { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.control-status { margin-left: auto; align-items: center; }
+
+button {
+  font: inherit; font-weight: 550;
+  color: var(--ink); background: var(--surface);
+  border: 1px solid var(--axis); border-radius: 8px;
+  padding: 7px 13px; cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+button:hover:not(:disabled) { background: var(--wash); }
+button:disabled { opacity: 0.42; cursor: not-allowed; }
+button.primary { background: var(--series-1); border-color: var(--series-1); color: #fff; }
+button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--series-1); }
+button.ghost { border-color: transparent; color: var(--ink-2); }
+button.ghost:hover:not(:disabled) { border-color: var(--border); }
+:focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
+
+.field { display: flex; flex-direction: column; gap: 3px; }
+.field-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--ink-muted);
+}
+select, input[type="number"] {
+  font: inherit; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--axis); border-radius: 8px; padding: 6px 9px;
+}
+input[type="number"] { width: 120px; font-variant-numeric: tabular-nums; }
+.check { display: flex; align-items: center; gap: 6px; color: var(--ink-2); padding-bottom: 7px; }
+.check input { accent-color: var(--series-1); }
+
+/* The session budget sits where its number field used to, and keeps that shape: a label
+ * above a value. It is a button because the value is chosen in a dialog, not typed. */
+button.budget {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  padding: 3px 11px 4px; min-width: 120px; text-align: left;
+}
+button.budget .field-label { pointer-events: none; }
+button.budget .budget-value { color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+button.budget.is-set { border-color: var(--series-1); }
+button.budget.is-set .budget-value { color: var(--ink); }
+
+/* ---- the bound picker ---------------------------------------------------------------
+ * A dialog for one question — how long? — asked at launch and at every stop. It is sized
+ * to its content and centred; on a phone it fills the width and scrolls inside itself
+ * rather than pushing the page sideways. */
+dialog.bound {
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(90vh, 720px); overflow: auto;
+  padding: 20px 22px 18px;
+  border: 1px solid var(--border); border-radius: var(--sheet-radius);
+  background: var(--surface); color: var(--ink);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
+}
+dialog.bound::backdrop { background: rgba(11, 11, 11, 0.42); }
+dialog.bound h2 { margin: 0 0 6px; font-size: 17px; }
+.bound-sub { margin: 0 0 16px; color: var(--ink-2); font-size: 13px; line-height: 1.5; }
+
+/* the unit switch */
+.seg { display: flex; gap: 4px; padding: 3px; margin-bottom: 14px;
+       background: var(--wash); border-radius: 10px; }
+.seg-btn {
+  flex: 1; border-color: transparent; background: transparent;
+  color: var(--ink-2); padding: 6px 10px; border-radius: 7px;
+}
+.seg-btn.is-on {
+  background: var(--surface); color: var(--ink);
+  border-color: var(--border); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+/* the presets */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.chip {
+  padding: 5px 11px; border-radius: 999px; font-size: 13px;
+  border-color: var(--border); color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.chip.is-on {
+  background: color-mix(in srgb, var(--series-1) 14%, transparent);
+  border-color: var(--series-1); color: var(--ink); font-weight: 600;
+}
+
+/* the dial — logarithmic, so the useful short end is not a sliver of the track */
+input.dial {
+  width: 100%; margin: 0; accent-color: var(--series-1);
+  height: 22px; cursor: pointer;
+}
+.dial-ends {
+  display: flex; justify-content: space-between;
+  color: var(--ink-muted); font-size: 11.5px; font-variant-numeric: tabular-nums;
+  margin-bottom: 14px;
+}
+
+.bound-exact { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.bound-exact input { width: 96px; }
+.bound-exact span { color: var(--ink-2); font-size: 13px; }
+
+/* The sentence that says what the number means. It is the point of the dialog, so it gets
+ * a left rule and its own space rather than sitting as a caption. */
+.bound-preview {
+  margin: 0 0 18px; padding: 9px 12px;
+  border-left: 3px solid var(--series-1); background: var(--wash);
+  border-radius: 0 8px 8px 0;
+  color: var(--ink-2); font-size: 12.5px; line-height: 1.5; min-height: 38px;
+}
+.bound-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+
+.badge {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--wash); color: var(--ink-2);
+  display: inline-flex; align-items: center; gap: 6px;
+}
+/* Status colour never carries the meaning alone — the badge always spells the phase out. */
+.badge::before {
+  content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor;
+}
+.badge-training { color: var(--good); }
+.badge-launching { color: var(--warning); }
+.badge-stopping { color: var(--serious); }
+.badge-idle { color: var(--ink-muted); }
+
+.live { display: inline-flex; align-items: center; gap: 7px; color: var(--ink-muted); font-size: 12px; }
+.live .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-muted); }
+.live.on .dot { background: var(--good); animation: pulse 2s ease-in-out infinite; }
+.live.err .dot { background: var(--critical); }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .live.on .dot { animation: none; } }
+
+.flash {
+  margin: 12px var(--page-gutter) 0;
+  padding: 10px 14px; border-radius: var(--radius);
+  border: 1px solid var(--border); background: var(--surface);
+  border-left: 3px solid var(--series-1);
+}
+.flash.error { border-left-color: var(--critical); }
+.flash.ok { border-left-color: var(--good); }

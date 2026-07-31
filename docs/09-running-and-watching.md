@@ -186,6 +186,64 @@ The panels, in plain terms:
 
 Everything a button does, you can do from a terminal — the button just runs the script.
 
+### How the client is put together
+
+There is no build step, no bundler and no framework — the browser loads the source as
+written, which is the point: you can read the running code. What there *is* is one file per
+thing. Each tab is three files with the same name — the markup, the code that drives it, and
+the rules that style it:
+
+```
+portal/static/
+  index.html          the shell: head, top bar, footer, dialog, and six include markers
+  parts/<tab>.html    the markup for one view
+  js/<tab>.js         the code for one view
+  css/<tab>.css       the rules for one view
+```
+
+`index.html` is assembled per request: `server.py` fills each `<!--#include name.html -->`
+from `parts/`. Assembling on the server rather than at build time is what keeps the "no
+build step" promise — the cost is a handful of small reads on a local server.
+
+The JavaScript is ES modules, so the dependency graph is written down rather than implied by
+a load order. It is a DAG, and it points one way — shared kernel at the bottom, tabs above
+it, wiring at the top:
+
+```mermaid
+flowchart TD
+    core["core.js<br/>$, fmt, api, flash"]
+    state["state.js<br/>the selected run"]
+    router["router.js<br/>which tab is on screen"]
+    charts["charts.js"]
+    md["markdown.js"]
+    dash["dashboard.js"]
+    tabs["code · docs · quant<br/>lora · play"]
+    main["main.js — wire + boot"]
+
+    core --> charts & md & router & dash & tabs & main
+    state --> router & dash & tabs
+    router --> dash & tabs
+    charts --> dash & tabs
+    md --> tabs
+    dash --> tabs
+    tabs --> main
+```
+
+The router is the piece worth knowing about. It holds the list of views and the
+hash/`localStorage` plumbing, but it knows nothing about what any tab *is*: each tab module
+calls `registerTab('quant', { open, leave })` when it is imported. `open` runs when the tab
+is shown, `leave` when the reader goes elsewhere — which is where a tab stops its own
+polling, so a dashboard left up overnight is not also polling five other panels. Adding a
+tab is a `registerTab` call in that tab's module; there is nothing to edit in the router.
+
+Two consequences worth stating, because they are the reason for the shape:
+
+- **A tab is inert until you open it.** Nothing in `quant.js` or `code.js` runs on load. The
+  docs tab does not fetch the 3 MB mermaid library until you look at a diagram.
+- **The stylesheets load in cascade order** — `base.css` (the palette and the theme) first,
+  `narrow.css` (the small-screen overrides) last. They are separate `<link>`s rather than
+  `@import` so the browser fetches them in parallel.
+
 ### On a phone
 
 Checking a run from bed is half of what this page is for, so it has to survive a 390px
@@ -203,7 +261,7 @@ desktop, 133px on a tablet, and 100–130px on a phone depending on how wide the
 run's name makes the run picker.
 
 Anything else that sticks has to clear it, and the number is not knowable in CSS — it
-depends on how the bar wrapped. `trackTopbarHeight()` in `app.js` measures the bar with a
+depends on how the bar wrapped. `trackTopbarHeight()` in `js/main.js` measures the bar with a
 `ResizeObserver` and publishes it as `--topbar-h`; the Docs sidebar sticks at
 `calc(var(--topbar-h) + var(--gap))`.
 

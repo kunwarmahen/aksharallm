@@ -30,6 +30,7 @@ import dataclasses
 import json
 import mimetypes
 import os
+import re
 import signal
 import socket
 import sys
@@ -52,6 +53,9 @@ from .runs import PHASE_LAUNCHING, PHASE_TRAINING, LAUNCHERS, RunError, RunStore
 from .schedule import Rule, Schedule, Scheduler, parse_days
 
 STATIC = Path(__file__).resolve().parent / "static"
+# <!--#include name.html --> in index.html, filled from static/parts/. The name pattern
+# admits no slashes and no dots, so there is nothing to escape from static/parts/.
+INCLUDE_RE = re.compile(rb"<!--#include ([a-z0-9_-]+\.html) -->")
 GUARD_HEADER = "X-Portal"
 MAX_BODY = 64 * 1024
 
@@ -143,8 +147,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if not parts:
                 return self._static("index.html")
-            if parts[0] == "static" and len(parts) == 2:
-                return self._static(parts[1])
+            if parts[0] == "static" and len(parts) in (2, 3):
+                return self._static("/".join(parts[1:]))
             if parts == ["favicon.ico"]:
                 return self._send(204, b"", "image/x-icon")
             if parts[0] == "api":
@@ -520,11 +524,44 @@ class Handler(BaseHTTPRequestHandler):
 
         raise RunError(f"unknown schedule action: {action}")
 
+    # The client is a folder of ES modules and a folder of stylesheets, so one nested level
+    # has to be reachable.
+    STATIC_DIRS = ("js", "css")
+
+    def _index(self) -> bytes:
+        """index.html with its <!--#include --> markers filled in from static/parts/.
+
+        One file per view, named to match js/ and css/: the markup for a tab, the code that
+        drives it and the rules that style it are three files with the same name. Assembled
+        per request rather than at build time, because this project has no build step and
+        should not grow one — the cost is a handful of small reads on a local server.
+        """
+        html = (STATIC / "index.html").read_bytes()
+
+        def fill(m: re.Match) -> bytes:
+            part = STATIC / "parts" / m.group(1).decode()
+            if not part.is_file():
+                raise RunError(f"missing partial: parts/{m.group(1).decode()}")
+            # The marker supplies the line break; the partial keeps its POSIX trailing
+            # newline on disk, so one of the two has to go or every include gains a blank.
+            return part.read_bytes().rstrip(b"\n")
+
+        return INCLUDE_RE.sub(fill, html)
+
     def _static(self, name: str):
-        # Serve only the files that ship with the package, by exact name: no traversal, no
-        # surprises about what a local web server is exposing.
-        path = STATIC / name
-        if "/" in name or "\\" in name or not path.is_file():
+        if name == "index.html":
+            return self._send(200, self._index(), "text/html; charset=utf-8")
+        # Serve only the files that ship with the package: static/ itself and the one folder
+        # of client modules, by exact name. The path is resolved and checked to be inside
+        # STATIC afterwards, so there is no traversal and no surprises about what a local
+        # web server is exposing.
+        parts = name.split("/")
+        if "\\" in name or any(p in ("", ".", "..") for p in parts) or len(parts) > 2:
+            return self._error(404, f"no such file: {name}")
+        if len(parts) == 2 and parts[0] not in self.STATIC_DIRS:
+            return self._error(404, f"no such file: {name}")
+        path = (STATIC / name).resolve()
+        if not path.is_file() or STATIC.resolve() not in path.parents:
             return self._error(404, f"no such file: {name}")
         ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
         if ctype.startswith("text/") or name.endswith((".js", ".css")):

@@ -1,0 +1,31 @@
+/* The docs tab: a chapter list beside a rendered-markdown reader.
+ * Pairs with js/docs.js. */
+
+/* Docs tab: a chapter list beside a rendered-markdown reader (with mermaid diagrams).
+ * Same outer frame as every other view — padding, max width, centred — so switching tabs
+ * does not shift where the page starts. */
+.docs-layout {
+  display: grid; grid-template-columns: 240px 1fr; gap: var(--gap); align-items: start;
+  padding: var(--gap) var(--page-pad);
+  max-width: var(--page-max); margin: 0 auto;
+}
+/* Offset by the sticky top bar, which the nav would otherwise slide under. */
+.docs-nav { position: sticky; top: calc(var(--topbar-h) + var(--gap)); max-height: calc(100vh - 6rem); overflow: auto; }
+.docs-list { list-style: none; margin: .5rem 0 0; padding: 0; }
+.docs-list li { margin: 0; }
+.docs-list button { width: 100%; text-align: left; background: none; border: 0; color: inherit;
+  padding: .4rem .5rem; border-radius: 6px; cursor: pointer; font-size: .9rem; }
+.docs-list button:hover { background: var(--wash); }
+.docs-list li.on button { background: var(--series-1); color: #fff; }
+.docs-reader { padding: 1.25rem 1.5rem; max-width: 60rem; line-height: 1.6; overflow-x: auto; }
+.docs-reader h2 { margin-top: 1.6rem; }
+.docs-reader h3, .docs-reader h4 { margin-top: 1.2rem; }
+.docs-reader table { border-collapse: collapse; margin: .8rem 0; display: block; overflow-x: auto; }
+.docs-reader th, .docs-reader td { border: 1px solid var(--border); padding: .3rem .6rem; }
+.docs-reader pre.md-code { overflow-x: auto; }
+.docs-reader .mermaid { margin: 1rem 0; text-align: center; }
+.docs-hint { opacity: .6; }
+@media (max-width: 700px) { .docs-layout { grid-template-columns: 1fr; } .docs-nav { position: static; } }
+.docs-reader blockquote { margin: 1rem 0; padding: .5rem 1rem; border-left: 3px solid var(--series-1);
+  background: var(--wash); border-radius: 0 6px 6px 0; opacity: .95; }
+.docs-reader blockquote p { margin: 0; }
