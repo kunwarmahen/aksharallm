@@ -15,7 +15,7 @@
 <link rel="stylesheet" href="/static/css/code.css">
 <link rel="stylesheet" href="/static/css/play.css">
 <link rel="stylesheet" href="/static/css/docs.css">
-<link rel="stylesheet" href="/static/css/quant.css">
+<link rel="stylesheet" href="/static/css/quantize.css">
 <link rel="stylesheet" href="/static/css/lora.css">
 <link rel="stylesheet" href="/static/css/narrow.css">
 </head>
@@ -58,7 +58,10 @@
 <!--#include docs.html -->
 
 
-<!--#include quant.html -->
+<!-- quantize.*, not quant.*: ad-blocker filter lists carry a path rule for
+     `quant.js` (Quantcast's tracker uses that exact filename), so Brave and uBlock
+     silently blocked it and the tab never loaded. Keep view/id/hash as `quant`. -->
+<!--#include quantize.html -->
 
 
 <!--#include lora.html -->

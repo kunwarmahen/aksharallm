@@ -201,6 +201,14 @@ portal/static/
   css/<tab>.css       the rules for one view
 ```
 
+One exception to the naming, and it is worth knowing about: the Quantize tab's files are
+`quantize.*`, not `quant.*`. Ad-blocker filter lists carry a path rule for `quant.js` —
+that is the filename Quantcast's tracker uses — so Brave and uBlock block it **on any
+site, silently**: no console error, no failed-request warning, just a tab that never
+loads. Splitting one big `app.js` into per-view files is exactly what exposes you to this,
+because suddenly the filenames are visible to a blocker. The view key, the element ids and
+the `#quant` hash are unaffected; only the fetched filename had to change.
+
 `index.html` is assembled per request: `server.py` fills each `<!--#include name.html -->`
 from `parts/`. Assembling on the server rather than at build time is what keeps the "no
 build step" promise — the cost is a handful of small reads on a local server.
@@ -238,7 +246,7 @@ tab is a `registerTab` call in that tab's module; there is nothing to edit in th
 
 Two consequences worth stating, because they are the reason for the shape:
 
-- **A tab is inert until you open it.** Nothing in `quant.js` or `code.js` runs on load. The
+- **A tab is inert until you open it.** Nothing in `quantize.js` or `code.js` runs on load. The
   docs tab does not fetch the 3 MB mermaid library until you look at a diagram.
 - **The stylesheets load in cascade order** — `base.css` (the palette and the theme) first,
   `narrow.css` (the small-screen overrides) last. They are separate `<link>`s rather than

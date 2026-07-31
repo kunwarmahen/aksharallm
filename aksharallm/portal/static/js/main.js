@@ -7,7 +7,7 @@ import { state } from './state.js';
 import { VIEWS, showView } from './router.js';
 import { UNIT_MINUTES, UNIT_MORE_STEPS, act, boundPicker, drawCharts, fmtMins, fmtWhen, refresh, renderRuns, renderSessionBudget, schedule, secPerStep, selectRun, wireGpu, wireSchedule } from './dashboard.js';
 import { wireCode } from './code.js';
-import { wireQuantTab } from './quant.js';
+import { wireQuantTab } from './quantize.js';
 import { wireLoraTab } from './lora.js';
 import { wirePlay } from './play.js';
 import './docs.js';

@@ -1,3 +1,8 @@
+/* Named quantize.js, not quant.js: ad-blocker filter lists carry a path rule for
+ * `quant.js` — that is the filename Quantcast's tracker uses — so Brave and uBlock
+ * block it on any site, silently, and the tab simply never loads. The view key, the
+ * element ids and the #quant hash are unaffected; only the fetched filename matters.
+ */
 import { $, api, escHtml, flash, fmt, post } from './core.js';
 import { state } from './state.js';
 import { table } from './charts.js';
