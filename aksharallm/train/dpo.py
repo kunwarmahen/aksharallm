@@ -19,11 +19,21 @@ That reference term is the whole safety mechanism. Without it the model could dr
 chosen response's probability up by wrecking its general language ability. The reference
 anchors it: drifting far from the SFT model is penalised. `beta` sets how hard the anchor
 pulls (0.1 typical; higher = stay closer to the reference).
+
+The reference model is free under LoRA
+--------------------------------------
+Normally the reference is a second complete copy of the weights -- 1.2 GB at our size,
+held for the entire run purely to answer "where did you start?". With `--lora` it costs
+nothing: the policy *is* the base plus an adapter, so switching the adapter off turns the
+model you are already holding into the model you started from. One boolean instead of a
+second model. `disable_adapters` in `lora/layer.py` is the whole mechanism, and it is the
+neatest thing LoRA does for this file.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 import time
@@ -35,6 +45,8 @@ import torch
 import torch.nn.functional as F
 
 from ..config import ModelConfig
+from ..lora import setup as lora_setup
+from ..lora.layer import disable_adapters
 from ..model.transformer import Transformer
 from .pretrain import fmt_dur, human, save_checkpoint, stamp
 from .schedule import get_lr
@@ -70,6 +82,21 @@ class DPODataset:
             yield self.batch(np.sort(order[i : i + batch_size]))
 
 
+@contextlib.contextmanager
+def as_reference(policy, ref):
+    """Yield whichever model plays the frozen reference for this run.
+
+    Two shapes, one interface: a second set of weights (full fine-tuning), or the policy
+    itself with its adapters switched off (LoRA). The training loop below does not need to
+    know which, and that is why the LoRA path required no changes to the DPO maths.
+    """
+    if ref is not None:
+        yield ref
+    else:
+        with disable_adapters(policy):
+            yield policy
+
+
 def sequence_logprob(model, x, y, mask, ctx) -> torch.Tensor:
     """Sum of log p(y_t | y_<t) over the response tokens only. Returns (B,)."""
     with ctx:
@@ -102,8 +129,9 @@ def evaluate(model, ref, ds, batch_size, n_batches, beta, ctx):
             break
         pc = sequence_logprob(model, cx, cy, cm, ctx)
         pr = sequence_logprob(model, rx, ry, rm, ctx)
-        rc = sequence_logprob(ref, cx, cy, cm, ctx)
-        rr = sequence_logprob(ref, rx, ry, rm, ctx)
+        with as_reference(model, ref) as refm:
+            rc = sequence_logprob(refm, cx, cy, cm, ctx)
+            rr = sequence_logprob(refm, rx, ry, rm, ctx)
         loss, acc, _ = dpo_loss(pc, pr, rc, rr, beta)
         losses.append(loss.item())
         accs.append(acc.item())
@@ -128,27 +156,46 @@ def main():
     ap.add_argument("--eval-every", type=int, default=100)
     ap.add_argument("--log-every", type=int, default=10)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    lora_setup.add_lora_args(ap)
     args = ap.parse_args()
+    use_lora = lora_setup.wants_lora(args)
+    if use_lora:
+        # Adapter dropout would perturb the policy pass but not the reference pass (which
+        # skips the adapter entirely), adding noise to exactly the comparison DPO is made
+        # of. Same reason mcfg.dropout is forced to 0 below.
+        args.lora_dropout = 0.0
+        if args.lr == 5e-7:
+            args.lr = 5e-5  # LoRA needs a far higher LR; see sft.py's --lr help
 
     sys.stdout.reconfigure(line_buffering=True)
     torch.backends.cuda.matmul.allow_tf32 = True
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    ckpt = torch.load(args.sft, map_location=args.device, weights_only=False)
+    ckpt = torch.load(args.sft, map_location="cpu", weights_only=False)
     mcfg = ModelConfig(**ckpt["model_config"])
     mcfg.dropout = 0.0  # dropout would make the policy/reference comparison noisy
 
-    policy = Transformer(mcfg).to(args.device)
+    policy = Transformer(mcfg)
+    lora_setup.rebuild_quantized_shapes(policy, ckpt)
     policy.load_state_dict(ckpt["model"])
+    lora_notes = lora_setup.prepare_base(policy, ckpt, args, args.device) if use_lora else []
+    policy = policy.to(args.device)
 
-    # The reference is a frozen snapshot of the same weights. It never trains; it exists
-    # only to say "here is where you started".
-    ref = Transformer(mcfg).to(args.device)
-    ref.load_state_dict(ckpt["model"])
-    ref.eval()
-    for p in ref.parameters():
-        p.requires_grad_(False)
+    lora_config = lora_report = None
+    ref = None
+    if use_lora:
+        lora_config, lora_report, notes = lora_setup.attach(policy, args, args.device)
+        lora_notes += notes
+        # No `ref` model at all: `as_reference` switches the adapters off instead.
+    else:
+        # The reference is a frozen snapshot of the same weights. It never trains; it
+        # exists only to say "here is where you started".
+        ref = Transformer(mcfg).to(args.device)
+        ref.load_state_dict(ckpt["model"])
+        ref.eval()
+        for p in ref.parameters():
+            p.requires_grad_(False)
 
     data_dir = Path(args.data_dir)
     train_ds = DPODataset(data_dir, "train", args.device)
@@ -160,9 +207,19 @@ def main():
     warmup = max(10, int(0.1 * max_steps))
 
     print("=" * 78)
-    print(f"policy+ref {args.sft}  ({human(policy.num_params())} params each)")
+    if use_lora:
+        print(f"policy     {args.sft}  ({human(policy.num_params())} params)")
+        print("reference  the same model with its adapters off — no second copy")
+    else:
+        print(f"policy+ref {args.sft}  ({human(policy.num_params())} params each)")
     print(f"data       {train_ds.n:,} train / {val_ds.n:,} val pairs of {train_ds.seq_len}")
     print(f"schedule   {max_steps:,} steps ({args.epochs} epochs), beta={args.beta}, lr={args.lr}")
+    if lora_report is not None:
+        print("-" * 78)
+        print(lora_report.summary())
+        print(lora_setup.memory_line(policy))
+        for n in lora_notes:
+            print(f"note       {n}")
     print("=" * 78)
 
     ctx = (torch.autocast("cuda", dtype=torch.bfloat16)
@@ -196,9 +253,9 @@ def main():
                     exhausted = True
                     break
                 # Reference logprobs need no graph -- it's frozen.
-                with torch.no_grad():
-                    rc = sequence_logprob(ref, cx, cy, cm, ctx)
-                    rr = sequence_logprob(ref, rx, ry, rm, ctx)
+                with torch.no_grad(), as_reference(policy, ref) as refm:
+                    rc = sequence_logprob(refm, cx, cy, cm, ctx)
+                    rr = sequence_logprob(refm, rx, ry, rm, ctx)
                 pc = sequence_logprob(policy, cx, cy, cm, ctx)
                 pr = sequence_logprob(policy, rx, ry, rm, ctx)
                 loss, acc, margin = dpo_loss(pc, pr, rc, rr, args.beta)
@@ -237,21 +294,35 @@ def main():
                 logf.flush()
                 if vl < best_val:
                     best_val = vl
-                    save_checkpoint(out_dir / "dpo_best.pt", policy, optimizer,
-                                    _rebuild_cfg(ckpt, mcfg, args), step, best_val)
+                    _save(out_dir, "best", policy, optimizer, ckpt, mcfg, args, step,
+                          best_val, va, use_lora, lora_config, lora_report)
                 t0 = time.time()
             step += 1
 
     vl, va = evaluate(policy, ref, val_ds, args.batch_size, 20, args.beta, ctx)
     print(f"\nfinal val loss {vl:.4f} acc {va*100:.1f}%")
-    cfg_obj = _rebuild_cfg(ckpt, mcfg, args)
-    save_checkpoint(out_dir / "dpo_last.pt", policy, optimizer, cfg_obj, step, min(best_val, vl))
+    _save(out_dir, "last", policy, optimizer, ckpt, mcfg, args, step, min(best_val, vl),
+          va, use_lora, lora_config, lora_report)
     if vl < best_val:
-        save_checkpoint(out_dir / "dpo_best.pt", policy, optimizer, cfg_obj, step, vl)
+        _save(out_dir, "best", policy, optimizer, ckpt, mcfg, args, step, vl, va,
+              use_lora, lora_config, lora_report)
     print(f"ran {step} steps in {fmt_dur(time.time() - run_t0)}, "
           f"finished {datetime.now():%Y-%m-%d %H:%M:%S}")
-    print(f"checkpoints in {out_dir}")
+    print(f"output in {out_dir}")
     logf.close()
+
+
+def _save(out_dir: Path, which: str, policy, optimizer, ckpt, mcfg, args, step, val, acc,
+          use_lora: bool, lora_config, lora_report):
+    """An adapter file when training adapters, a full checkpoint otherwise. See sft._save."""
+    if use_lora:
+        return lora_setup.save(
+            out_dir / f"dpo_{which}.lora.pt", policy, lora_config, ckpt, args.sft,
+            report=lora_report,
+            training={"stage": "dpo", "step": step, "val_loss": val, "val_acc": acc,
+                      "beta": args.beta, "lr": args.lr, "data_dir": args.data_dir})
+    cfg_obj = _rebuild_cfg(ckpt, mcfg, args)
+    return save_checkpoint(out_dir / f"dpo_{which}.pt", policy, optimizer, cfg_obj, step, val)
 
 
 if __name__ == "__main__":

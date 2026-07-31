@@ -98,7 +98,8 @@ Read these in order. They assume no prior knowledge of machine learning.
 | 7 | [Scaling up](docs/07-scaling.md) | Phase 2: a 300M model on 10B tokens, and how to size your own |
 | 8 | [Troubleshooting](docs/08-troubleshooting.md) | Loss spikes, NaNs, OOM, slow training |
 | 9 | [Running & watching it](docs/09-running-and-watching.md) | The scripts, stop/resume, the gated post-training stages, and the **portal** — with diagrams |
-| 10 | [Quantization](docs/10-quantization.md) | Storing weights in 4 bits: group scales, RTN/GPTQ/AWQ/QAT, a fused Triton kernel, and why smaller isn't faster |
+| 10 | [Quantization](docs/10-quantization.md) | Storing weights in 4 bits: group scales, RTN/GPTQ/AWQ/QAT, **NF4**, a fused Triton kernel, and why smaller isn't faster |
+| 11 | [LoRA & QLoRA](docs/11-lora.md) | Fine-tuning without training the model: low-rank adapters, a 4-bit frozen base, one base + many skills, and a free DPO reference model |
 
 ---
 
@@ -121,7 +122,8 @@ aksharallm/
 │   │   └── loader.py         memmap batch sampling (TokenDataset, MixedTokenDataset)
 │   ├── model/
 │   │   └── transformer.py    the whole architecture, ~300 lines
-│   ├── quant/            int8/int4 from scratch — see docs/10
+│   ├── quant/            int8/int4/NF4 from scratch — see docs/10
+│   ├── lora/             LoRA + QLoRA adapters from scratch — see docs/11
 │   │   ├── qtensor.py        group scales, zero-points, 4-bit packing
 │   │   ├── qlinear.py        QuantLinear: a drop-in for nn.Linear that stores bytes
 │   │   ├── rtn.py            round-to-nearest baseline
@@ -233,10 +235,42 @@ beat plain bf16 — and the reason turned out to be the most interesting thing i
 chapter, so [it is written up honestly](docs/10-quantization.md#the-fused-kernel-and-an-honest-performance-story)
 rather than quietly omitted.
 
+A later addition, **NF4**: instead of spacing the 16 levels evenly, put them at the
+quantiles of a normal distribution — which is what trained weights actually look like. It
+is more accurate *and* smaller than int4 (no zero-point to store), and the levels are
+derived from `erfinv` rather than pasted in from the paper.
+
+### Changing it cheaply: LoRA and QLoRA
+
+Fine-tuning a model normally costs far more than storing it, because Adam keeps two fp32
+moments per trainable parameter. For the 300M model that is 4.8 GB — before activations,
+and on a card that also has to hold the forward pass.
+
+[LoRA](docs/11-lora.md) freezes the model and trains a small low-rank correction beside it
+(`y = Wx + BAx`), so ~1% of the parameters train and the optimiser state shrinks with them.
+**QLoRA** then holds the frozen base in 4-bit NF4 — safe precisely because it is frozen and
+never receives a gradient. Measured on the 300M checkpoint:
+
+| | to fine-tune | the artifact |
+|---|---|---|
+| full fine-tune | 4,791 MB | a whole new 1.2 GB checkpoint |
+| LoRA r=8 | 1,253 MB | a 14 MB adapter |
+| **QLoRA r=8** | **327 MB** | a 14 MB adapter |
+
+And it costs almost nothing in quality: on the 13.8M model, identical data and schedule,
+full fine-tuning reached val **1.2364**, LoRA **1.2425**, QLoRA **1.2433** — while training
+2.5% of the parameters. (LoRA is *slower* in wall clock, though. It buys memory, not time,
+and the chapter says so.)
+
+Two consequences change how the project is shaped. A specialisation becomes a **file**, not
+a model — one base plus a chat adapter and a Python adapter, swapped at inference, instead
+of two 1.2 GB checkpoints. And DPO's frozen reference model becomes **free**: switch the
+adapter off and the model you are already holding *is* the model you started from.
+
 ### What comes after that
 
 In order, all written from scratch: **GRPO** ✅ (RL on a reward the code sandbox actually
-verifies) → **quantization** ✅ → **LoRA/QLoRA** → a **real eval harness** (GSM8K/MMLU plus
+verifies) → **quantization** ✅ → **LoRA/QLoRA** ✅ → a **real eval harness** (GSM8K/MMLU plus
 a model-judged suite) → **diffusion training** → export and serving.
 
 Two of those are worth explaining, because they are not the usual list.

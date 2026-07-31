@@ -1,4 +1,4 @@
-"""Build a supervised fine-tuning dataset from a chat corpus.
+r"""Build a supervised fine-tuning dataset from a chat corpus.
 
 Pretraining and SFT differ in exactly one way: *which tokens count towards the loss*.
 
@@ -51,11 +51,42 @@ def _openhermes(row):
     return out
 
 
+def _identity(row):
+    return row["messages"]
+
+
 RECIPES = {
     "smoltalk": ("HuggingFaceTB/smoltalk", "all", "train", _smoltalk),
     "ultrachat": ("HuggingFaceH4/ultrachat_200k", None, "train_sft", _ultrachat),
     "openhermes": ("teknium/OpenHermes-2.5", None, "train", _openhermes),
+    # Generated locally, no download. Exists so the SFT/DPO/LoRA machinery can be smoke
+    # tested end to end in seconds — the shapes, the mask alignment, the packing and the
+    # trainers are all exercised for real. It teaches the model a trivially learnable
+    # mapping, which is the point: if the loss does not fall on this, the bug is in the
+    # code, not in the data or the hyperparameters.
+    "synthetic": (None, None, None, _identity),
 }
+
+#: The synthetic task: answer with the arithmetic. Small vocabulary, exact answers, and a
+#: model that has learned it is obvious from a single generation.
+_SYNTH_TEMPLATES = [
+    ("What is {a} plus {b}?", "{a} plus {b} is {c}."),
+    ("Add {a} and {b}.", "The sum of {a} and {b} is {c}."),
+    ("Tell me {a} + {b}.", "It is {c}."),
+    ("Can you add {a} to {b}?", "Yes. {a} + {b} = {c}."),
+]
+
+
+def synthetic_rows(n: int, seed: int = 0):
+    """A stream of chat rows in the same shape the real recipes produce."""
+    rng = np.random.default_rng(seed)
+    for _ in range(n):
+        a, b = int(rng.integers(0, 50)), int(rng.integers(0, 50))
+        q, ans = _SYNTH_TEMPLATES[int(rng.integers(0, len(_SYNTH_TEMPLATES)))]
+        yield {"messages": [
+            {"role": "user", "content": q.format(a=a, b=b)},
+            {"role": "assistant", "content": ans.format(a=a, b=b, c=a + b)},
+        ]}
 
 
 def is_valid(messages) -> bool:
@@ -77,16 +108,21 @@ def main():
     ap.add_argument("--seq-len", type=int, default=1024)
     ap.add_argument("--max-examples", type=int, default=None)
     ap.add_argument("--val-examples", type=int, default=2000)
+    ap.add_argument("--synthetic-examples", type=int, default=20000,
+                    help="how many rows the 'synthetic' recipe generates")
     args = ap.parse_args()
-
-    from datasets import load_dataset
 
     repo, config, split, convert = RECIPES[args.recipe]
     tok = Tokenizer(args.tokenizer)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    ds = load_dataset(repo, name=config, split=split, streaming=True)
+    if args.recipe == "synthetic":
+        ds = synthetic_rows(args.synthetic_examples)
+    else:
+        from datasets import load_dataset
+
+        ds = load_dataset(repo, name=config, split=split, streaming=True)
 
     # Packing buffers: we accumulate tokens until we have seq_len of them, emit a block,
     # and keep the remainder for the next block.

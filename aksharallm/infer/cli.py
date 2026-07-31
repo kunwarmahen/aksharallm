@@ -105,6 +105,27 @@ def print_checkpoints(store: CheckpointStore) -> int:
     return 0
 
 
+def print_adapters(pg: Playground) -> int:
+    rows = pg.adapters.list()
+    if not rows:
+        print("no adapters yet. Train one with:\n"
+              "  python -m aksharallm.train.sft --base <ckpt> --data-dir data/sft \\\n"
+              "      --tokenizer <tok> --out-dir checkpoints/<run> --qlora")
+        return 0
+    print(f"{len(rows)} adapter(s) under checkpoints/:\n")
+    for a in rows:
+        if a.error:
+            print(f"  {a.rel:<34} {a.error}")
+            continue
+        print(f"  {a.rel:<34} r={a.r:<3} {a.targets:<11} "
+              f"{a.params / 1e6:5.2f}M  {a.size / 1e6:6.1f} MB  stage={a.stage}"
+              + (f"  val {a.val_loss:.4f}" if a.val_loss is not None else ""))
+        print(f"  {'':<34} base: {a.base_path}"
+              + (f"  [{a.base_quant}]" if a.base_quant else ""))
+    print("\nuse one with:  ... <checkpoint> --adapter <run/name.lora.pt>")
+    return 0
+
+
 def print_plan(pg: Playground):
     status = pg.status()
     plan = status["plan"]
@@ -149,7 +170,8 @@ def stream_to_stdout(pg: Playground, **kw) -> dict:
     return stats
 
 
-def interactive(pg: Playground, ckpt_id: str, mode: str, args) -> int:
+def interactive(pg: Playground, ckpt_id: str, mode: str, args,
+                adapter: str | None = None) -> int:
     info = pg.store.get(ckpt_id)
     banner = {
         "complete": "Completion mode: type a prompt and the model continues it.",
@@ -190,6 +212,7 @@ def interactive(pg: Playground, ckpt_id: str, mode: str, args) -> int:
                 continue
             print(f"\n{probe.prompt}", file=sys.stderr)
             stream_to_stdout(pg, ckpt_id=ckpt_id, mode=mode, prompt=probe.prompt,
+                             adapter=adapter,
                              probe=probe.id, params=sampling(args), device=args.device)
             print(f"  expected: {probe.expect}", file=sys.stderr)
             continue
@@ -200,11 +223,13 @@ def interactive(pg: Playground, ckpt_id: str, mode: str, args) -> int:
                       file=sys.stderr)
                 continue
             stream_to_stdout(pg, ckpt_id=ckpt_id, mode=mode, task=task_id,
+                             adapter=adapter,
                              params=sampling(args), device=args.device)
             continue
 
         if mode == "chat":
             stats = stream_to_stdout(pg, ckpt_id=ckpt_id, mode="chat", prompt=text,
+                                     adapter=adapter,
                                      messages=messages, system=args.system,
                                      params=sampling(args), device=args.device)
             messages.append({"role": "user", "content": text})
@@ -215,6 +240,7 @@ def interactive(pg: Playground, ckpt_id: str, mode: str, args) -> int:
                 messages = messages[-20:]
         else:
             stream_to_stdout(pg, ckpt_id=ckpt_id, mode=mode, prompt=text,
+                             adapter=adapter,
                              params=sampling(args), device=args.device)
         _ = info
 
@@ -229,7 +255,8 @@ def sampling(args) -> SamplingParams:
 # the suites and the history
 # --------------------------------------------------------------------------------------
 
-def run_probes(pg: Playground, ckpt_id: str, mode: str, args) -> int:
+def run_probes(pg: Playground, ckpt_id: str, mode: str, args,
+               adapter: str | None = None) -> int:
     def show(row):
         print(f"\n─── {row['probe']}  ({row['group']}) " + "─" * 30)
         print(f"prompt:   {row['prompt']}")
@@ -237,6 +264,7 @@ def run_probes(pg: Playground, ckpt_id: str, mode: str, args) -> int:
         print(f"output:   {row['output'].strip()[:600]}")
 
     out = pg.run_probes(ckpt_id, mode=mode, params=sampling(args), device=args.device,
+                        adapter=adapter,
                         on_result=show)
     prov = out["provenance"]
     val = f", val {prov['best_val']:.4f}" if prov.get("best_val") is not None else ""
@@ -246,7 +274,8 @@ def run_probes(pg: Playground, ckpt_id: str, mode: str, args) -> int:
     return 0
 
 
-def run_tasks(pg: Playground, ckpt_id: str, mode: str, args) -> int:
+def run_tasks(pg: Playground, ckpt_id: str, mode: str, args,
+              adapter: str | None = None) -> int:
     ids = args.task or None
 
     def show(row):
@@ -257,6 +286,7 @@ def run_tasks(pg: Playground, ckpt_id: str, mode: str, args) -> int:
     if pg.cfg.run_tests:
         print("  (the generated code is executed — see aksharallm/infer/sandbox.py)")
     out = pg.run_tasks(ckpt_id, mode=mode, task_ids=ids, params=sampling(args),
+                       adapter=adapter,
                        device=args.device, on_result=show)
     prov = out["provenance"]
     rate = out["pass_rate"]
@@ -357,6 +387,12 @@ def build_parser() -> argparse.ArgumentParser:
     env = ap.add_argument_group("where it runs")
     env.add_argument("--device", choices=["auto", "cuda", "cpu"], default=None,
                      help="default: the GPU, unless a run is training — then the CPU")
+    env.add_argument("--adapter", default=None,
+                     help="a LoRA adapter to put on top of the checkpoint (a path, or "
+                          "run/name.lora.pt). One base, many specialisations — and an SFT "
+                          "adapter unlocks --mode chat on a base checkpoint.")
+    env.add_argument("--list-adapters", action="store_true",
+                     help="list the adapters found under checkpoints/ and exit")
     env.add_argument("--tokenizer", default=None,
                      help="override the tokenizer recorded in the checkpoint (rarely right)")
     env.add_argument("--no-record", action="store_true",
@@ -378,6 +414,8 @@ def main(argv: list[str] | None = None) -> int:
             return show_compare(pg, args.compare, args.run)
         if args.history:
             return show_history(pg, args)
+        if args.list_adapters:
+            return print_adapters(pg)
         if args.list or not args.checkpoint:
             return print_checkpoints(pg.store)
 
@@ -387,9 +425,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 2
 
+        adapter_id = None
+        if args.adapter:
+            try:
+                adapter_id = pg.adapters.identify(args.adapter)
+            except InferError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 2
+
         info = pg.store.get(ckpt_id)
         print(describe(info.as_dict()), file=sys.stderr)
         print(f"  {info.as_dict()['stage_note']}", file=sys.stderr)
+        if adapter_id:
+            ad = pg.adapters.get(adapter_id)
+            print(f"+ adapter {ad.rel}  r={ad.r} {ad.targets} "
+                  f"({ad.params:,} params, {ad.size / 1e6:.1f} MB) -> stage {ad.stage}",
+                  file=sys.stderr)
         print_plan(pg)
         if args.tokenizer:
             print("  --tokenizer overrides the one this checkpoint was trained with; if it "
@@ -398,16 +449,17 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.tasks:
             return run_tasks(pg, ckpt_id, args.mode if args.mode == "chat" else "complete",
-                             args)
+                             args, adapter_id)
         if args.probes:
-            return run_probes(pg, ckpt_id, args.mode, args)
+            return run_probes(pg, ckpt_id, args.mode, args, adapter_id)
 
         if args.prompt is not None:
             stream_to_stdout(pg, ckpt_id=ckpt_id, mode=args.mode, prompt=args.prompt,
                              system=args.system, params=sampling(args),
-                             device=args.device, record=not args.no_record)
+                             device=args.device, adapter=adapter_id,
+                             record=not args.no_record)
             return 0
-        return interactive(pg, ckpt_id, args.mode, args)
+        return interactive(pg, ckpt_id, args.mode, args, adapter_id)
     except InferError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

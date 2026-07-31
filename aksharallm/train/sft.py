@@ -8,6 +8,14 @@ Differences from pretraining, all of them deliberate:
   fewer steps      1-3 epochs. SFT datasets are small and overfit fast.
   dropout on       now we *are* overfitting-limited rather than data-limited.
   shuffled epochs  we iterate the dataset rather than sampling random windows.
+
+Adapters
+--------
+`--lora` trains a low-rank correction instead of the weights, and `--qlora` additionally
+holds the frozen base in 4 bits. Both change what is saved: an adapter file of a few MB
+next to the base, rather than a full checkpoint. Everything else in this file -- the loss
+mask, the schedule, the evaluation -- is identical either way, which is the point.
+See `aksharallm/lora/` and `docs/11-lora.md`.
 """
 
 from __future__ import annotations
@@ -24,6 +32,7 @@ import numpy as np
 import torch
 
 from ..config import ModelConfig, config_to_dict, load_config
+from ..lora import setup as lora_setup
 from ..model.transformer import Transformer
 from ..tokenizer.tokenizer import Tokenizer
 from .pretrain import fmt_dur, human, save_checkpoint, stamp
@@ -88,7 +97,10 @@ def main():
     ap.add_argument("--epochs", type=int, default=2)
     ap.add_argument("--batch-size", type=int, default=16)
     ap.add_argument("--grad-accum", type=int, default=4)
-    ap.add_argument("--lr", type=float, default=1e-5)
+    ap.add_argument("--lr", type=float, default=None,
+                    help="default 1e-5 for full fine-tuning, 2e-4 with --lora. The gap is "
+                         "real: the adapter starts at zero and has ~1%% of the parameters, "
+                         "so a full-fine-tuning LR barely moves it.")
     ap.add_argument("--warmup-ratio", type=float, default=0.03)
     ap.add_argument("--weight-decay", type=float, default=0.0)
     ap.add_argument("--dropout", type=float, default=0.05)
@@ -97,7 +109,11 @@ def main():
     ap.add_argument("--log-every", type=int, default=10)
     ap.add_argument("--compile", action="store_true")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    lora_setup.add_lora_args(ap)
     args = ap.parse_args()
+    use_lora = lora_setup.wants_lora(args)
+    if args.lr is None:
+        args.lr = 2e-4 if use_lora else 1e-5
 
     sys.stdout.reconfigure(line_buffering=True)
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -105,11 +121,22 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # ---- load the base model ------------------------------------------------------
-    ckpt = torch.load(args.base, map_location=args.device, weights_only=False)
+    ckpt = torch.load(args.base, map_location="cpu", weights_only=False)
     mcfg = ModelConfig(**ckpt["model_config"])
     mcfg.dropout = args.dropout  # re-enable dropout for fine-tuning
-    model = Transformer(mcfg).to(args.device)
+    model = Transformer(mcfg)
+    lora_setup.rebuild_quantized_shapes(model, ckpt)
     model.load_state_dict(ckpt["model"])
+
+    # Quantize on the CPU *before* moving: doing it after would put a full float copy in
+    # VRAM first, which on the 300M model is the difference between 1.2 GB and 0.2 GB at
+    # the peak — and the peak is what makes a run fit or not.
+    lora_notes = lora_setup.prepare_base(model, ckpt, args, args.device) if use_lora else []
+    model = model.to(args.device)
+    lora_config = lora_report = None
+    if use_lora:
+        lora_config, lora_report, notes = lora_setup.attach(model, args, args.device)
+        lora_notes += notes
 
     tok = Tokenizer(args.tokenizer)
     data_dir = Path(args.data_dir)
@@ -135,6 +162,12 @@ def main():
     print(f"batch      {args.batch_size} x {args.grad_accum} accum = "
           f"{args.batch_size*args.grad_accum*train_ds.seq_len:,} tokens/step")
     print(f"schedule   {max_steps:,} steps ({args.epochs} epochs), {warmup} warmup, lr {args.lr}")
+    if lora_report is not None:
+        print("-" * 78)
+        print(lora_report.summary())
+        print(lora_setup.memory_line(model))
+        for n in lora_notes:
+            print(f"note       {n}")
     print("=" * 78)
 
     if args.compile:
@@ -211,23 +244,46 @@ def main():
                 logf.flush()
                 if vl < best_val:
                     best_val = vl
-                    cfg_obj = _rebuild_cfg(ckpt, mcfg, args)
-                    save_checkpoint(out_dir / "sft_best.pt", model, optimizer,
-                                    cfg_obj, step, best_val)
+                    _save(out_dir, "best", model, optimizer, ckpt, mcfg, args, step,
+                          best_val, use_lora, lora_config, lora_report)
                 t0 = time.time()
             step += 1
 
     vl = evaluate(model, val_ds, args.batch_size, 20, ctx)
     print(f"\nfinal val {vl:.4f}")
-    cfg_obj = _rebuild_cfg(ckpt, mcfg, args)
-    save_checkpoint(out_dir / "sft_last.pt", model, optimizer, cfg_obj, step, min(best_val, vl))
+    _save(out_dir, "last", model, optimizer, ckpt, mcfg, args, step, min(best_val, vl),
+          use_lora, lora_config, lora_report)
     if vl < best_val:
-        save_checkpoint(out_dir / "sft_best.pt", model, optimizer, cfg_obj, step, vl)
+        _save(out_dir, "best", model, optimizer, ckpt, mcfg, args, step, vl,
+              use_lora, lora_config, lora_report)
     print(f"ran {step} steps in {fmt_dur(time.time() - run_t0)}, "
           f"finished {datetime.now():%Y-%m-%d %H:%M:%S}")
-    print(f"checkpoints in {out_dir}")
-    print(f"\ntry it:  python -m aksharallm.infer.cli {out_dir}/sft_best.pt --mode chat")
+    print(f"output in {out_dir}")
+    if use_lora:
+        print(f"\ntry it:  python -m aksharallm.infer.cli {args.base} "
+              f"--adapter {out_dir}/sft_best.lora.pt --mode chat")
+    else:
+        print(f"\ntry it:  python -m aksharallm.infer.cli {out_dir}/sft_best.pt --mode chat")
     logf.close()
+
+
+def _save(out_dir: Path, which: str, model, optimizer, ckpt, mcfg, args, step, val,
+          use_lora: bool, lora_config, lora_report):
+    """Write an adapter (~MB) or a full checkpoint (~GB), depending on how we trained.
+
+    The naming is deliberately different -- `sft_best.lora.pt` rather than `sft_best.pt` --
+    because the two are not interchangeable. A full checkpoint is a model; an adapter is
+    useless without the base it names in its metadata, and a filename that hid that
+    difference would be an easy way to lose a model.
+    """
+    if use_lora:
+        return lora_setup.save(
+            out_dir / f"sft_{which}.lora.pt", model, lora_config, ckpt, args.base,
+            report=lora_report,
+            training={"stage": "sft", "step": step, "val_loss": val, "lr": args.lr,
+                      "epochs": args.epochs, "data_dir": args.data_dir})
+    cfg_obj = _rebuild_cfg(ckpt, mcfg, args)
+    return save_checkpoint(out_dir / f"sft_{which}.pt", model, optimizer, cfg_obj, step, val)
 
 
 def _rebuild_cfg(ckpt, mcfg, args):

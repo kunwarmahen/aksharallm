@@ -43,7 +43,14 @@ import yaml
 from ..config import ModelConfig
 from ..model.transformer import Transformer
 from ..tokenizer.tokenizer import Tokenizer
-from .checkpoints import Checkpoint, CheckpointStore, InferError, repo_root
+from .checkpoints import (
+    Adapter,
+    AdapterStore,
+    Checkpoint,
+    CheckpointStore,
+    InferError,
+    repo_root,
+)
 from .generate import IncrementalDecoder, stream_generate
 
 #: Free VRAM (bytes) below which `auto` will not use the card even when nothing is
@@ -325,6 +332,21 @@ class Loaded:
     plan: DevicePlan
     loaded_at: float
     load_s: float
+    #: The adapter attached on top, if any. `None` means the plain base model.
+    adapter: Adapter | None = None
+
+    @property
+    def stage(self) -> str:
+        """What this *combination* has been trained to do.
+
+        The adapter wins when there is one, and that is the whole point of adapters here:
+        a base checkpoint carrying an SFT adapter is a chat model, even though the
+        checkpoint's own filename still says `ckpt_`. Reading the stage off the file alone
+        would refuse to chat with exactly the thing we built adapters to produce.
+        """
+        if self.adapter is not None and self.adapter.stage != "unknown":
+            return self.adapter.stage
+        return self.info.stage
 
 
 class Engine:
@@ -341,6 +363,7 @@ class Engine:
         self.root = Path(root).resolve() if root else repo_root()
         self.cfg = cfg or InferConfig.load(self.root)
         self.store = CheckpointStore(self.root)
+        self.adapters = AdapterStore(self.root)
         self.busy_cb = busy_cb or (lambda: training_runs(self.root))
         self._loaded: Loaded | None = None
         self._lock = threading.RLock()          # serialises generation
@@ -365,6 +388,8 @@ class Engine:
         idle = time.monotonic() - self._last_used
         return {
             "loaded": loaded.info.as_dict() if loaded else None,
+            "adapter": loaded.adapter.as_dict() if loaded and loaded.adapter else None,
+            "stage": loaded.stage if loaded else None,
             "device": loaded.device if loaded else None,
             "loaded_at": loaded.loaded_at if loaded else None,
             "load_s": loaded.load_s if loaded else None,
@@ -382,17 +407,31 @@ class Engine:
         return True
 
     # ---- loading -----------------------------------------------------------------------
-    def load(self, ckpt_id: str, device: str | None = None) -> Loaded:
-        """Make `ckpt_id` the resident model. A no-op if it already is, on the same device.
+    def load(self, ckpt_id: str, device: str | None = None,
+             adapter: str | None = None) -> Loaded:
+        """Make `ckpt_id` (optionally + `adapter`) the resident model.
 
-        The reload check includes the checkpoint's mtime: `ckpt_last.pt` is rewritten every
-        500 steps by a live run, and "the model I loaded twenty minutes ago" is not the
-        model on disk. Re-selecting it in the picker therefore picks up the newer weights,
-        which is the whole point of testing during a run.
+        A no-op if it already is, on the same device, with the same adapter. The reload
+        check includes the checkpoint's mtime: `ckpt_last.pt` is rewritten every 500 steps
+        by a live run, and "the model I loaded twenty minutes ago" is not the model on
+        disk. Re-selecting it in the picker therefore picks up the newer weights, which is
+        the whole point of testing during a run. The adapter's mtime is in the key for the
+        same reason — a fine-tune in progress rewrites `sft_best.lora.pt`.
+
+        Swapping *only* the adapter still reloads the base. It could be made to swap
+        adapters in place on the same weights, and at 11 MB against 1.2 GB that would be a
+        real speedup — but it would mean tracking whether the resident model's adapters
+        were injected with the same rank and targets, and getting that wrong loads an
+        adapter into the wrong shapes. Correct and a second slower wins here.
         """
         info = self.store.get(ckpt_id)
         if info.error:
             raise InferError(f"{info.rel} cannot be loaded: {info.error}")
+        ad: Adapter | None = None
+        if adapter:
+            ad = self.adapters.get(self.adapters.identify(adapter))
+            if ad.error:
+                raise InferError(f"{ad.rel} cannot be loaded: {ad.error}")
         plan = plan_device(self.cfg.reload_if_changed(), self.training())
         want = device or plan.device
         if want not in ("cuda", "cpu"):
@@ -400,26 +439,34 @@ class Engine:
         if want == "cuda" and not torch.cuda.is_available():
             raise InferError("this machine has no CUDA device")
 
+        key = (info.rel, info.mtime, want, ad.rel if ad else None, ad.mtime if ad else None)
         with self._state:
             cur = self._loaded
-            if (cur and cur.info.rel == info.rel and cur.device == want
-                    and cur.info.mtime == info.mtime):
+            if cur and self._key_of(cur) == key:
                 self._last_used = time.monotonic()
                 return cur
 
         with self._lock:                       # never swap under a running generation
             self._unload_locked()
             t0 = time.monotonic()
-            model, tokenizer = self._build(info, want)
+            model, tokenizer = self._build(info, want, ad)
             loaded = Loaded(info=info, model=model, tokenizer=tokenizer, device=want,
-                            plan=plan, loaded_at=time.time(), load_s=time.monotonic() - t0)
+                            plan=plan, loaded_at=time.time(), load_s=time.monotonic() - t0,
+                            adapter=ad)
             with self._state:
                 self._loaded = loaded
             self._last_used = time.monotonic()
         self._start_reaper()
         return loaded
 
-    def _build(self, info: Checkpoint, device: str) -> tuple[Transformer, Tokenizer]:
+    @staticmethod
+    def _key_of(loaded: Loaded):
+        a = loaded.adapter
+        return (loaded.info.rel, loaded.info.mtime, loaded.device,
+                a.rel if a else None, a.mtime if a else None)
+
+    def _build(self, info: Checkpoint, device: str,
+               adapter: Adapter | None = None) -> tuple[Transformer, Tokenizer]:
         # weights_only=False: the payload carries the run's config dicts alongside the
         # tensors. These files are written by this project's own trainer, on this machine.
         ckpt = torch.load(info.path, map_location="cpu", weights_only=False)
@@ -440,9 +487,34 @@ class Engine:
                              else torch.float32)
             model.eval()
 
+        if adapter is not None:
+            self._attach(model, adapter, ckpt, device)
+
         tok_path = self._tokenizer_path(info, ckpt)
         del ckpt                                # release the 1.2 GB staging copy promptly
         return model, Tokenizer(tok_path)
+
+    def _attach(self, model: Transformer, adapter: Adapter, ckpt: dict, device: str):
+        """Put an adapter on the loaded model.
+
+        Strict by default: an adapter is a delta, and applied to the wrong base it does not
+        fail, it just quietly makes the model worse. The check compares architecture and
+        tokenizer against what the adapter recorded at training time.
+        """
+        from ..lora.adapter import AdapterError, attach_adapter, load_adapter_file
+
+        try:
+            payload = load_adapter_file(adapter.path)
+            attach_adapter(model, payload, ckpt=ckpt, strict=True)
+        except AdapterError as exc:
+            raise InferError(str(exc))
+        # The adapters arrive in fp32; match the base so the two halves of every layer are
+        # the same dtype and no matmul silently upcasts.
+        target = torch.bfloat16 if device == "cuda" else torch.float32
+        for p in model.parameters():
+            if p.is_floating_point():
+                p.data = p.data.to(target)
+        model.eval()
 
     def _tokenizer_path(self, info: Checkpoint, ckpt: dict) -> Path:
         """The tokenizer this checkpoint was trained with — non-negotiable.
@@ -539,11 +611,14 @@ class Engine:
             return tok.encode(prompt, bos=True), tok.eos_id, prompt
 
         if mode == "chat":
-            if loaded.info.stage == "base":
+            # `loaded.stage`, not `loaded.info.stage`: an SFT adapter on a base checkpoint
+            # is a chat model, and this is the gate that has to know it.
+            if loaded.stage == "base":
                 raise InferError(
                     f"{loaded.info.rel} is a base model: it has only ever been trained to "
                     "continue text and has never seen a chat turn, so chat would return "
-                    "noise. Use Complete, or run Phase 3 (scripts/postrain.sh) first.")
+                    "noise. Use Complete, run Phase 3 (scripts/postrain.sh), or attach a "
+                    "chat adapter (the Finetune tab).")
             turns = list(messages or [])
             if prompt.strip():
                 turns.append({"role": "user", "content": prompt})
@@ -564,8 +639,8 @@ class Engine:
     # ---- generation --------------------------------------------------------------------
     def stream(self, ckpt_id: str, mode: str, *, prompt: str = "",
                messages: list[dict] | None = None, system: str | None = None,
-               params: SamplingParams | None = None,
-               device: str | None = None) -> Iterator[tuple[str, object]]:
+               params: SamplingParams | None = None, device: str | None = None,
+               adapter: str | None = None) -> Iterator[tuple[str, object]]:
         """Generate, yielding `("start", meta)`, then `("delta", text)`, then `("done", stats)`.
 
         The tuple shape mirrors `portal.explain.Ollama.chat`, so the page consumes a local
@@ -585,7 +660,7 @@ class Engine:
             raise InferError(f"prompt is longer than {self.cfg.max_prompt_chars} characters; "
                              "the model's context is only "
                              f"{self.store.get(ckpt_id).max_seq_len or '?'} tokens anyway.")
-        loaded = self.load(ckpt_id, device=device)
+        loaded = self.load(ckpt_id, device=device, adapter=adapter)
         sp = (params or self.cfg.sampling).clamp(loaded.model.cfg.max_seq_len)
         ids, stop_id, rendered = self.build_prompt(loaded, mode, prompt=prompt,
                                                    messages=messages, system=system)
@@ -619,7 +694,9 @@ class Engine:
                              "they do not halve each other's speed.")
         try:
             yield "start", {
-                "checkpoint": loaded.info.as_dict(), "device": loaded.device,
+                "checkpoint": loaded.info.as_dict(),
+                "adapter": loaded.adapter.as_dict() if loaded.adapter else None,
+                "device": loaded.device,
                 "plan": loaded.plan.as_dict(), "mode": mode,
                 "prompt_tokens": len(ids), "truncated_tokens": truncated,
                 "params": sp.as_dict(), "rendered": rendered,
@@ -657,7 +734,10 @@ class Engine:
                 "first_token_s": first_at, "finish": finish,
                 "prompt_tokens": len(ids), "truncated_tokens": truncated,
                 "device": loaded.device, "params": sp.as_dict(),
-                "provenance": loaded.info.provenance(),
+                "adapter": loaded.adapter.as_dict() if loaded.adapter else None,
+                "provenance": {**loaded.info.provenance(),
+                               "adapter": loaded.adapter.rel if loaded.adapter else None,
+                               "stage": loaded.stage},
             }
         finally:
             self._last_used = time.monotonic()

@@ -76,6 +76,17 @@ to learn anyway.
 Conversations longer than the window are **dropped, not truncated**: a truncated example
 ends mid-sentence and teaches the model to stop early.
 
+## Doing this with adapters instead
+
+Everything in this part — the loss mask, the schedule, the evaluation — is identical
+whether you train every weight or only a low-rank correction. `--lora` (or `--qlora` for a
+4-bit frozen base) changes what is *saved*: a few-MB `sft_best.lora.pt` beside the base
+instead of a full checkpoint, and the learning rate default moves from 1e-5 to 2e-4.
+
+That matters here more than anywhere else in the project, because the plan is one base
+model yielding **both** a chat model and a Python specialist. As adapters that is one set
+of weights and two small files, not two 1.2 GB checkpoints. See [11-lora.md](11-lora.md).
+
 ## Hyperparameters — and why they differ from pretraining
 
 | | pretrain | SFT | why |
@@ -193,6 +204,29 @@ drifting far from the SFT model is penalised.
 | epochs | 1 | more than one reliably degrades quality |
 | batch | small | each step processes 4 forward passes (chosen/rejected × policy/ref) |
 
+With `--lora` the learning rate default changes to **5e-5** — a hundred times higher, for
+the same reason it changes for SFT: the adapter starts at exactly zero and has ~1% of the
+parameters, so a full-fine-tuning rate barely moves it. See
+[11-lora.md](11-lora.md#the-learning-rate-is-different-and-it-matters).
+
+## The reference model is free under LoRA
+
+That second frozen copy of the weights is 1.2 GB held for the whole run purely to answer
+"where did you start?".
+
+With `--lora` it costs nothing. The policy *is* the base plus an adapter, so switching the
+adapter off turns the model you are already holding into the model you started from:
+
+```python
+with disable_adapters(policy):
+    ref_chosen = sequence_logprob(policy, ...)   # the frozen base, exactly
+```
+
+`as_reference()` yields either a second model or the policy with its adapters off, so
+nothing in the DPO maths above changed by a line. One subtlety it handles: adapter dropout
+is forced to 0 here, because it would perturb the policy pass but not the reference pass —
+adding noise to exactly the comparison DPO is made of.
+
 ## Reading DPO logs
 
 ```
@@ -228,6 +262,9 @@ python -m aksharallm.train.dpo \
     --tokenizer data/fineweb/tokenizer.json \
     --out-dir checkpoints/small-dpo \
     --beta 0.1 --lr 5e-7
+
+# ...or with adapters: no second reference model, and a few-MB output
+python -m aksharallm.train.dpo ... --lora --lora-r 8
 ```
 
 ---

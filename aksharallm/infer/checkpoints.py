@@ -39,6 +39,16 @@ from ..train import runlog
 #: out every traversal attempt.
 CKPT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*\.pt$")
 
+#: LoRA adapters live in the same directories and also end in `.pt`, but they are not
+#: models — they hold `lora_A`/`lora_B` and no `model_config`. Listing one as a checkpoint
+#: would put an unloadable entry in every picker, so the suffix keeps them apart. The
+#: trainers write exactly this suffix (see `train/sft.py::_save`).
+ADAPTER_SUFFIX = ".lora.pt"
+
+
+def is_adapter_name(name: str) -> bool:
+    return name.endswith(ADAPTER_SUFFIX)
+
 #: Run names, same rule as `portal.runs.RUN_NAME_RE`. Duplicated rather than imported: this
 #: layer is underneath the portal and must not depend on it (the CLI uses it with no web
 #: server anywhere in the process).
@@ -109,6 +119,16 @@ class InferError(Exception):
     the portal catches both and turns either into a 4xx carrying this message, so the
     sentence you read in the browser is the sentence the CLI would have printed.
     """
+
+
+def _arch_str(mcfg: dict | None) -> str | None:
+    """The architecture summary string, shared by Checkpoint and Adapter so the two can be
+    compared directly. Changing the format changes both, which is the point."""
+    if not mcfg:
+        return None
+    return (f"d={mcfg.get('d_model')} L={mcfg.get('n_layers')} "
+            f"H={mcfg.get('n_heads')} KV={mcfg.get('n_kv_heads')} "
+            f"ctx={mcfg.get('max_seq_len')}")
 
 
 def stage_for(name: str) -> str:
@@ -233,7 +253,7 @@ class CheckpointStore:
             if run and d.name != run:
                 continue
             for path in sorted(d.glob("*.pt")):
-                if not CKPT_NAME_RE.match(path.name):
+                if not CKPT_NAME_RE.match(path.name) or is_adapter_name(path.name):
                     continue
                 out.append(self.describe(path))
         out.sort(key=lambda c: (c.run, -(c.step or -1), c.name))
@@ -360,11 +380,7 @@ class CheckpointStore:
         tok_path = (self.root / tok) if tok and not Path(tok).is_absolute() else (
             Path(tok) if tok else None)
 
-        arch = None
-        if mcfg:
-            arch = (f"d={mcfg.get('d_model')} L={mcfg.get('n_layers')} "
-                    f"H={mcfg.get('n_heads')} KV={mcfg.get('n_kv_heads')} "
-                    f"ctx={mcfg.get('max_seq_len')}")
+        arch = _arch_str(mcfg)
 
         return Checkpoint(
             **{**base,
@@ -423,3 +439,142 @@ class CheckpointStore:
             if chat:
                 return min(chat, key=rank)
         return min(usable, key=rank)
+
+
+@dataclass
+class Adapter:
+    """One `*.lora.pt`, described without loading its tensors' values."""
+
+    run: str
+    name: str
+    path: Path
+    rel: str
+    size: int
+    mtime: float
+    r: int | None
+    alpha: float | None
+    targets: str | None
+    layers: int | None
+    params: int | None
+    stage: str                       # what the adapter was trained to do: sft / dpo / ...
+    base_path: str | None
+    base_step: int | None
+    base_quant: str | None
+    tokenizer: str | None
+    val_loss: float | None
+    #: The base's architecture, in the same string form `Checkpoint.arch` uses. Adapters
+    #: are deltas on specific shapes, so this is what decides which checkpoints an adapter
+    #: may legitimately be offered for.
+    arch: str | None = None
+    error: str | None = None
+
+    def as_dict(self) -> dict:
+        return {"run": self.run, "name": self.name, "rel": self.rel, "id": self.rel,
+                "size": self.size, "mtime": self.mtime, "r": self.r, "alpha": self.alpha,
+                "targets": self.targets, "layers": self.layers, "params": self.params,
+                "stage": self.stage, "base_path": self.base_path,
+                "base_step": self.base_step, "base_quant": self.base_quant,
+                "tokenizer": self.tokenizer, "val_loss": self.val_loss,
+                "arch": self.arch, "error": self.error}
+
+
+class AdapterStore:
+    """Every `*.lora.pt` under `<root>/checkpoints/`, described and cached.
+
+    Deliberately a separate store from `CheckpointStore` rather than a flag on it. They
+    answer different questions — "which models can I run?" and "which specialisations can
+    I put on top of one?" — and an adapter has no step, no parameter count and no
+    architecture, so half of `Checkpoint` would be None for every row.
+    """
+
+    def __init__(self, root: Path | str | None = None):
+        self.root = Path(root).resolve() if root else repo_root()
+        self._cache: dict[Path, tuple[tuple[int, float], Adapter]] = {}
+
+    def dirs(self) -> list[Path]:
+        base = self.root / "checkpoints"
+        if not base.is_dir():
+            return []
+        return sorted(p for p in base.iterdir()
+                      if p.is_dir() and RUN_NAME_RE.match(p.name))
+
+    def list(self, run: str | None = None) -> list[Adapter]:
+        out: list[Adapter] = []
+        for d in self.dirs():
+            if run and d.name != run:
+                continue
+            for path in sorted(d.glob(f"*{ADAPTER_SUFFIX}")):
+                out.append(self.describe(path))
+        out.sort(key=lambda a: -a.mtime)
+        return out
+
+    def resolve(self, rel: str) -> Path:
+        run, _, name = (rel or "").partition("/")
+        if not RUN_NAME_RE.match(run or ""):
+            raise InferError(f"invalid run name: {run!r}")
+        if not CKPT_NAME_RE.match(name or "") or not is_adapter_name(name):
+            raise InferError(f"not an adapter name: {name!r} (expected something{ADAPTER_SUFFIX})")
+        path = (self.root / "checkpoints" / run / name).resolve()
+        base = (self.root / "checkpoints").resolve()
+        if base not in path.parents:
+            raise InferError(f"'{rel}' is outside checkpoints/")
+        if not path.is_file():
+            known = ", ".join(a.rel for a in self.list()) or "none yet"
+            raise InferError(f"no such adapter: {rel}. Available: {known}")
+        return path
+
+    def get(self, rel: str) -> Adapter:
+        return self.describe(self.resolve(rel))
+
+    def identify(self, ref: str) -> str:
+        """Whatever was typed -> a canonical `run/name.lora.pt` id."""
+        p = Path(ref)
+        if p.is_file():
+            p = p.resolve()
+            base = (self.root / "checkpoints").resolve()
+            if base in p.parents:
+                return f"{p.parent.name}/{p.name}"
+            return str(p)
+        for a in self.list():
+            if ref in (a.rel, a.name, f"{a.run}/{a.name}"):
+                return a.rel
+        raise InferError(f"no such adapter: {ref!r}")
+
+    def describe(self, path: Path) -> Adapter:
+        st = path.stat()
+        key = (st.st_size, st.st_mtime)
+        hit = self._cache.get(path)
+        if hit and hit[0] == key:
+            return hit[1]
+        rec = self._read(path, st.st_size, st.st_mtime)
+        self._cache[path] = (key, rec)
+        return rec
+
+    def _read(self, path: Path, size: int, mtime: float) -> Adapter:
+        from ..lora.adapter import describe as describe_adapter
+        from ..lora.adapter import load_adapter_file
+
+        run = path.parent.name
+        base = dict(run=run, name=path.name, path=path, rel=f"{run}/{path.name}",
+                    size=size, mtime=mtime, r=None, alpha=None, targets=None,
+                    layers=None, params=None, stage="unknown", base_path=None,
+                    base_step=None, base_quant=None, tokenizer=None, val_loss=None,
+                    arch=None)
+        try:
+            payload = load_adapter_file(path)
+        except Exception as exc:  # noqa: BLE001
+            return Adapter(**base, error=f"unreadable ({type(exc).__name__}: {exc})")
+        d = describe_adapter(payload)
+        trained = d.get("trained") or {}
+        return Adapter(**{**base,
+                          "r": d["r"], "alpha": d["alpha"], "targets": d["targets"],
+                          "layers": d["layers"], "params": d["params"],
+                          # The stage the adapter was *trained* for is what decides whether
+                          # chat is allowed — a base checkpoint plus an SFT adapter is a
+                          # chat model, and gating on the checkpoint alone would refuse it.
+                          "stage": trained.get("stage") or stage_for(path.name),
+                          "base_path": d["base_path"], "base_step": d["base_step"],
+                          "base_quant": d["base_quant"], "tokenizer": d["tokenizer"],
+                          "val_loss": trained.get("val_loss"),
+                          "arch": _arch_str((payload.get("base") or {}).get("model_config"))},
+                       error=None)

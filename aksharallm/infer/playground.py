@@ -35,6 +35,7 @@ class Playground:
         self.cfg = cfg or InferConfig.load(self.root)
         self.engine = Engine(self.root, cfg=self.cfg, busy_cb=busy_cb)
         self.store: CheckpointStore = self.engine.store
+        self.adapters = self.engine.adapters
         self.history = History(self.root, max_records=self.cfg.history_max)
 
     # ---- what is available -------------------------------------------------------------
@@ -47,6 +48,10 @@ class Playground:
         sandbox_ok, sandbox_why = sandbox.available()
         return {
             "checkpoints": checkpoints,
+            # Adapters are offered alongside checkpoints rather than instead of them: the
+            # picker is "which model" + "which specialisation on top of it", which is the
+            # shape LoRA actually gives you.
+            "adapters": [a.as_dict() for a in self.adapters.list()],
             "default": default.rel if default else None,
             "status": self.engine.status(),
             **catalogue(),
@@ -66,6 +71,7 @@ class Playground:
                messages: list[dict] | None = None, system: str | None = None,
                params: SamplingParams | None = None, device: str | None = None,
                probe: str | None = None, task: str | None = None,
+               adapter: str | None = None,
                record: bool = True) -> Iterator[tuple[str, object]]:
         """Generate, then grade and record. Yields the engine's events plus two of its own.
 
@@ -88,7 +94,8 @@ class Playground:
                 prompt = code_task.instruction if chat_mode else code_task.prompt
 
         stream = self.engine.stream(ckpt_id, mode, prompt=prompt, messages=messages,
-                                    system=system, params=params, device=device)
+                                    system=system, params=params, device=device,
+                                    adapter=adapter)
         return self._wrap(stream, mode=mode, prompt=prompt, system=system, probe=probe,
                           task=code_task, record=record)
 
@@ -144,7 +151,7 @@ class Playground:
     def run_tasks(self, ckpt_id: str, *, mode: str = "complete",
                   task_ids: list[str] | None = None,
                   params: SamplingParams | None = None,
-                  device: str | None = None,
+                  device: str | None = None, adapter: str | None = None,
                   on_result: Callable[[dict], None] | None = None) -> dict:
         """Every code task against one checkpoint: the project's pass@1, in miniature.
 
@@ -159,7 +166,7 @@ class Playground:
             if task is None:
                 raise InferError(f"no such task: {task_id}")
             stats = self.generate(ckpt_id=ckpt_id, mode=mode, task=task_id, params=params,
-                                  device=device)
+                                  device=device, adapter=adapter)
             test = stats.get("test") or {}
             passed += bool(test.get("ok"))
             row = {"task": task_id, "title": task.title, "difficulty": task.difficulty,
@@ -182,7 +189,7 @@ class Playground:
     def run_probes(self, ckpt_id: str, *, mode: str = "complete",
                    probe_ids: list[str] | None = None,
                    params: SamplingParams | None = None,
-                   device: str | None = None,
+                   device: str | None = None, adapter: str | None = None,
                    on_result: Callable[[dict], None] | None = None) -> dict:
         """The fixed prompts, all of them, recorded — so this checkpoint has a row in the
         comparison next time you run it at a later step."""
@@ -196,7 +203,8 @@ class Playground:
                 raise InferError(f"no such probe: {probe_id} "
                                  f"(known: {', '.join(sorted(pool))})")
             stats = self.generate(ckpt_id=ckpt_id, mode=mode, prompt=probe.prompt,
-                                  probe=probe_id, params=params, device=device)
+                                  probe=probe_id, params=params, device=device,
+                                  adapter=adapter)
             row = {"probe": probe_id, "group": probe.group, "prompt": probe.prompt,
                    "expect": probe.expect, "output": stats.get("text", ""),
                    "tokens": stats.get("tokens"), "tok_per_s": stats.get("tok_per_s")}
