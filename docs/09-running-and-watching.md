@@ -137,6 +137,7 @@ flowchart TD
     Play[Playground: talk to the model *while it trains*]
     Code[Code: a local model explains the source back to you]
     Quant[Quantize: make it smaller, and see what that cost]
+    Tune["Finetune: what a LoRA run would cost, then run it"]
     Docs[Docs: read this guide in the browser, diagrams and all]
 ```
 
@@ -176,6 +177,67 @@ The panels, in plain terms:
   vendored locally and loaded only when you open this tab). Same files, no duplication.
 
 Everything a button does, you can do from a terminal — the button just runs the script.
+
+### On a phone
+
+Checking a run from bed is half of what this page is for, so it has to survive a 390px
+screen. The layout is fluid rather than fixed — panels stack, the stat tiles go two-up, the
+tab strip swipes sideways with the current tab scrolled into view — and the page itself
+**never scrolls horizontally**, from 320px up.
+
+The top bar is sticky, which means its height is spent *permanently*: whatever it takes is
+gone from every screenful you scroll through. Left to wrap on its own it took three rows and
+171px on a phone — a fifth of the screen, and enough to hide the entire control band behind
+it the moment you scrolled, so the Start/Stop rectangle looked like it was behaving
+differently from everything else on the page. Below 1100px the tab strip therefore takes a
+row of its own, giving a bar of one predictable height instead of one that re-wraps with
+every tab added: **83px** on a desktop, 133px on a tablet, **100px** on a phone.
+
+Anything else that sticks has to clear it, and the number is not knowable in CSS — it
+depends on how the bar wrapped. `trackTopbarHeight()` in `app.js` measures the bar with a
+`ResizeObserver` and publishes it as `--topbar-h`; the Docs sidebar sticks at
+`calc(var(--topbar-h) + var(--gap))`.
+
+### One column
+
+Every view sits in the same content column — `--page-max` wide, centred, with `--page-pad`
+either side — so switching tabs never shifts where the page starts. Two things used to break
+that, and both are the same mistake seen from different sides:
+
+- The Docs tab had no frame at all: no padding, no max width. It was the one tab that hugged
+  the top edge.
+- The bands that run edge to edge — the top bar, the control row, the flash message — are
+  full-bleed *by design*: their background should reach the window edge. But padding them by
+  `--page-pad` alone lines their contents up with the window, not with the column, so on a
+  1920px monitor the **Start button sat 210px to the left of the panels it controls**. They
+  use `--page-gutter` instead, which is the same padding *plus* however far in the centred
+  column starts:
+
+  ```css
+  --page-gutter: calc(var(--page-pad) + max(0px, (100% - var(--page-max)) / 2));
+  ```
+
+  Below `--page-max` the `max()` is zero and it degrades to plain padding, so there is no
+  breakpoint to maintain.
+
+The column is one width for the whole portal. It used to be 1500px for the dashboard and
+1800px for the working tabs, which meant the shared top bar could not align with both.
+
+That last property is easy to lose by accident, because CSS has two ways to set a floor
+under a page that are invisible on a desktop:
+
+- `grid-template-columns: repeat(auto-fit, minmax(420px, 1fr))` never lets a track shrink
+  below 420px. Narrower than that and the track — and every panel beside it — hangs off the
+  screen. Write the floor as `minmax(min(420px, 100%), 1fr)`: identical above 420px, and it
+  collapses instead of overflowing below it.
+- A flex item will not shrink past its own content. The tab strip is six tabs and ~558px
+  wide, so it dragged the whole page out to 558px until it was given `min-width: 0` and its
+  own `overflow-x: auto` — now it scrolls in place instead of scrolling the page.
+
+The check, when touching this stylesheet: at a 390px viewport
+`document.body.scrollWidth` must equal `document.documentElement.clientWidth`. If it is
+larger, something has a floor under it — find it by giving each element `width: min-content`
+and reporting the ones that measure wider than the viewport.
 
 ---
 

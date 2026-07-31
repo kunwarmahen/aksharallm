@@ -2333,6 +2333,9 @@ function showView(view) {
     tab.classList.toggle('on', on);
     if (on) tab.setAttribute('aria-current', 'page');
     else tab.removeAttribute('aria-current');
+    // On a phone the strip is narrower than its six tabs and scrolls sideways, so the
+    // current view can sit off-screen — including on load, from a #hash or localStorage.
+    if (on) tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
   localStorage.setItem('aksharallm-view', view);
   /* The tab in the address bar, so a view can be linked to and reloaded into. Written
@@ -3113,8 +3116,21 @@ function wire() {
 
 const VIEWS = ['dashboard', 'play', 'code', 'quant', 'lora', 'docs'];
 
+/* The top bar is sticky, and how tall it is depends on how many rows it wrapped into —
+ * one on a desktop, two on a phone. Anything that sticks below it has to clear it, so the
+ * measured height is published as a custom property instead of being guessed at in CSS. */
+function trackTopbarHeight() {
+  const bar = $('.topbar');
+  const publish = () => document.documentElement.style
+    .setProperty('--topbar-h', `${Math.round(bar.getBoundingClientRect().height)}px`);
+  publish();
+  if (window.ResizeObserver) new ResizeObserver(publish).observe(bar);
+  else window.addEventListener('resize', publish);
+}
+
 async function boot() {
   wire();
+  trackTopbarHeight();
   /* A #hash wins over the remembered tab: an explicit link should land where it says. */
   const asked = location.hash.slice(1);
   showView(VIEWS.includes(asked) ? asked

@@ -28,6 +28,20 @@
 
   --radius: 10px;
   --gap: 16px;
+  /* Height of the sticky top bar, so anything that sticks below it can clear it. The bar
+   * wraps to two rows on a phone, so app.js keeps this measured rather than guessed; the
+   * value here is the one-row desktop case, used until the first measurement lands. */
+  --topbar-h: 57px;
+
+  /* One content column for the whole portal. Every view is capped at --page-max and
+   * centred, so a tab switch never moves the left edge. The bands that run edge to edge —
+   * the top bar, the control row, the flash message — keep their background full-bleed but
+   * take --page-gutter, which is the same padding *plus* whatever the centred column is
+   * inset by. Without it, on a monitor wider than the column, the Start button sat 210px
+   * to the left of the panels it controls. */
+  --page-max: 1800px;
+  --page-pad: clamp(16px, 3vw, 32px);
+  --page-gutter: calc(var(--page-pad) + max(0px, (100% - var(--page-max)) / 2));
   --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
@@ -82,7 +96,7 @@ body {
 .topbar {
   display: flex; flex-wrap: wrap; gap: var(--gap);
   align-items: center; justify-content: space-between;
-  padding: 14px clamp(16px, 3vw, 32px);
+  padding: 14px var(--page-gutter);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
   position: sticky; top: 0; z-index: 20;
@@ -99,7 +113,7 @@ body {
 /* ---- controls ---------------------------------------------------------------------- */
 .controls {
   display: flex; flex-wrap: wrap; gap: var(--gap) 24px; align-items: flex-end;
-  padding: 14px clamp(16px, 3vw, 32px);
+  padding: 14px var(--page-gutter);
   border-bottom: 1px solid var(--border);
   background: var(--surface);
 }
@@ -157,7 +171,7 @@ input[type="number"] { width: 120px; font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: reduce) { .live.on .dot { animation: none; } }
 
 .flash {
-  margin: 12px clamp(16px, 3vw, 32px) 0;
+  margin: 12px var(--page-gutter) 0;
   padding: 10px 14px; border-radius: var(--radius);
   border: 1px solid var(--border); background: var(--surface);
   border-left: 3px solid var(--series-1);
@@ -168,8 +182,8 @@ input[type="number"] { width: 120px; font-variant-numeric: tabular-nums; }
 /* ---- layout ------------------------------------------------------------------------ */
 main {
   display: grid; gap: var(--gap);
-  padding: var(--gap) clamp(16px, 3vw, 32px);
-  max-width: 1500px; margin: 0 auto;
+  padding: var(--gap) var(--page-pad);
+  max-width: var(--page-max); margin: 0 auto;
 }
 .panel {
   background: var(--surface);
@@ -213,7 +227,10 @@ main {
 }
 
 /* ---- stat tiles ------------------------------------------------------------------- */
-.tiles { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+/* `min(…, 100%)` on the track floor, not a bare pixel value: `minmax(150px, …)` never
+ * shrinks below 150px, so on a phone the track stays wider than the screen and drags the
+ * whole page into a horizontal scroll. The `min()` lets the last column collapse instead. */
+.tiles { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); }
 .tile {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 14px 16px;
@@ -223,7 +240,9 @@ main {
 .tile-note { color: var(--ink-muted); font-size: 12px; }
 
 /* ---- charts ----------------------------------------------------------------------- */
-.chart-grid { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+/* As many charts per row as fit at 420px each — four on a wide monitor, one on a phone.
+ * See the note on `.tiles` for why the floor is `min(420px, 100%)` rather than `420px`. */
+.chart-grid { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); }
 .chart-card figcaption {
   display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px;
 }
@@ -320,7 +339,9 @@ table.data tr.current td { background: var(--wash); }
   border: 1px solid var(--axis); border-radius: 8px; padding: 6px 9px;
   font-variant-numeric: tabular-nums;
 }
-.days { display: flex; gap: 4px; }
+/* Seven toggles plus the presets are wider than a phone; they wrap onto a second line
+ * rather than setting a floor under the schedule panel. */
+.days { display: flex; gap: 6px 4px; flex-wrap: wrap; }
 /* Day toggles carry their state in aria-pressed and a filled background, never colour
  * alone — and each keeps its initial letter, so the pattern is readable at a glance. */
 .day {
@@ -354,7 +375,7 @@ table.data tr.current td { background: var(--wash); }
 
 .footer {
   display: flex; gap: 10px 24px; flex-wrap: wrap;
-  max-width: 1500px; margin: 0 auto; padding: 4px clamp(16px, 3vw, 32px);
+  max-width: var(--page-max); margin: 0 auto; padding: 4px var(--page-pad);
   color: var(--ink-muted); font-size: 12px;
 }
 
@@ -380,10 +401,21 @@ table.data tr.current td { background: var(--wash); }
 /* ---- tabs ----------------------------------------------------------------------------- */
 /* Two views, one page. The tab strip sits in the top bar so the brand, the view and the
  * run selector read as one line of context. */
-.tabs { display: flex; gap: 4px; margin-left: 8px; }
+/* Six tabs are wider than a phone. A flex item refuses to shrink past its content, so
+ * without `min-width: 0` the strip sets a floor under the whole page and every panel
+ * inherits the overflow. Instead the strip scrolls sideways on its own: `overflow-x`
+ * makes its min-content zero, and the padding/negative-margin pair keeps room for the
+ * focus ring, which the scroll container would otherwise clip. */
+.tabs {
+  display: flex; gap: 4px;
+  min-width: 0; overflow-x: auto; overscroll-behavior-x: contain;
+  padding: 4px; margin: -4px -4px -4px 4px;
+  scrollbar-width: none;
+}
+.tabs::-webkit-scrollbar { display: none; }
 .tab {
   padding: 6px 14px; border-color: transparent; color: var(--ink-2);
-  font-weight: 550;
+  font-weight: 550; flex: none;
 }
 .tab:hover:not(.on) { border-color: var(--border); }
 .tab.on {
@@ -397,8 +429,8 @@ table.data tr.current td { background: var(--wash); }
   display: grid;
   grid-template-columns: minmax(190px, 240px) minmax(0, 1.55fr) minmax(340px, 1fr);
   gap: var(--gap);
-  padding: var(--gap) clamp(16px, 3vw, 32px);
-  max-width: 1800px; margin: 0 auto;
+  padding: var(--gap) var(--page-pad);
+  max-width: var(--page-max); margin: 0 auto;
   align-items: start;
 }
 .code-layout > .panel {
@@ -557,8 +589,8 @@ button.folder.up { color: var(--ink-muted); }
   display: grid;
   grid-template-columns: minmax(260px, 320px) minmax(0, 1.6fr) minmax(280px, 0.9fr);
   gap: var(--gap);
-  padding: var(--gap) clamp(16px, 3vw, 32px);
-  max-width: 1800px; margin: 0 auto;
+  padding: var(--gap) var(--page-pad);
+  max-width: var(--page-max); margin: 0 auto;
   align-items: start;
 }
 .play-layout > .panel {
@@ -699,9 +731,16 @@ button.preset:hover { background: var(--wash); color: var(--ink); }
 .stage-running { border-color: #d97706; }
 .stage-done    { border-color: #059669; }
 
-/* Docs tab: a chapter list beside a rendered-markdown reader (with mermaid diagrams) */
-.docs-layout { display: grid; grid-template-columns: 240px 1fr; gap: 1rem; align-items: start; }
-.docs-nav { position: sticky; top: 1rem; max-height: calc(100vh - 6rem); overflow: auto; }
+/* Docs tab: a chapter list beside a rendered-markdown reader (with mermaid diagrams).
+ * Same outer frame as every other view — padding, max width, centred — so switching tabs
+ * does not shift where the page starts. */
+.docs-layout {
+  display: grid; grid-template-columns: 240px 1fr; gap: var(--gap); align-items: start;
+  padding: var(--gap) var(--page-pad);
+  max-width: var(--page-max); margin: 0 auto;
+}
+/* Offset by the sticky top bar, which the nav would otherwise slide under. */
+.docs-nav { position: sticky; top: calc(var(--topbar-h) + var(--gap)); max-height: calc(100vh - 6rem); overflow: auto; }
 .docs-list { list-style: none; margin: .5rem 0 0; padding: 0; }
 .docs-list li { margin: 0; }
 .docs-list button { width: 100%; text-align: left; background: none; border: 0; color: inherit;
@@ -728,8 +767,8 @@ button.preset:hover { background: var(--wash); color: var(--ink); }
   display: grid;
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
   gap: var(--gap);
-  padding: var(--gap) clamp(16px, 3vw, 32px);
-  max-width: 1800px; margin: 0 auto;
+  padding: var(--gap) var(--page-pad);
+  max-width: var(--page-max); margin: 0 auto;
   align-items: start;
 }
 .quant-layout > .panel {
@@ -805,8 +844,8 @@ button.preset:hover { background: var(--wash); color: var(--ink); }
  * controls.
  */
 .lora-why {
-  padding: var(--gap) clamp(16px, 3vw, 32px) 0;
-  max-width: 1800px; margin: 0 auto;
+  padding: var(--gap) var(--page-pad) 0;
+  max-width: var(--page-max); margin: 0 auto;
 }
 .lora-diagram {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -851,8 +890,8 @@ button.preset:hover { background: var(--wash); color: var(--ink); }
   display: grid;
   grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
   gap: var(--gap);
-  padding: var(--gap) clamp(16px, 3vw, 32px);
-  max-width: 1800px; margin: 0 auto;
+  padding: var(--gap) var(--page-pad);
+  max-width: var(--page-max); margin: 0 auto;
   align-items: start;
 }
 .lora-layout > .panel {
@@ -888,4 +927,47 @@ button.preset:hover { background: var(--wash); color: var(--ink); }
 @media (max-width: 900px) {
   .lora-layout { grid-template-columns: 1fr; }
   .lora-layout > .panel { height: auto; max-height: 70vh; }
+}
+
+/* ---- narrow screens ------------------------------------------------------------------
+ * The top bar is sticky, so its height is spent permanently — and left to wrap on its own
+ * it went to three rows and 171px, a fifth of a phone screen and tall enough to swallow
+ * the whole control band as soon as the page scrolled, which reads as the controls
+ * behaving differently from everything else on the page. Below the width where all three
+ * groups fit on one line, the tab strip takes a row of its own instead: two rows, one
+ * predictable height, no wrapping that depends on how many tabs exist.
+ */
+@media (max-width: 1100px) {
+  .tabs { order: 3; flex: 1 0 100%; margin-left: -4px; }
+}
+
+/* A phone drops what the screen already tells you, and lets each control group have a
+ * full-width row of its own. */
+@media (max-width: 640px) {
+  /* One narrower gutter for the whole page, set once — the column, the full-bleed bands
+   * and the footer all read it, so they cannot drift apart. */
+  :root { --page-pad: clamp(12px, 4vw, 16px); }
+  .topbar { padding: 10px var(--page-gutter); gap: 8px 12px; }
+  .brand-sub { display: none; }              /* the mark and the name already say it */
+  .topbar-right { gap: 10px; }
+  /* The select carries `aria-label="run"`, so the printed label is pure height. */
+  #run-field .field-label { display: none; }
+
+  /* The control band. Each group takes its own full-width row in the order you reach for
+   * them, and the poll status rejoins the flow rather than sitting stranded off to the
+   * right of a row of its own. */
+  .controls { padding: 12px var(--page-gutter); gap: 12px; }
+  .control-group { width: 100%; }
+  .control-group .field { flex: 1 1 120px; }
+  .controls input[type="number"] { width: 100%; }
+  .control-status { margin-left: 0; }
+
+  /* Stacked, the LoRA nodes are an equation read downwards, so the operators belong on
+   * their own centred line rather than stranded to the right of each box. */
+  .lora-plus, .lora-eq { flex: 1 0 100%; justify-content: center; }
+
+  /* Panels keep their border and radius but stop spending 40px of a 390px screen on
+   * padding. */
+  .panel { padding: 14px; }
+  .docs-reader { padding: 14px; }
 }
