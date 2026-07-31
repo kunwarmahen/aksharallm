@@ -17,6 +17,7 @@
 <link rel="stylesheet" href="/static/css/docs.css">
 <link rel="stylesheet" href="/static/css/quantize.css">
 <link rel="stylesheet" href="/static/css/lora.css">
+<link rel="stylesheet" href="/static/css/evals.css">
 <link rel="stylesheet" href="/static/css/narrow.css">
 </head>
 <body>
@@ -34,6 +35,7 @@
     <button class="tab" data-view="code" type="button">Code</button>
     <button class="tab" data-view="quant" type="button">Quantize</button>
     <button class="tab" data-view="lora" type="button">Finetune</button>
+    <button class="tab" data-view="evals" type="button">Eval</button>
     <button class="tab" data-view="docs" type="button">Docs</button>
   </nav>
 
@@ -66,6 +68,8 @@
 
 <!--#include lora.html -->
 
+<!--#include evals.html -->
+
 <footer class="footer">
   <span id="foot-root">–</span>
   <span class="foot-dashboard">Stopping is safe at any step: the trainer saves
@@ -83,6 +87,10 @@
   <code>python -m aksharallm.train.sft</code> and write beside the base they came from, so
   the Playground picks them up. See docs/11 for why the rank and the target layers matter
   more than anything else here.</span>
+  <span class="foot-evals" hidden>A benchmark score means nothing on its own — read it
+  against the chance line, the error bar, and what the same suite scored ten thousand steps
+  ago. Data is downloaded once into <code>data/eval/</code>; results are kept forever in
+  <code>logs/eval/</code>. See docs/12 for what each suite can and cannot tell you.</span>
   <span class="foot-play" hidden>Every generation is recorded in
   <code>logs/playground.jsonl</code> with the step and loss of the checkpoint that produced
   it, so the same prompt at step 7,000 and step 30,000 can be put side by side. While a run

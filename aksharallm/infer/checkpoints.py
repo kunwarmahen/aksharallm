@@ -184,6 +184,11 @@ class Checkpoint:
     tokenizer: str | None
     tokenizer_ok: bool
     train_loss: float | None      # the run's ema at (or just before) this checkpoint's step
+    #: The held-out split this checkpoint's run was validated against, and the window it
+    #: trained at. Recorded so the eval harness can measure perplexity on the *same* data
+    #: the training curve used, without loading the weights to find out which file that was.
+    val_bin: str | None = None
+    seq_len: int | None = None
     error: str | None = None
 
     @property
@@ -203,7 +208,8 @@ class Checkpoint:
             "params": self.params, "vocab_size": self.vocab_size,
             "max_seq_len": self.max_seq_len, "arch": self.arch,
             "tokenizer": self.tokenizer, "tokenizer_ok": self.tokenizer_ok,
-            "train_loss": self.train_loss, "error": self.error,
+            "train_loss": self.train_loss, "val_bin": self.val_bin,
+            "seq_len": self.seq_len, "error": self.error,
             "id": f"{self.run}/{self.name}",
         }
 
@@ -396,7 +402,9 @@ class CheckpointStore:
                "arch": arch,
                "tokenizer": tok,
                "tokenizer_ok": bool(tok_path and tok_path.is_file()),
-               "train_loss": self._loss_at(path.parent, step)},
+               "train_loss": self._loss_at(path.parent, step),
+               "val_bin": dcfg.get("val_bin"),
+               "seq_len": tcfg.get("seq_len")},
             error=None)
 
     def _loss_at(self, run_dir: Path, step: int | None) -> float | None:

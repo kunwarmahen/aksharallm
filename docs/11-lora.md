@@ -465,7 +465,8 @@ python -m aksharallm.data.prepare_sft synthetic \
 ## Where this sits
 
 ```
-GRPO ✅ → quantization ✅ → LoRA/QLoRA ✅ → eval harness → diffusion → export/serving
+GRPO ✅ → quantization ✅ → LoRA/QLoRA ✅ → eval harness ✅ (docs/12) → synthetic data +
+distillation → MoE → diffusion → export/serving
 ```
 
 Quantization made the model small; LoRA makes *changing* it cheap, and the two compose —

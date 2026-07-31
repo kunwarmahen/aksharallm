@@ -600,7 +600,9 @@ has been trained to do.
 ## Where this sits
 
 Quantization is the second item in the from-scratch backend sequence: GRPO ✅ →
-**quantization ✅** → **LoRA/QLoRA ✅** → eval harness → diffusion → export/serving.
+**quantization ✅** → **LoRA/QLoRA ✅** → **eval harness ✅** (docs/12 — and the place to
+re-measure what int4 costs on a benchmark rather than on perplexity) → synthetic data +
+distillation → MoE → diffusion → export/serving.
 
 LoRA/QLoRA followed directly from this chapter and composes with it: QLoRA is literally the
 `QuantLinear` built here, used as a frozen base with small trainable adapters beside it.

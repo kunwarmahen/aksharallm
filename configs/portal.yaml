@@ -60,6 +60,50 @@ explain:
   max_history: 12
 
 # --------------------------------------------------------------------------------------
+# The LLM-judge, for the eval harness's `judge` suite.
+#
+# This is the same Ollama client as `explain:` above, reading a different section — one
+# implementation, one set of error messages, two callers. The defaults differ because the
+# two want opposite things: the explainer wants a model small enough to run beside a
+# training run and answer while you wait, the judge wants the best model on the machine and
+# does not mind taking a minute per answer.
+#
+# It grades twelve fixed open-ended prompts 1-5 against a written rubric. That is the only
+# measurement in the harness that can see fluency, instruction-following and invented facts
+# — the things multiple choice cannot measure and synthetic training data damages first.
+#
+#     python -m aksharallm.eval <ckpt> --suite judge
+#     AKSHARALLM_JUDGE_MODEL=gemma4:31b        # for one session
+# --------------------------------------------------------------------------------------
+
+judge:
+  # The biggest model you have pulled. A judge's job is to be a consistent reader, and a
+  # bigger model is a more consistent one. It runs after the answers are generated, so it
+  # never competes with our own model for memory.
+  model: qwen3.5:27b
+
+  # Zero, and not for taste: a judge that samples gives a different grade to the same
+  # answer on a second run, which destroys the only thing the number is good for —
+  # comparing one of our checkpoints against another.
+  temperature: 0.0
+
+  # Same trap as the explainer: a reasoning model spends `num_predict` on its thinking
+  # before answering, and the reply we need is a one-line JSON object. See docs/07.
+  think: false
+
+  num_ctx: 8192
+  num_predict: 400
+
+  # Longer than the explainer's. Nobody is watching this one arrive, and a 27B model on a
+  # busy machine can take a while per answer. Twelve answers is the whole suite.
+  timeout_s: 600
+  keep_alive: 5m
+
+  # As with explain: 0 keeps the judge entirely on the CPU, which is what you want if you
+  # run the judge suite while a training session is going. It will be slow.
+  #   num_gpu: 0
+
+# --------------------------------------------------------------------------------------
 # The Playground tab: testing your own checkpoints.
 #
 # This is the other model in the building — not the Ollama one that reads your code, but

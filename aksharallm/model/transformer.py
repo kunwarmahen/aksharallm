@@ -242,10 +242,20 @@ class Transformer(nn.Module):
         targets: torch.Tensor | None = None,
         caches: list[KVCache] | None = None,
         loss_mask: torch.Tensor | None = None,
+        full_logits: bool = False,
     ):
         """idx: (B, T) int64 token ids.
         targets: (B, T) int64, -100 to ignore. If given, returns (logits, loss).
         loss_mask: (B, T) bool/float — optional extra weighting, used by SFT.
+        full_logits: return every position's logits with no loss, as (logits, None).
+
+        `full_logits` exists for evaluation. Scoring a multiple-choice answer needs the
+        log-probability of each token *individually*, so the harness computes its own
+        per-token cross-entropy — and asking for `targets` just to get the full logit
+        tensor would make this function compute a mean loss the caller throws away, at the
+        cost of a second float32 copy of a (B, T, vocab) tensor. At batch 8 x 512 tokens
+        that copy is a quarter of a gigabyte, on a device that is often the CPU because a
+        training run owns the card.
         """
         B, T = idx.shape
         start = caches[0].pos if caches is not None else 0
@@ -262,6 +272,8 @@ class Transformer(nn.Module):
         x = self.norm(x)
 
         if targets is None:
+            if full_logits:
+                return self.lm_head(x), None
             # Inference: only the last position matters. Computing the full (B,T,vocab)
             # logit tensor here would be the single biggest allocation in generation.
             return self.lm_head(x[:, -1:, :]), None

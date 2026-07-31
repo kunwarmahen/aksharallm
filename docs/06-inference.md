@@ -348,26 +348,35 @@ cumulatively and diffing avoids that.
 
 ## Evaluation
 
+Two different jobs, and it is worth keeping them straight.
+
+**The benchmark harness** produces a *number* — comparable to other people's models, on a
+fixed set of questions, kept forever so this checkpoint can be compared with the same
+checkpoint's earlier self. That is [docs/12](12-eval.md), and the whole of it:
+
 ```bash
-python -m aksharallm.eval.evaluate checkpoints/tiny/ckpt_best.pt \
-    --tasks perplexity,samples
+python -m aksharallm.eval suites          # what can be measured, and what to expect
+python -m aksharallm.eval fetch --all     # once, ~19 MB, then it works offline
+python -m aksharallm.eval tiny            # perplexity, ARC-Easy, HellaSwag, PIQA, MMLU
+python -m aksharallm.eval report          # every evaluation so far
 ```
 
-**Perplexity** — `e^loss` on held-out text. Cheap and smooth, great for tracking a run.
-Useless for comparing models with *different tokenizers*, since it's per-token and tokens
-differ.
+**The playground** produces *text you read*, from a model kept warm and swappable on a
+machine that may be training at the same time. That is the rest of this chapter.
 
-**HellaSwag** — pick the sensible continuation out of 4. Comparable across tokenizers.
-Scored by computing each ending's total log-probability given the context, normalised by
-token count so long endings aren't penalised.
+They are genuinely different jobs, which is why `infer/engine.py` holds one resident model
+with a device policy and an idle unload, and the harness borrows exactly that engine rather
+than loading checkpoints its own way.
 
-> ⚠️ HellaSwag is **noisy below ~1B params**. A 300M model scores near the 25% random
-> baseline. Don't panic — it becomes informative as you scale. At our size, val perplexity
-> plus reading actual generations tells you more.
+**Perplexity** is the one number that belongs to both. `e^loss` on held-out text: cheap,
+smooth, and continuous with the training curve. Useless for comparing models with
+*different tokenizers*, since it is per token and tokens differ. Everything else in the
+harness is comparable across tokenizers, which is the point of it.
 
-**Reading samples is underrated.** A loss curve won't tell you the model has started
-repeating itself or lost punctuation. Look at the text — that is what the Playground tab and
-`--probes` exist for, and why every generation is kept with the step that produced it.
+**Reading samples is underrated.** A loss curve will not tell you the model has started
+repeating itself or lost punctuation, and neither will a benchmark score. Look at the text —
+that is what the Playground tab and `--probes` exist for, and why every generation is kept
+with the step that produced it.
 
 ### Which tool for which question
 
@@ -375,15 +384,14 @@ repeating itself or lost punctuation. Look at the text — that is what the Play
 |---|---|
 | is the loss going down? | the Dashboard, `train_log.jsonl` |
 | can it finish a sentence? | `--probes`, or the Playground tab |
-| is it better than last week? | `--compare <probe>` |
+| has this prompt improved since last week? | `--compare <probe>` |
 | can it write working Python? | `--tasks` (executes the code) |
-| how does it score against a benchmark? | `aksharallm.eval.evaluate` |
+| **does it know anything? is it any good?** | `python -m aksharallm.eval` → [docs/12](12-eval.md) |
 
-The last row is the difference worth keeping straight: `eval` produces a *number* to compare
-against other people's models, on a fixed benchmark, with the model loaded once for the
-duration. The playground produces *text you read*, from a model kept warm and swappable, on
-a machine that may be training at the same time. They are different jobs, which is why
-`infer/engine.py` and `infer/cli.load_model` are two different ways to load the same file.
+The one trap worth naming here, because it catches everybody: **a 300M model scores 25% on
+MMLU, and 25% is chance.** Four-way multiple choice pays that for guessing. Reading it as a
+failure is a misunderstanding, not a bug — see docs/12 for what each suite should score at
+this size, and why a 0% on GSM8K is still worth measuring.
 
 ---
 

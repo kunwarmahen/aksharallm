@@ -44,6 +44,7 @@ from urllib.parse import parse_qs, urlparse
 from ..infer.checkpoints import InferError
 from ..infer.engine import SamplingParams
 from ..infer.playground import Playground
+from .evals import EvalJobs
 from .explain import ExplainConfig, Ollama, SourceTree, build_messages
 from .gpu import Sampler, snapshot
 from .pipeline import Pipeline
@@ -77,7 +78,7 @@ class Handler(BaseHTTPRequestHandler):
     def __init__(self, *args, store: RunStore, scheduler: Scheduler, sampler: Sampler,
                  source: SourceTree, explain: ExplainConfig, playground: Playground,
                  pipeline: Pipeline, quant: QuantJobs, finetune: FinetuneJobs,
-                 quiet: bool = True, **kw):
+                 evals: EvalJobs, quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
         self.sampler = sampler
@@ -87,6 +88,7 @@ class Handler(BaseHTTPRequestHandler):
         self.pipeline = pipeline
         self.quant = quant
         self.finetune = finetune
+        self.evals = evals
         self.quiet = quiet
         super().__init__(*args, **kw)
 
@@ -213,6 +215,16 @@ class Handler(BaseHTTPRequestHandler):
                         mode=str(data.get("mode", "now")),
                         steps=self._int(data, "steps"),
                         seconds=self._int(data, "seconds")))
+            # evaluation: /api/eval/<start|stop|fetch>
+            if len(parts) == 3 and parts[:2] == ["api", "eval"]:
+                if parts[2] == "start":
+                    return self._json(self.evals.start(data))
+                if parts[2] == "stop":
+                    return self._json(self.evals.stop())
+                if parts[2] == "fetch":
+                    names = data.get("datasets")
+                    return self._json(self.evals.fetch(
+                        [str(n) for n in names] if isinstance(names, list) else None))
             # post-training: /api/pipeline/<base>/<stage>/<start|stop>
             if len(parts) == 5 and parts[:2] == ["api", "pipeline"]:
                 base, stage, action = parts[2], parts[3], parts[4]
@@ -255,6 +267,26 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(400, "budget needs ?checkpoint=<run/name.pt>")
             targets = (query.get("targets") or ["all-linear"])[0]
             return self._json(self.finetune.budget(ckpt, targets=targets))
+        if parts == ["eval"]:
+            lines = int((query.get("lines") or [200])[0])
+            return self._json(self.evals.status(tail=max(0, lines),
+                                                results=int((query.get("results") or [25])[0])))
+        if parts == ["eval", "checkpoints"]:
+            return self._json({"checkpoints": self.evals.checkpoints(),
+                               "adapters": self.evals.adapters()})
+        if parts == ["eval", "compare"]:
+            # One suite across every evaluation ever run — the chart the tab leads with,
+            # and the whole reason results are kept as files rather than printed and lost.
+            suite = (query.get("suite") or [""])[0]
+            if not suite:
+                raise RunError("compare needs ?suite=<name>")
+            return self._json(self.evals.compare(
+                suite, run=(query.get("run") or [None])[0]))
+        if parts == ["eval", "result"]:
+            name = (query.get("file") or [""])[0]
+            if not name:
+                raise RunError("result needs ?file=<name>.json")
+            return self._json(self.evals.result(name))
         if len(parts) == 2 and parts[0] == "pipeline":
             # post-training stages + gating for a base run: /api/pipeline/<base>
             return self._json(self.pipeline.status(parts[1]))
@@ -620,9 +652,11 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
     pipeline = Pipeline(store.root)
     quant = QuantJobs(store.root)
     finetune = FinetuneJobs(store.root)
+    evals = EvalJobs(store.root)
     handler = partial(Handler, store=store, scheduler=scheduler, sampler=sampler,
                       source=source, explain=explain, playground=playground,
-                      pipeline=pipeline, quant=quant, finetune=finetune, quiet=quiet)
+                      pipeline=pipeline, quant=quant, finetune=finetune, evals=evals,
+                      quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True

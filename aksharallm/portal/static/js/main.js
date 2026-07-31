@@ -9,6 +9,7 @@ import { UNIT_MINUTES, UNIT_MORE_STEPS, act, boundPicker, drawCharts, fmtMins, f
 import { wireCode } from './code.js';
 import { wireQuantTab } from './quantize.js';
 import { wireLoraTab } from './lora.js';
+import { wireEvalTab, drawTrend } from './evals.js';
 import { wirePlay } from './play.js';
 import './docs.js';
 
@@ -19,6 +20,7 @@ function wire() {
   wirePlay();
   wireQuantTab();
   wireLoraTab();
+  wireEvalTab();
   boundPicker.wire();
   for (const tab of $$('.tab')) {
     tab.addEventListener('click', () => showView(tab.dataset.view));
@@ -159,11 +161,12 @@ function wire() {
     drawCharts();
   });
 
-  /* Charts are sized from their container, so a resize needs a redraw, not a refetch. */
+  /* Charts are sized from their container, so a resize needs a redraw, not a refetch. The
+   * Eval tab's trend chart is drawn by the same rule and from the same cached data. */
   let resizeTimer;
   window.addEventListener('resize', () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(drawCharts, 150);
+    resizeTimer = setTimeout(() => { drawCharts(); drawTrend(); }, 150);
   });
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) schedule(0);

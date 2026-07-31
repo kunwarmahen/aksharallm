@@ -146,6 +146,7 @@ flowchart TD
     Code[Code: a local model explains the source back to you]
     Quant[Quantize: make it smaller, and see what that cost]
     Tune["Finetune: what a LoRA run would cost, then run it"]
+    Eval["Eval: is it any good? benchmarks, and the trend across steps"]
     Docs[Docs: read this guide in the browser, diagrams and all]
 ```
 
@@ -180,6 +181,15 @@ The panels, in plain terms:
   read these numbers. Like every other button it shells out — here to
   `python -m aksharallm.quant` — and it drops to the CPU while a run is training, because a
   GPTQ job can allocate more than the card has left. See [doc 10](10-quantization.md).
+- **Eval** — run real benchmarks against a checkpoint (MMLU, ARC, HellaSwag, PIQA, GSM8K,
+  HumanEval, an LLM-judge) and see the answer *in context*. The tab leads with the **trend
+  chart** — one suite across every checkpoint ever measured, with the chance line drawn as
+  a rule — rather than with the Run button, for the same reason the Finetune tab leads with
+  the memory budget: a single benchmark score is close to meaningless. A score is only
+  coloured when it clears chance by more than its own error bar. Each suite carries the
+  sentence saying what to expect at this size, because the commonest way to misread the
+  panel is to see 25% on MMLU and conclude the model is broken. Shells out to
+  `python -m aksharallm.eval`. See [doc 12](12-eval.md).
 - **Docs** — this guide, read right in the browser: the sidebar lists every chapter, and the
   reader renders the same `docs/*.md` files **with their diagrams** (the mermaid library is
   vendored locally and loaded only when you open this tab). Same files, no duplication.
@@ -195,7 +205,7 @@ the rules that style it:
 
 ```
 portal/static/
-  index.html          the shell: head, top bar, footer, dialog, and six include markers
+  index.html          the shell: head, top bar, footer, dialog, and the include markers
   parts/<tab>.html    the markup for one view
   js/<tab>.js         the code for one view
   css/<tab>.css       the rules for one view
@@ -225,7 +235,7 @@ flowchart TD
     charts["charts.js"]
     md["markdown.js"]
     dash["dashboard.js"]
-    tabs["code · docs · quant<br/>lora · play"]
+    tabs["code · docs · quant<br/>lora · evals · play"]
     main["main.js — wire + boot"]
 
     core --> charts & md & router & dash & tabs & main
@@ -325,7 +335,7 @@ too, which is worse:
   below 420px. Narrower than that and the track — and every panel beside it — hangs off the
   screen. Write the floor as `minmax(min(420px, 100%), 1fr)`: identical above 420px, and it
   collapses instead of overflowing below it.
-- A flex item will not shrink past its own content. The tab strip is six tabs and ~558px
+- A flex item will not shrink past its own content. The tab strip is seven tabs and ~620px
   wide, so it dragged the whole page out to 558px until it was given `min-width: 0` and its
   own `overflow-x: auto` — now it scrolls in place instead of scrolling the page.
 
@@ -355,6 +365,8 @@ Note that Chrome's `--window-size` will not go below about 485px and so cannot t
 | watch it | `tail -f train_small-code.log` | Dashboard (live) |
 | talk to it mid-training | `python -m aksharallm.infer.cli small-code` | Playground |
 | make it 4-bit and measure it | `python -m aksharallm.quant small-code/ckpt_best.pt --compare` | Quantize → Compare all |
+| is it any good yet? | `python -m aksharallm.eval small-code --suite fast` | Eval → Evaluate |
+| has it improved since last week? | `python -m aksharallm.eval report --suite arc-easy` | Eval → the trend chart |
 
 ---
 

@@ -256,7 +256,15 @@ class ExplainConfig:
     again per-request by the model picker in the page. It reloads itself when the file's
     mtime changes, so editing the YAML does not mean restarting the portal — the same
     contract `Schedule` offers for rules.
+
+    `SECTION` and `ENV_PREFIX` are class attributes rather than constants so that a second
+    Ollama-backed feature can be the same config with a different section: the eval
+    harness's LLM-judge subclasses this to read `judge:` and `AKSHARALLM_JUDGE_*`. One
+    client, one set of failure messages, two callers.
     """
+
+    SECTION = "explain"
+    ENV_PREFIX = "AKSHARALLM_EXPLAIN"
 
     host: str = "http://127.0.0.1:11434"
     model: str = "gemma4:12b"
@@ -294,7 +302,7 @@ class ExplainConfig:
             try:
                 self._mtime = self.path.stat().st_mtime
                 loaded = yaml.safe_load(self.path.read_text()) or {}
-                data = (loaded.get("explain") or {}) if isinstance(loaded, dict) else {}
+                data = (loaded.get(self.SECTION) or {}) if isinstance(loaded, dict) else {}
             except (OSError, yaml.YAMLError) as exc:
                 # A broken YAML must not take the whole portal down; the defaults are
                 # usable, and the page shows why the file was ignored.
@@ -316,10 +324,10 @@ class ExplainConfig:
         # Environment wins over the file: it is how you point at a model on another machine
         # for one session without editing a file that is checked in.
         self.host = os.environ.get("AKSHARALLM_OLLAMA_HOST", self.host).rstrip("/")
-        self.model = os.environ.get("AKSHARALLM_EXPLAIN_MODEL", self.model)
-        if os.environ.get("AKSHARALLM_EXPLAIN_NUM_GPU"):
+        self.model = os.environ.get(f"{self.ENV_PREFIX}_MODEL", self.model)
+        if os.environ.get(f"{self.ENV_PREFIX}_NUM_GPU"):
             try:
-                self.num_gpu = int(os.environ["AKSHARALLM_EXPLAIN_NUM_GPU"])
+                self.num_gpu = int(os.environ[f"{self.ENV_PREFIX}_NUM_GPU"])
             except ValueError:
                 pass
         return self

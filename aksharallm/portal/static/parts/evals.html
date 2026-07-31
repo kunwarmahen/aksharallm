@@ -1,0 +1,109 @@
+<!-- The Eval tab: is the model actually any good? Every button shells out to
+     `python -m aksharallm.eval`, so a job started here and one typed into a terminal write
+     the same file into logs/eval/ and appear in the same table. -->
+<div id="view-evals" class="view" hidden>
+  <section class="ev-layout">
+
+    <aside class="panel ev-form">
+      <div class="panel-head">
+        <h2>Evaluate</h2>
+        <span class="panel-note">benchmarks, from scratch</span>
+      </div>
+
+      <label class="field wide">
+        <span class="field-label">checkpoint</span>
+        <select id="ev-ckpt" aria-label="checkpoint"></select>
+      </label>
+      <div class="ev-hint" id="ev-ckpt-note"></div>
+
+      <label class="field wide">
+        <span class="field-label">adapter</span>
+        <select id="ev-adapter" aria-label="adapter">
+          <option value="">none — the base checkpoint alone</option>
+        </select>
+      </label>
+
+      <fieldset class="ev-suites">
+        <legend>suites</legend>
+        <div class="ev-groups" role="group" aria-label="preset groups">
+          <button type="button" class="chip" data-group="fast">fast</button>
+          <button type="button" class="chip" data-group="default">default</button>
+          <button type="button" class="chip" data-group="all">all</button>
+        </div>
+        <div id="ev-suite-list"></div>
+      </fieldset>
+
+      <div class="ev-row">
+        <label class="field">
+          <span class="field-label">items each</span>
+          <input id="ev-limit" type="number" min="0" max="20000" step="10" value="500">
+        </label>
+        <label class="field">
+          <span class="field-label">device</span>
+          <select id="ev-device" aria-label="device">
+            <option value="">auto</option>
+            <option value="cuda">cuda</option>
+            <option value="cpu">cpu</option>
+          </select>
+        </label>
+      </div>
+      <div class="ev-hint" id="ev-limit-note">0 means the whole cached split.</div>
+      <div class="ev-hint" id="ev-device-note"></div>
+
+      <label class="field wide">
+        <span class="field-label">label</span>
+        <input id="ev-label" type="text" value="eval" maxlength="40"
+               aria-label="label, used in the result filename">
+      </label>
+
+      <div class="ev-actions">
+        <button id="ev-run" type="button">Evaluate</button>
+        <button id="ev-stop" class="ghost" type="button" hidden>Stop</button>
+      </div>
+      <div class="ev-hint" id="ev-cmd"></div>
+
+      <div class="ev-data">
+        <div class="panel-head"><h2>Benchmark data</h2>
+          <span class="panel-note" id="ev-data-note">–</span></div>
+        <div id="ev-datasets" class="ev-datasets"></div>
+        <button id="ev-fetch" class="ghost" type="button">Download what is missing</button>
+        <p class="ev-fine">Fetched once into <code>data/eval/</code> and read from disk
+        forever after, so the same questions are asked every time and evaluating works
+        offline.</p>
+      </div>
+    </aside>
+
+    <section class="panel ev-main">
+      <div class="panel-head">
+        <h2 id="ev-title">Results</h2>
+        <span class="panel-note" id="ev-state">nothing running</span>
+      </div>
+
+      <div id="ev-progress" class="ev-progress" hidden>
+        <div class="ev-bar"><span id="ev-bar-fill"></span></div>
+        <span id="ev-progress-label"></span>
+      </div>
+
+      <div class="ev-trend">
+        <div class="ev-trend-head">
+          <label class="field">
+            <span class="field-label">trend</span>
+            <select id="ev-trend-suite" aria-label="suite to chart"></select>
+          </label>
+          <span class="ev-hint" id="ev-trend-note"></span>
+        </div>
+        <div id="ev-trend-chart" class="ev-chart"></div>
+        <div class="scroll-x"><table class="ev-table" id="ev-trend-table"></table></div>
+      </div>
+
+      <div class="scroll-x"><div id="ev-results" class="ev-results"></div></div>
+
+      <div class="ev-logwrap">
+        <div class="panel-head"><h2>Job output</h2>
+          <span class="panel-note">live, from <code>logs/eval/</code></span></div>
+        <pre id="ev-log" class="ev-log">Pick a checkpoint and press Evaluate.</pre>
+      </div>
+    </section>
+
+  </section>
+</div><!-- /view-evals -->

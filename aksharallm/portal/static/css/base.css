@@ -119,7 +119,8 @@ main {
  * panels needs this; it is invisible until real data arrives and a row gets wide. */
 main > *,
 .chart-grid > *, .tiles > *,
-.code-layout > *, .play-layout > *, .quant-layout > *, .lora-layout > *, .docs-layout > * {
+.code-layout > *, .play-layout > *, .quant-layout > *, .lora-layout > *, .docs-layout > *,
+.ev-layout > * {
   min-width: 0;
 }
 .panel-head {

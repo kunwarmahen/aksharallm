@@ -1,0 +1,123 @@
+/* The Eval tab. Pairs with js/evals.js. */
+
+/* Two columns, same shape as Quantize and Finetune: what you are asking for on the left,
+   what it found on the right. The right column is the taller one on purpose — the trend
+   chart and the results table are what the tab is for; the form is the small part. */
+.ev-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+  gap: var(--gap);
+  padding: var(--gap) var(--page-pad);
+  max-width: var(--page-max); margin: 0 auto;
+  align-items: start;
+}
+.ev-layout > .panel {
+  height: calc(100vh - 150px); min-height: 420px;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.ev-form { overflow-y: auto; gap: 10px; }
+.ev-form .field { margin-top: 4px; }
+.ev-main { gap: 12px; overflow-y: auto; }
+
+.ev-hint {
+  font-size: 12px; color: var(--ink-muted); line-height: 1.45;
+  margin: -2px 0 6px; word-break: break-word;
+}
+.ev-hint.warn { color: var(--serious); }
+.ev-fine { font-size: 11px; color: var(--ink-muted); line-height: 1.5; margin: 8px 0 0; }
+.ev-fine code, .ev-hint code { font-family: var(--mono); font-size: 11px; }
+.ev-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ev-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; }
+
+/* ---- suite picker ------------------------------------------------------------------- */
+/* Each suite carries its own "what to expect" line. It is the most important text on the
+   page: the commonest way to misread this tab is to see 25% on MMLU and conclude the model
+   is broken, when 25% is exactly what four-way multiple choice pays for guessing. */
+.ev-suites { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; margin: 6px 0; }
+.ev-suites legend { font-size: 12px; color: var(--ink-muted); padding: 0 4px; }
+.ev-groups { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.ev-groups .chip {
+  font-size: 11px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: transparent; color: var(--ink-muted);
+  cursor: pointer;
+}
+.ev-groups .chip:hover { color: var(--ink); border-color: var(--axis); }
+
+.ev-suite {
+  display: grid; grid-template-columns: auto 1fr; gap: 2px 8px;
+  padding: 7px 2px; border-top: 1px solid var(--border); cursor: pointer;
+}
+.ev-suite:first-of-type { border-top: none; }
+.ev-suite input { grid-row: 1 / span 3; margin-top: 3px; }
+.ev-suite-name { font-size: 13px; font-weight: 600; }
+.ev-suite-name em {
+  font-style: normal; font-family: var(--mono); font-size: 10px;
+  color: var(--ink-muted); margin-left: 6px;
+}
+.ev-suite-blurb { font-size: 12px; color: var(--ink); line-height: 1.4; }
+.ev-suite-expect { font-size: 11px; color: var(--ink-muted); line-height: 1.45; }
+
+/* ---- benchmark data ----------------------------------------------------------------- */
+.ev-data { margin-top: 14px; border-top: 1px solid var(--border); padding-top: 12px; }
+.ev-datasets { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.ev-ds {
+  display: flex; justify-content: space-between; gap: 8px;
+  font-size: 11px; color: var(--ink-muted); padding: 2px 0;
+}
+.ev-ds-name { font-family: var(--mono); }
+.ev-ds.on .ev-ds-name { color: var(--ink); }
+
+/* ---- progress ------------------------------------------------------------------------ */
+.ev-progress { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--ink-muted); }
+.ev-bar { flex: 1; height: 4px; background: var(--wash); border-radius: 999px; overflow: hidden; }
+.ev-bar > span { display: block; height: 100%; width: 0; background: var(--series-1); transition: width .3s ease; }
+
+/* ---- the trend ----------------------------------------------------------------------- */
+.ev-trend { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+.ev-trend-head { display: flex; gap: 14px; align-items: flex-start; flex-wrap: wrap; }
+.ev-trend-head .field { flex: none; }
+.ev-trend-head .ev-hint { flex: 1 1 260px; margin: 0; }
+/* The shared chart draws at a 320px minimum width, so on a phone the SVG is wider than the
+   panel holding it. It scrolls inside its own box rather than pushing the page sideways —
+   the same contract every wide table on this page has. */
+.ev-chart { min-height: 200px; margin: 6px 0; overflow-x: auto; }
+
+/* ---- results ------------------------------------------------------------------------- */
+.ev-results { min-height: 100px; }
+.ev-empty { color: var(--ink-muted); font-size: 13px; line-height: 1.5; padding: 8px 2px; }
+.ev-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ev-table th, .ev-table td {
+  text-align: right; padding: 5px 10px; border-top: 1px solid var(--border);
+  white-space: nowrap;
+}
+.ev-table th:first-child, .ev-table td:first-child { text-align: left; }
+.ev-table th { color: var(--ink-muted); font-weight: 500; }
+.ev-table code { font-family: var(--mono); font-size: 11px; }
+.ev-ckpt-cell { text-align: left !important; }
+
+/* Colour says one thing only: is this score clear of chance by more than its own error
+   bar? Anything else would dress a coin flip up as a result. */
+.ev-good { color: var(--good); }
+.ev-bad  { color: var(--serious); }
+.ev-chance { color: var(--ink-muted); }
+.ev-dim  { color: var(--ink-muted); }
+
+/* One column below the width where the form and the results can sit side by side. The
+   panels also give up their fixed height *and their overflow*: stacked, a panel with an
+   inner scroller means a phone has three scrollable regions on one screen and a flick
+   lands in whichever one is under the thumb. The page scrolls; the panels just grow. */
+@media (max-width: 900px) {
+  .ev-layout { grid-template-columns: 1fr; }
+  .ev-layout > .panel {
+    height: auto; min-height: 0; max-height: none; overflow: visible;
+  }
+  .ev-form, .ev-main { overflow-y: visible; }
+}
+
+.ev-logwrap { display: flex; flex-direction: column; min-height: 140px; }
+.ev-log {
+  font-family: var(--mono); font-size: 11px; line-height: 1.5;
+  background: var(--plane); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px; margin: 0; overflow: auto; max-height: 220px; white-space: pre-wrap;
+  word-break: break-word;
+}

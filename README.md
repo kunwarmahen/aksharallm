@@ -100,6 +100,7 @@ Read these in order. They assume no prior knowledge of machine learning.
 | 9 | [Running & watching it](docs/09-running-and-watching.md) | The scripts, stop/resume, the gated post-training stages, and the **portal** — with diagrams |
 | 10 | [Quantization](docs/10-quantization.md) | Storing weights in 4 bits: group scales, RTN/GPTQ/AWQ/QAT, **NF4**, a fused Triton kernel, and why smaller isn't faster |
 | 11 | [LoRA & QLoRA](docs/11-lora.md) | Fine-tuning without training the model: low-rank adapters, a 4-bit frozen base, one base + many skills, and a free DPO reference model |
+| 12 | [Evaluation](docs/12-eval.md) | Is the model actually any good? MMLU/ARC/HellaSwag/PIQA scored by log-likelihood, GSM8K, HumanEval executed for real, an LLM-judge — and why 25% on MMLU is not a failure |
 
 ---
 
@@ -147,13 +148,20 @@ aksharallm/
 │   │   ├── schedule.py       recurring start/stop windows + the clock loop
 │   │   ├── gpu.py            nvidia-smi sampling, history, training-vs-idle summary
 │   │   ├── explain.py        source browser + a local Ollama model that explains it
+│   │   ├── evals.py          benchmark jobs; shells out to `python -m aksharallm.eval`
 │   │   ├── server.py         stdlib http.server + a small JSON API
 │   │   └── static/           the client: no build step, no framework, no dependencies
 │   │       ├── index.html        the shell; server fills its <!--#include --> markers
 │   │       ├── parts/<tab>.html  markup, one file per view
 │   │       ├── js/<tab>.js       ES modules, one per view (+ core/state/router/charts)
 │   │       └── css/<tab>.css     rules, one per view (+ base/chrome/controls/narrow)
-│   ├── eval/evaluate.py  perplexity, HellaSwag, sample generations
+│   ├── eval/             the benchmark harness — see docs/12
+│   │   ├── sources.py        download benchmarks once into data/eval/, then work offline
+│   │   ├── suites.py         what each benchmark asks, and how an answer is judged right
+│   │   ├── scoring.py        batched log-likelihood, greedy decode-until, perplexity
+│   │   ├── judge.py          twelve open prompts graded 1-5 by a local Ollama model
+│   │   ├── runner.py         run suites against a checkpoint; one JSON per evaluation
+│   │   └── report.py         every result ever, and the trend across training steps
 │   └── infer/            talking to a checkpoint, and judging what comes back
 │       ├── generate.py       KV-cache sampling loop (streaming + one-shot)
 │       ├── checkpoints.py    what has been trained: step, loss, stage, tokens seen
@@ -283,10 +291,17 @@ adapter off and the model you are already holding *is* the model you started fro
 ### What comes after that
 
 In order, all written from scratch: **GRPO** ✅ (RL on a reward the code sandbox actually
-verifies) → **quantization** ✅ → **LoRA/QLoRA** ✅ → a **real eval harness** (GSM8K/MMLU plus
-a model-judged suite) → **diffusion training** → export and serving.
+verifies) → **quantization** ✅ → **LoRA/QLoRA** ✅ → a **real eval harness** ✅ (MMLU, ARC,
+HellaSwag, PIQA, GSM8K, HumanEval and a model-judged suite — [docs/12](docs/12-eval.md)) →
+**synthetic data + distillation** → **mixture of experts** → **diffusion training** →
+export and serving.
 
-Two of those are worth explaining, because they are not the usual list.
+The harness came before the last four deliberately. Mixture of experts, synthetic data and
+distillation are all changes to model *quality*, and validation loss either cannot see them
+or reports them backwards — training on generated text is the easiest way to improve a loss
+curve while making a model worse. You need the instrument before you run the experiment.
+
+Two of the others are worth explaining, because they are not the usual list.
 
 **Diffusion training.** Everything above is autoregressive: predict the next token from the
 ones before it. A masked diffusion language model throws that away — it corrupts a sequence
