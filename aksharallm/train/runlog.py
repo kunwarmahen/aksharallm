@@ -7,7 +7,8 @@ and the web portal (`aksharallm.portal`) can never drift apart in how they inter
 
 Three record kinds are written:
 
-    {"event": "session_start", ...}   one per launch: pid, start_step, max_steps, stop_at
+    {"event": "session_start", ...}   one per launch: pid, start_step, max_steps,
+                                      stop_at (step bound) and stop_by (time budget)
     {"step": N, "loss": ..., ...}     one per `log_every` steps (plus the step a stop lands on)
     {"step": N, "val_loss": ...}      one per eval
     {"event": "session_end", ...}     one per clean exit: reason, last_step, elapsed
@@ -84,6 +85,7 @@ def split_sessions(records: Iterable[dict]) -> list[dict]:
             cur = new_session(start_iso=rec.get("iso"), pid=rec.get("pid"),
                               start_step=rec.get("start_step"), t0=rec.get("time"),
                               max_steps=rec.get("max_steps"), stop_at=rec.get("stop_at"),
+                              stop_by=rec.get("stop_by"),
                               tokens_per_step=rec.get("tokens_per_step"))
         elif event == "session_end":
             if cur is None:

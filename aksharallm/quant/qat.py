@@ -57,11 +57,13 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ..train import stopfile
 from .convert import _set_module, linear_layers
 from .qlinear import QuantLinear
 from .qtensor import QuantScheme, fake_quantize, resolve_group_size
@@ -171,12 +173,20 @@ def train_qat(
     device: str = "cuda",
     log_every: int = 20,
     log=print,
+    stop_file: Path | None = None,
+    stop_by: float | None = None,
 ) -> QATResult:
     """A short quantization-aware fine-tune.
 
     Deliberately small: a low learning rate and a few hundred steps. QAT from a trained
     checkpoint is a nudge, not a retrain -- push the learning rate up and you will undo
     the pretraining faster than you recover the quantization loss.
+
+    `stop_file` and `stop_by` end it early on request (`aksharallm.train.stopfile`), leaving
+    the model where the last step put it. That is safe here in a way it is not for every
+    loop: QAT starts from a trained checkpoint and only nudges it, so stopping at step 300
+    of 800 gives you a partly-recovered model, not a broken one -- and everything after this
+    call (export, perplexity, saving) runs exactly as it would have.
     """
     from ..data.loader import TokenDataset
 
@@ -210,8 +220,18 @@ def train_qat(
         if step == 1:
             first = val
         last = val
-        if log and (step % log_every == 0 or step == 1):
+
+        why = stopfile.reached(stopfile.read(stop_file) if stop_file else None, step)
+        if why is None and stop_by is not None and time.time() >= stop_by:
+            why = "reached the time budget for this QAT run"
+        if log and (step % log_every == 0 or step == 1 or why):
             log(f"    qat step {step}/{steps}  loss {val:.4f}  lr {cur:.2e}")
+        if why:
+            if log:
+                log(f"    [stop] {why} -- ending QAT at step {step} of {steps} and "
+                    "exporting what it has")
+            steps = step
+            break
 
     model.eval()
     del rng

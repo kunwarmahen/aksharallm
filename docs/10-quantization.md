@@ -372,6 +372,14 @@ at int4 per-channel, 800 steps, against RTN's +0.156:
 QAT is not "more training is better". It is a search for a nearby basin, and a large step
 leaves the neighbourhood.
 
+**It is also the only method here you can stop halfway.** RTN, GPTQ and AWQ are a single
+pass over the weights with no useful intermediate state; QAT is a training loop over a
+model that was already trained, so ending it at step 300 of 800 leaves a partly-recovered
+model that converts, measures and saves exactly as it would have. So `--stop-in 20m`, a
+`--stop-file`, and the portal's *Stop at…* dialog exist for QAT and are refused (with the
+reason) for the others — where the only honest stop is a kill that writes nothing. The
+result records the steps it actually did, never the number you asked for.
+
 **Simulate the storage precision.** `QuantLinear` keeps scales in fp16. A QAT run computing
 them in fp32 trains against slightly better numerics than it will ship with, and the model
 shifts on conversion (~1e-4 on the logits). `fake_quantize(..., scale_dtype=torch.float16)`
@@ -550,6 +558,7 @@ python -m aksharallm.quant small-code/ckpt_best.pt --method awq  --bench
 
 # quantization-aware fine-tune (needs training data and GPU time)
 python -m aksharallm.quant tiny/ckpt_best.pt --method qat --qat-steps 800 --bench
+python -m aksharallm.quant tiny/ckpt_best.pt --method qat --stop-in 20m --bench  # ...for 20 min
 
 # NF4 — the normal-quantile grid, plus compressed scales
 python -m aksharallm.quant small-code/ckpt_best.pt --dtype nf4 --double-quant --bench

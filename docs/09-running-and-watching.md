@@ -58,8 +58,11 @@ stateDiagram-v2
 
 ```bash
 scripts/phase2.sh                 # start (or resume) the base run
+STOP_IN=30m scripts/phase2.sh     # ...for half an hour, then save and exit
 scripts/stop.sh small-code        # stop after the current step (saves first)
 scripts/stop.sh small-code --at 20000   # stop when it reaches step 20,000
+scripts/stop.sh small-code --in 20m     # stop twenty minutes from now
+scripts/stop.sh small-code --by 06:30   # stop at half six (tomorrow, if it has passed)
 scripts/phase2.sh                 # run again -> resumes from ckpt_last.pt, no loss spike
 ```
 
@@ -67,6 +70,11 @@ Three ways to stop, all safe (they save at the current step): Ctrl-C, `scripts/s
 <run>`, or `touch checkpoints/<run>/STOP`. A hard kill or power cut costs you at most the
 steps since the last periodic save (~20 min). Full detail: [doc 4](04-pretraining.md) and
 [doc 7](07-scaling.md).
+
+**Stopping in twenty minutes is not a schedule.** `--in`/`--by` (and the portal's *Stop at…*
+dialog) queue one deadline for the run that is going right now; the Schedule panel is for
+rules that repeat, night after night. Reach for a schedule when you would otherwise have to
+remember something tomorrow.
 
 ### Training over evenings
 
@@ -273,7 +281,9 @@ Note that Chrome's `--window-size` will not go below about 485px and so cannot t
 | you want to… | command | portal |
 |---|---|---|
 | start / resume the base run | `scripts/phase2.sh` | Dashboard → Start |
-| stop it (saving first) | `scripts/stop.sh small-code` | Dashboard → Stop |
+| …for one evening only | `STOP_IN=3h scripts/phase2.sh` | Dashboard → *this session* → Time |
+| stop it (saving first) | `scripts/stop.sh small-code` | Dashboard → Stop now |
+| stop it in 20 minutes | `scripts/stop.sh small-code --in 20m` | Dashboard → Stop at… |
 | SFT the base | `scripts/stage.sh sft small-code` | Post-training → SFT → Start |
 | DPO / GRPO (after SFT) | `scripts/stage.sh dpo\|grpo small-code` | Post-training → Start |
 | watch it | `tail -f train_small-code.log` | Dashboard (live) |

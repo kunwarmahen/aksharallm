@@ -17,13 +17,18 @@
 #   scripts/stop.sh small-code --after 500  # do 500 more steps, then save and exit
 # Both are inclusive: the step you name is trained, logged and checkpointed; the resume
 # picks up the step after it.
+#   scripts/stop.sh small-code --in 30m     # train 30 more minutes, then save and exit
+#   scripts/stop.sh small-code --by 06:30   # train until 06:30 (tomorrow if it has passed)
+# --in takes 30m / 90s / 2h / 1h30m, or a bare number read as minutes. The deadline goes
+# into the STOP file as @<epoch> and the *trainer* honours it, so it survives this terminal
+# closing, the portal restarting, and the run slowing down halfway through.
 #   scripts/stop.sh small-code --cancel     # withdraw a queued stop; the run carries on
 #   scripts/stop.sh --status           # is it running, and where is it? changes nothing
 #   WAIT=900 scripts/stop.sh           # wait longer for the save (default 300s)
 #   FORCE=1  scripts/stop.sh           # SIGKILL if still alive after WAIT (loses that step)
 #
-# --at/--after don't wait around: they leave the target in the STOP file and return, so you
-# can queue a bounded finish and close the terminal.
+# --at/--after/--in/--by don't wait around: they leave the target in the STOP file and
+# return, so you can queue a bounded finish and close the terminal.
 #
 # All of this is also available as buttons: scripts/portal.sh (it runs this very script).
 set -euo pipefail
@@ -34,17 +39,41 @@ DEFAULT_RUN=$([ "$PURE" = "1" ] && echo small || echo small-code)
 WAIT=${WAIT:-300}
 FORCE=${FORCE:-0}
 
+# Seconds from "30m", "90s", "2h", "1h30m", or a bare number read as minutes -- "give it
+# another 30" is half an hour in every conversation this script exists to serve.
+parse_duration() {
+    local d=${1,,} h=0 m=0 s=0
+    if [[ $d =~ ^[0-9]+$ ]]; then echo $((d * 60)); return 0; fi
+    [[ $d =~ ^(([0-9]+)h)?(([0-9]+)m)?(([0-9]+)s)?$ && $d != "" ]] || return 1
+    h=${BASH_REMATCH[2]:-0}; m=${BASH_REMATCH[4]:-0}; s=${BASH_REMATCH[6]:-0}
+    local total=$((h * 3600 + m * 60 + s))
+    [ "$total" -ge 1 ] || return 1
+    echo "$total"
+}
+
 RUN=""
 AT=""
+UNTIL=""
 STATUS=0
 CANCEL=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --at)     AT=${2:?--at needs a step number}; shift 2 ;;
         --after)  AFTER=${2:?--after needs a step count}; shift 2 ;;
+        --in)     SECS=$(parse_duration "${2:?--in needs a duration}") || {
+                      echo "cannot read '$2' as a duration -- try 30m, 90s, 2h or 1h30m" >&2
+                      exit 2; }
+                  UNTIL=$(( $(date +%s) + SECS )); shift 2 ;;
+        --by)     [[ ${2:?--by needs HH:MM} =~ ^([01]?[0-9]|2[0-3]):[0-5][0-9]$ ]] || {
+                      echo "--by takes a 24-hour HH:MM, not '$2'" >&2; exit 2; }
+                  UNTIL=$(date -d "$2" +%s)
+                  # A time that has already passed today means the one tomorrow morning --
+                  # "--by 06:30" at midnight is the whole night, not a stop in the past.
+                  [ "$UNTIL" -le "$(date +%s)" ] && UNTIL=$((UNTIL + 86400))
+                  shift 2 ;;
         --cancel) CANCEL=1; shift ;;
         --status) STATUS=1; shift ;;
-        -h|--help) sed -n '2,28p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,33p' "$0"; exit 0 ;;
         -*)      echo "unknown flag: $1" >&2; exit 2 ;;
         *)       RUN=$1; shift ;;
     esac
@@ -67,6 +96,18 @@ launch_pid() {   # a live phase2.sh for this run (pre-flight: tests, data, smoke
 }
 launch_stage() { sed -n 's/^stage *//p' "$LAUNCH_META" 2>/dev/null | head -1; }
 
+# What a STOP file is asking for, in words. The three forms are the trainer's contract
+# (aksharallm/train/stopfile.py): empty, a step number, or @<epoch>.
+describe_stop() {
+    local raw
+    raw=$(tr -d '\n' < "$1" 2>/dev/null | head -c 32)
+    case "$raw" in
+        "")   echo "stopping after the current step" ;;
+        @*)   echo "stop at $(date -d "@${raw#@}" '+%H:%M' 2>/dev/null || echo "${raw}")" ;;
+        *)    echo "stop after step $raw" ;;
+    esac
+}
+
 if [ ! -d "$RUN_DIR" ]; then
     echo "no such run: $RUN_DIR" >&2
     echo "runs found: $(ls -1 checkpoints 2>/dev/null | tr '\n' ' ')" >&2
@@ -79,8 +120,7 @@ fi
 # would otherwise end the *next* launch at step 0.
 if [ "$CANCEL" = "1" ]; then
     if [ -f "$STOP_FILE" ]; then
-        TARGET=$(tr -d '\n' < "$STOP_FILE" | head -c 20)
-        echo "cancelled the queued stop for '$RUN' (was: ${TARGET:-stop now})."
+        echo "cancelled the queued stop for '$RUN' (was: $(describe_stop "$STOP_FILE"))."
         rm -f "$STOP_FILE"
         echo "the run continues to its budget (or until you stop it again)."
     else
@@ -176,9 +216,7 @@ fi
 if [ "$STATUS" = "1" ]; then
     echo "run '$RUN' is training as pid $PID (up $(ps -p "$PID" -o etime= | tr -d ' '))."
     [ -f "$RUN_DIR/run.meta" ] && sed 's/^/    /' "$RUN_DIR/run.meta"
-    if [ -f "$STOP_FILE" ]; then
-        echo "    STOP queued: $(cat "$STOP_FILE" | tr -d '\n') (empty = stopping now)"
-    fi
+    [ -f "$STOP_FILE" ] && echo "    STOP queued: $(describe_stop "$STOP_FILE")"
     [ -e "$LOG_LINK" ] && { echo "    log: $(readlink -f "$LOG_LINK")"
                             echo "    last line:"; tail -1 "$LOG_LINK" | sed 's/^/      /'; }
     exit 0
@@ -200,6 +238,19 @@ if [ -n "$AT" ]; then
     echo "$AT" > "$STOP_FILE"
     echo "queued: pid $PID will finish step $AT, save ckpt_last.pt at it, and exit"
     echo "        (so the resume starts at $((AT + 1)))."
+    echo "  cancel:  rm $STOP_FILE"
+    echo "  watch:   tail -f $LOG_LINK"
+    exit 0
+fi
+
+# A deadline goes in as @<epoch>, and the trainer compares it against the clock on every
+# step. Nothing here has to stay alive to make it happen -- which is the whole point, since
+# the alternative (a timer in this shell, or in the portal) dies with whatever holds it.
+if [ -n "$UNTIL" ]; then
+    echo "@$UNTIL" > "$STOP_FILE"
+    LEFT=$(( (UNTIL - $(date +%s) + 30) / 60 ))
+    echo "queued: pid $PID will train until $(date -d "@$UNTIL" '+%H:%M') (~${LEFT}m from now),"
+    echo "        then save ckpt_last.pt at whatever step it is on and exit."
     echo "  cancel:  rm $STOP_FILE"
     echo "  watch:   tail -f $LOG_LINK"
     exit 0

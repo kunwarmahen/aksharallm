@@ -40,7 +40,8 @@ import time
 from pathlib import Path
 
 from ..infer.checkpoints import CheckpointStore, InferError
-from .runs import RunError, _alive, _cmdline, _read_int, repo_root
+from ..train import stopfile
+from .runs import MAX_STOP_SECONDS, RunError, _alive, _cmdline, _read_int, repo_root
 
 #: method -> (needs calibration data, human blurb)
 METHODS = {
@@ -84,6 +85,11 @@ class QuantJobs:
 
     def json_path(self, job: str) -> Path:
         return self.dir / f"{job}.json"
+
+    @property
+    def stop_file(self) -> Path:
+        """Where a bounded stop for the running QAT job is queued (see `stop`)."""
+        return self.dir / "STOP"
 
     # ---- what can be quantized --------------------------------------------------------
     def checkpoints(self) -> list[dict]:
@@ -152,6 +158,8 @@ class QuantJobs:
             "running": running,
             "pid": pid,
             "current": cur or None,
+            "stop": self.stop_request() if running else None,
+            "can_bound": self.can_bound(),
             "log": log,
             "device": self.plan_device(),
             "methods": [{"id": k, "needs_calibration": v[0], "blurb": v[1]}
@@ -229,6 +237,7 @@ class QuantJobs:
         plan = self.plan_device(spec.get("device"))
 
         self.dir.mkdir(parents=True, exist_ok=True)
+        self.stop_file.unlink(missing_ok=True)  # a leftover would end this job at step 1
         label = "compare" if compare else f"{method}-int{bits}"
         job = f"{time.strftime('%Y%m%d-%H%M%S')}-{info.run}-{label}"
         if not _JOB_RE.match(job):
@@ -245,7 +254,8 @@ class QuantJobs:
             if not spec.get("save"):
                 cmd += ["--no-save"]
             if method == "qat":
-                cmd += ["--qat-steps", str(int(spec.get("qat_steps") or 800))]
+                cmd += ["--qat-steps", str(int(spec.get("qat_steps") or 800)),
+                        "--stop-file", str(self.stop_file)]
         if spec.get("backend") in ("torch", "triton", "auto"):
             cmd += ["--backend", str(spec["backend"])]
         if spec.get("calib_seqs"):
@@ -267,12 +277,66 @@ class QuantJobs:
         self.current_file.write_text(json.dumps(current))
         return {"ok": True, "action": "start", **current}
 
-    def stop(self) -> dict:
+    def stop(self, mode: str = "now", steps: int | None = None,
+             seconds: int | None = None) -> dict:
+        """Stop the running quantization job.
+
+        Only QAT can be *bounded*: it is the one method that is a training loop, so ending
+        it at a step or a time leaves a partly-recovered model that exports normally. RTN,
+        GPTQ and AWQ are single passes over the weights — there is no useful halfway point
+        to stop at, so for those the only mode is `now`, which is a kill and writes nothing.
+        """
+        if mode not in ("now", "at", "in", "cancel"):
+            raise RunError(f"unknown stop mode: {mode!r}")
         pid = self._pid()
         if not pid:
             raise RunError("no quantization job is running.")
+
+        if mode == "cancel":
+            if not self.stop_request():
+                raise RunError("no stop is queued for this job.")
+            self.stop_file.unlink(missing_ok=True)
+            return {"ok": True, "action": "stop:cancel", "pid": pid,
+                    "note": "queued stop withdrawn; QAT runs to its full step count."}
+
+        if mode in ("at", "in"):
+            if not self.can_bound():
+                raise RunError(
+                    f"{self._current().get('method', 'this method')} is a single pass over "
+                    "the weights, not a training loop — there is no step to stop at. Only "
+                    "QAT can be bounded; stop this one now, or let it finish.")
+            if mode == "at":
+                if not steps or steps < 1:
+                    raise RunError("a bounded stop needs a positive step number.")
+                request = stopfile.StopRequest(step=int(steps))
+                note = f"queued: QAT stops at step {steps}, then exports and measures."
+            else:
+                if not seconds or seconds < 1:
+                    raise RunError("a timed stop needs a duration of at least one second.")
+                if seconds > MAX_STOP_SECONDS:
+                    raise RunError(f"a timed stop is capped at {MAX_STOP_SECONDS // 3600} "
+                                   "hours — bound it by steps instead.")
+                request = stopfile.StopRequest(deadline=time.time() + int(seconds))
+                note = (f"queued: {stopfile.fmt_left(seconds)} more QAT, then export and "
+                        "measure.")
+            stopfile.write(self.stop_file, request)
+            return {"ok": True, "action": f"stop:{mode}", "pid": pid, "note": note}
+
         os.kill(pid, 15)
         cur = self._current()
         if cur:
             self.current_file.write_text(json.dumps({**cur, "state": "stopped"}))
-        return {"ok": True, "action": "stop", "pid": pid}
+        return {"ok": True, "action": "stop", "pid": pid,
+                "note": "killed; a job stopped this way writes no quantized checkpoint."}
+
+    def can_bound(self) -> bool:
+        """Whether a step- or time-bounded stop means anything for the running job."""
+        return bool(self._pid()) and self._current().get("method") == "qat"
+
+    def stop_request(self) -> dict | None:
+        """The stop queued for the running job, in the same shape the run panel uses."""
+        req = stopfile.read(self.stop_file)
+        if req is None:
+            return None
+        return {"target": req.step, "deadline": req.deadline, "now": req.now,
+                "label": req.describe()}

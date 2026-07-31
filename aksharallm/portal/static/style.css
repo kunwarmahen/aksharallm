@@ -161,6 +161,82 @@ input[type="number"] { width: 120px; font-variant-numeric: tabular-nums; }
 .check { display: flex; align-items: center; gap: 6px; color: var(--ink-2); padding-bottom: 7px; }
 .check input { accent-color: var(--series-1); }
 
+/* The session budget sits where its number field used to, and keeps that shape: a label
+ * above a value. It is a button because the value is chosen in a dialog, not typed. */
+button.budget {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  padding: 3px 11px 4px; min-width: 120px; text-align: left;
+}
+button.budget .field-label { pointer-events: none; }
+button.budget .budget-value { color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+button.budget.is-set { border-color: var(--series-1); }
+button.budget.is-set .budget-value { color: var(--ink); }
+
+/* ---- the bound picker ---------------------------------------------------------------
+ * A dialog for one question — how long? — asked at launch and at every stop. It is sized
+ * to its content and centred; on a phone it fills the width and scrolls inside itself
+ * rather than pushing the page sideways. */
+dialog.bound {
+  width: min(440px, calc(100vw - 32px));
+  max-height: min(90vh, 720px); overflow: auto;
+  padding: 20px 22px 18px;
+  border: 1px solid var(--border); border-radius: var(--sheet-radius);
+  background: var(--surface); color: var(--ink);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
+}
+dialog.bound::backdrop { background: rgba(11, 11, 11, 0.42); }
+dialog.bound h2 { margin: 0 0 6px; font-size: 17px; }
+.bound-sub { margin: 0 0 16px; color: var(--ink-2); font-size: 13px; line-height: 1.5; }
+
+/* the unit switch */
+.seg { display: flex; gap: 4px; padding: 3px; margin-bottom: 14px;
+       background: var(--wash); border-radius: 10px; }
+.seg-btn {
+  flex: 1; border-color: transparent; background: transparent;
+  color: var(--ink-2); padding: 6px 10px; border-radius: 7px;
+}
+.seg-btn.is-on {
+  background: var(--surface); color: var(--ink);
+  border-color: var(--border); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+/* the presets */
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.chip {
+  padding: 5px 11px; border-radius: 999px; font-size: 13px;
+  border-color: var(--border); color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.chip.is-on {
+  background: color-mix(in srgb, var(--series-1) 14%, transparent);
+  border-color: var(--series-1); color: var(--ink); font-weight: 600;
+}
+
+/* the dial — logarithmic, so the useful short end is not a sliver of the track */
+input.dial {
+  width: 100%; margin: 0; accent-color: var(--series-1);
+  height: 22px; cursor: pointer;
+}
+.dial-ends {
+  display: flex; justify-content: space-between;
+  color: var(--ink-muted); font-size: 11.5px; font-variant-numeric: tabular-nums;
+  margin-bottom: 14px;
+}
+
+.bound-exact { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.bound-exact input { width: 96px; }
+.bound-exact span { color: var(--ink-2); font-size: 13px; }
+
+/* The sentence that says what the number means. It is the point of the dialog, so it gets
+ * a left rule and its own space rather than sitting as a caption. */
+.bound-preview {
+  margin: 0 0 18px; padding: 9px 12px;
+  border-left: 3px solid var(--series-1); background: var(--wash);
+  border-radius: 0 8px 8px 0;
+  color: var(--ink-2); font-size: 12.5px; line-height: 1.5; min-height: 38px;
+}
+.bound-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+
 .badge {
   font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
   padding: 3px 10px; border-radius: 999px;
@@ -244,6 +320,13 @@ main > *,
 .meter-mark {
   position: absolute; top: -2px; width: 2px; height: 12px;
   background: var(--serious); border-radius: 1px;
+}
+/* A stop queued by wall-clock lands at a step nobody can know in advance, so its mark is
+ * drawn as a dotted column rather than a solid rule: the same information, minus the claim
+ * of precision. */
+.meter-mark.is-estimate {
+  background: repeating-linear-gradient(
+    to bottom, var(--serious) 0 3px, transparent 3px 5px);
 }
 .meter-legend {
   display: flex; justify-content: space-between;
@@ -986,6 +1069,12 @@ button.preset:hover { background: var(--wash); color: var(--ink); }
   .control-group .field { flex: 1 1 120px; }
   .controls input[type="number"] { width: 100%; }
   .control-status { margin-left: 0; }
+  button.budget { flex: 1 1 120px; }
+
+  /* The dialog gives up its side padding before it gives up the dial, and its buttons go
+   * full width — a 44px target beats a tidy row on a screen held in one hand. */
+  dialog.bound { padding: 16px; }
+  .bound-actions button { flex: 1 1 100%; padding: 10px 13px; }
 
   /* Stacked, the LoRA nodes are an equation read downwards, so the operators belong on
    * their own centred line rather than stranded to the right of each box. */

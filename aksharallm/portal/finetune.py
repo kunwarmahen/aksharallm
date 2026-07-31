@@ -48,7 +48,8 @@ from pathlib import Path
 
 from ..infer.checkpoints import AdapterStore, CheckpointStore, InferError
 from ..lora.inject import PRESET_BLURBS, PRESETS
-from .runs import RunError, _alive, _cmdline, _read_int, repo_root
+from ..train import stopfile
+from .runs import (MAX_STOP_SECONDS, RunError, _alive, _cmdline, _read_int, repo_root)
 
 #: The one-paragraph answer to "why would I do this?", shown at the top of the tab.
 WHY = (
@@ -114,6 +115,16 @@ class FinetuneJobs:
 
     def log_path(self, job: str) -> Path:
         return self.dir / f"{job}.log"
+
+    @property
+    def stop_file(self) -> Path:
+        """Where a bounded stop for the running job is queued.
+
+        Here rather than in the adapter's output directory, which is the base model's run
+        directory: a file called STOP in *there* is the pretrainer's, and one fine-tune
+        stopping a six-day pretraining run is not a mistake worth leaving available.
+        """
+        return self.dir / "STOP"
 
     # ---- what can be fine-tuned -------------------------------------------------------
     def checkpoints(self) -> list[dict]:
@@ -272,6 +283,8 @@ class FinetuneJobs:
             "running": running,
             "pid": pid,
             "current": cur or None,
+            "stop": self.stop_request() if running else None,
+            "can_bound": running,
             "log": log,
             "device": self.plan_device(),
             "why": WHY,
@@ -342,9 +355,13 @@ class FinetuneJobs:
         # `--list-adapters` and the Playground picker find it without configuration.
         out_dir = self.root / "checkpoints" / info.run
         tok = info.tokenizer or ""
+        # A STOP left over from the last job would end this one at step 0 — the same trap
+        # phase2.sh clears before a launch, for the same reason.
+        self.stop_file.unlink(missing_ok=True)
         cmd = [sys.executable, "-u", "-m", "aksharallm.train.sft",
                "--base", str(info.path), "--data-dir", str(self.root / data_dir),
                "--tokenizer", tok, "--out-dir", str(out_dir),
+               "--stop-file", str(self.stop_file),
                "--epochs", str(epochs), "--device", plan["device"]]
         cmd += METHODS[method][2]
         if method != "full":
@@ -374,12 +391,57 @@ class FinetuneJobs:
         self.current_file.write_text(json.dumps(current))
         return {"ok": True, "action": "start", **current}
 
-    def stop(self) -> dict:
+    def stop(self, mode: str = "now", steps: int | None = None,
+             seconds: int | None = None) -> dict:
+        """Stop the running fine-tune now, or bound it in steps or wall-clock.
+
+        `now` is a SIGTERM, which `aksharallm.train.sft` catches: it finishes the step,
+        evaluates, and saves `sft_last`/`sft_best`, so stopping still leaves a usable
+        adapter. `at`/`in` write the same STOP file the trainer polls and return at once.
+        `cancel` removes it.
+        """
+        if mode not in ("now", "at", "in", "cancel"):
+            raise RunError(f"unknown stop mode: {mode!r}")
         pid = self._pid()
         if not pid:
             raise RunError("no fine-tuning job is running.")
+
+        if mode == "cancel":
+            if not self.stop_request():
+                raise RunError("no stop is queued for this fine-tune.")
+            self.stop_file.unlink(missing_ok=True)
+            return {"ok": True, "action": "stop:cancel", "pid": pid,
+                    "note": "queued stop withdrawn; the fine-tune runs to its last epoch."}
+
+        if mode in ("at", "in"):
+            if mode == "at":
+                if not steps or steps < 1:
+                    raise RunError("a bounded stop needs a positive step number.")
+                request = stopfile.StopRequest(step=int(steps))
+                note = f"queued: finish step {steps}, then evaluate, save and exit."
+            else:
+                if not seconds or seconds < 1:
+                    raise RunError("a timed stop needs a duration of at least one second.")
+                if seconds > MAX_STOP_SECONDS:
+                    raise RunError(f"a timed stop is capped at {MAX_STOP_SECONDS // 3600} "
+                                   "hours — bound it by steps instead.")
+                request = stopfile.StopRequest(deadline=time.time() + int(seconds))
+                note = (f"queued: {stopfile.fmt_left(seconds)} more, then evaluate, save "
+                        "and exit.")
+            stopfile.write(self.stop_file, request)
+            return {"ok": True, "action": f"stop:{mode}", "pid": pid, "note": note}
+
         os.kill(pid, 15)
         cur = self._current()
         if cur:
             self.current_file.write_text(json.dumps({**cur, "state": "stopped"}))
-        return {"ok": True, "action": "stop", "pid": pid}
+        return {"ok": True, "action": "stop", "pid": pid,
+                "note": "finishing the step in flight, then saving the adapter and exiting."}
+
+    def stop_request(self) -> dict | None:
+        """The stop queued for the running job, in the same shape the run panel uses."""
+        req = stopfile.read(self.stop_file)
+        if req is None:
+            return None
+        return {"target": req.step, "deadline": req.deadline, "now": req.now,
+                "label": req.describe()}

@@ -152,8 +152,14 @@ Read the end of that session's log. A clean stop always says why:
 ```
 [stop] signal -- saving ckpt_last.pt at step 619 and exiting     # Ctrl-C, kill, or stop.sh
 [stop] STOP file asked for step 2000 -- saving ...               # a queued bounded stop
+[stop] reached stop time 06:30 -- saving ...                     # stop.sh --in / --by
 [stop] reached stop step 2000 -- saving ...                      # train.stop_after/stop_at
+[stop] reached this session's 30m00s time budget -- saving ...   # train.stop_after_s / STOP_IN
 ```
+
+Each names which of the five it was, because they send you to different places: a `stop
+time` you did not set means someone (or the portal) queued one; a `time budget` means the
+*launch* was bounded and the next one will be too unless you drop `STOP_IN`.
 
 No `[stop]` line at all means it died without warning — OOM (check `dmesg | tail`), a CUDA
 error (in the log above the last step line), or the machine rebooted. You lose at most the
@@ -163,6 +169,23 @@ steps since the last `ckpt_every` save; relaunch and it resumes.
 
 A leftover `checkpoints/<run>/STOP` file. A clean stop deletes it, a `kill -9` does not.
 `rm checkpoints/<run>/STOP` (or `scripts/stop.sh <run>`, which clears stale ones).
+
+`scripts/stop.sh <run> --status` prints what a queued stop is asking for in words (`stop at
+06:30`, `stop after step 20000`), which is worth checking before assuming the file is stale
+— a deadline that has already passed looks identical to a leftover until you read it.
+
+The same trap exists for fine-tunes and QAT, and is handled the same way: their stop files
+are `logs/finetune/STOP` and `logs/quant/STOP`, cleared when a job starts.
+
+### It stopped sooner (or later) than the time I asked for
+
+It stops at the **first step boundary past the deadline**, so a slow step overshoots by up
+to one step — seconds on a small model, ~20s on a 300M one. It never stops early: the
+deadline is compared against the clock, not estimated from throughput.
+
+If it stopped much later, check that anything is running at all — a deadline in the STOP
+file only fires while the trainer is polling it. A stop queued against a run that has
+already exited sits in the file and ends the *next* launch immediately (see above).
 
 ### The first step takes forever
 

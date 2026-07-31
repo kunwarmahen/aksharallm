@@ -7,6 +7,8 @@ trains, and you also cannot tell, because the loss simply stops moving and that 
 convergence).
 """
 
+import time
+
 import numpy as np
 import pytest
 import torch
@@ -170,6 +172,35 @@ def test_qat_training_reduces_loss(tmp_path):
                     batch_size=4, lr=1e-3, warmup=5, device="cpu", log=None)
     assert res.steps == 40
     assert res.loss_end < res.loss_start, (res.loss_start, res.loss_end)
+
+
+def test_a_stop_file_ends_qat_early_and_reports_the_steps_it_did(tmp_path):
+    """QAT is the one quantization method with a loop to interrupt. Stopping it must leave
+    the model converted and the count honest — a QATResult still claiming 40 steps would
+    put a fiction in the results table that nothing downstream could contradict."""
+    torch.manual_seed(4)
+    bin_path = tmp_path / "train.bin"
+    np.tile(np.arange(16, dtype=np.uint16), 4000).astype(np.uint16).tofile(bin_path)
+    stop = tmp_path / "STOP"
+    stop.write_text("5")
+
+    model = Transformer(tiny_cfg())
+    prepare_qat(model, INT4)
+    res = train_qat(model, str(bin_path), seq_len=16, scheme=INT4, steps=40, batch_size=2,
+                    device="cpu", log=None, stop_file=stop)
+    assert res.steps == 5
+    assert not model.training       # still handed back ready to measure
+
+
+def test_a_qat_deadline_that_has_passed_stops_at_the_first_step(tmp_path):
+    torch.manual_seed(4)
+    bin_path = tmp_path / "train.bin"
+    np.tile(np.arange(16, dtype=np.uint16), 4000).astype(np.uint16).tofile(bin_path)
+    model = Transformer(tiny_cfg())
+    prepare_qat(model, INT4)
+    res = train_qat(model, str(bin_path), seq_len=16, scheme=INT4, steps=40, batch_size=2,
+                    device="cpu", log=None, stop_by=time.time() - 1)
+    assert res.steps == 1
 
 
 def test_qat_leaves_the_model_in_eval_mode(tmp_path):

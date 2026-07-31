@@ -382,6 +382,13 @@ scripts/portal.sh          then the Finetune tab
 - **Fine-tune** — start a job. It shells out to `python -m aksharallm.train.sft`, the same
   command you would type, so a job started here and one started in a terminal produce the
   same adapter in the same place.
+- **Stop at…** — the same picker the dashboard uses: stop now, at a step, or in *n* minutes.
+  However it stops, the job evaluates once more and writes `sft_last` and `sft_best`, so a
+  fine-tune you cut short still leaves a usable adapter. The stop file is
+  `logs/finetune/STOP`, deliberately **not** `checkpoints/<base>/STOP` — an adapter is
+  written into its base model's run directory, and a file by that name in there belongs to
+  the pretraining run. One fine-tune ending a six-day run is not a mistake worth leaving
+  available.
 - **Adapters you have** — everything under `checkpoints/`, with rank, size and val loss.
 - The **Playground** gains an adapter picker beside the checkpoint picker. Same weights,
   same prompt, one small file different — the fastest way to hear what a fine-tune did.

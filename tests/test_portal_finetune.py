@@ -11,6 +11,7 @@ between the panel and `train/sft.py`.
 """
 
 import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -278,6 +279,49 @@ def test_epochs_are_clamped(repo, spy_popen):
 def test_stop_refuses_when_nothing_is_running(repo):
     with pytest.raises(RunError, match="no fine-tuning job"):
         FinetuneJobs(repo).stop()
+
+
+def test_the_stop_file_is_never_the_one_a_pretraining_run_reads(repo, spy_popen):
+    """A fine-tune writes its adapter into the base model's run directory. A file called
+    STOP in there is the *pretrainer's* — one fine-tune ending a six-day run is not a
+    mistake worth leaving available, so the job's stop file lives under logs/finetune/."""
+    _ckpt(repo)
+    _dataset(repo)
+    f = FinetuneJobs(repo)
+    f.start({"checkpoint": "tiny/ckpt_best.pt", "data_dir": "data/sft-synthetic"})
+    cmd = " ".join(spy_popen["cmd"])
+    assert "--stop-file" in cmd
+    assert str(f.stop_file) in cmd
+    assert f.stop_file.parent != repo / "checkpoints" / "tiny"
+
+
+def test_a_bounded_stop_writes_the_file_the_trainer_polls(repo, monkeypatch):
+    f = FinetuneJobs(repo)
+    f.dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(f, "_pid", lambda: 424242)
+
+    f.stop("at", steps=300)
+    assert f.stop_file.read_text() == "300"
+    assert f.stop_request()["target"] == 300
+
+    f.stop("in", seconds=600)
+    assert f.stop_file.read_text().startswith("@")
+    assert abs(f.stop_request()["deadline"] - (time.time() + 600)) < 2
+
+    f.stop("cancel")
+    assert not f.stop_file.exists()
+    with pytest.raises(RunError, match="no stop is queued"):
+        f.stop("cancel")
+
+
+def test_a_stale_stop_file_cannot_end_the_next_fine_tune_at_step_zero(repo, spy_popen):
+    _ckpt(repo)
+    _dataset(repo)
+    f = FinetuneJobs(repo)
+    f.dir.mkdir(parents=True, exist_ok=True)
+    f.stop_file.write_text("50")
+    f.start({"checkpoint": "tiny/ckpt_best.pt", "data_dir": "data/sft-synthetic"})
+    assert not f.stop_file.exists()
 
 
 # ---- the adapter store ----------------------------------------------------------------------

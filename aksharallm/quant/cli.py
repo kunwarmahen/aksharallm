@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 import torch
@@ -22,6 +23,7 @@ import torch
 from ..config import ModelConfig
 from ..infer.checkpoints import CheckpointStore, stage_for
 from ..model.transformer import Transformer
+from ..train import stopfile
 from . import bench as bench_mod
 from .awq import apply_awq
 from .calib import collect
@@ -228,7 +230,12 @@ def _build(src: Path, method: str, scheme: QuantScheme, args):
         print(f"  fake-quantizing {len(wrapped)} layers, fine-tuning "
               f"{args.qat_steps} steps on {train_bin}...", flush=True)
         res = train_qat(model, train_bin, _seq_len(ckpt), scheme, steps=args.qat_steps,
-                        batch_size=args.qat_batch, lr=args.qat_lr, device=args.device)
+                        batch_size=args.qat_batch, lr=args.qat_lr, device=args.device,
+                        stop_file=Path(args.stop_file) if args.stop_file else None,
+                        stop_by=(time.time() + stopfile.parse_duration(args.stop_in)
+                                 if args.stop_in else None))
+        if res.steps < args.qat_steps:
+            extra["qat_stopped_early"] = res.steps
         print(f"  loss {res.loss_start:.4f} -> {res.loss_end:.4f} in {res.seconds:.0f}s")
         extra["qat"] = res.as_dict()
         convert_qat(model, scheme)
@@ -269,6 +276,14 @@ def main(argv: list[str] | None = None) -> int:
                     help="measured optimum on the tiny model: 1e-5 recovers nothing, "
                          "5e-5 beats GPTQ, 2e-4 starts undoing the pretraining")
     ap.add_argument("--qat-batch", type=int, default=4)
+    # Bounded stops for the one part of quantizing that is a training loop. RTN, GPTQ and
+    # AWQ are single passes over the weights with nothing to stop early -- for those, the
+    # only honest answer to "stop in 10 minutes" is "it will be finished by then".
+    ap.add_argument("--stop-file", default=None,
+                    help="QAT only: poll this file for a stop request. Empty = stop now, "
+                         "a number = stop at that step, @<epoch> = stop at that time.")
+    ap.add_argument("--stop-in", default=None, metavar="DURATION",
+                    help="QAT only: fine-tune for this long, then export: 30m / 90s / 2h.")
     ap.add_argument("--train-bin", default=None,
                     help="training data for QAT; defaults to the run's own train split")
     ap.add_argument("--quantize-head", action="store_true",

@@ -43,10 +43,12 @@
 <section class="controls" aria-label="run controls">
   <div class="control-group">
     <button id="btn-start" class="primary" type="button">Start run</button>
-    <label class="field">
-      <span class="field-label">steps this session</span>
-      <input id="stop-after" type="number" min="1" step="50" placeholder="to budget">
-    </label>
+    <button id="btn-budget" class="budget" type="button"
+            title="How much this session gets: a step count, a stretch of time, or the whole
+budget. The trainer saves and exits when it lands, so the resume continues with no loss spike.">
+      <span class="field-label">this session</span>
+      <span class="budget-value" id="budget-label">to budget</span>
+    </button>
     <label class="check" title="Pre-flight normally runs the tests and a 50-step smoke test
 before the real run. Skipping is only sane when resuming a config that has already trained.">
       <input id="skip-smoke" type="checkbox">
@@ -56,8 +58,7 @@ before the real run. Skipping is only sane when resuming a config that has alrea
 
   <div class="control-group">
     <button id="btn-stop" type="button">Stop now</button>
-    <button id="btn-stop-after" type="button">Stop after…</button>
-    <button id="btn-stop-at" type="button">Stop at step…</button>
+    <button id="btn-stop-at" type="button">Stop at…</button>
     <button id="btn-cancel-stop" class="ghost" type="button">Cancel queued stop</button>
   </div>
 
@@ -723,6 +724,39 @@ skipped. phase2.sh ignores the skip when there is no checkpoint to resume.">
 </footer>
 
 <div id="tooltip" class="tooltip" hidden></div>
+
+<!-- The bound picker. One dialog serves every "how long should this go on for?" in the
+     portal — the session budget at launch, and the stop for a run, a fine-tune or QAT —
+     because they are the same question and deserve the same answer shape: pick the unit,
+     take a preset or turn the dial, read what it means in the sentence underneath. -->
+<dialog id="bound" class="bound" aria-labelledby="bound-title">
+  <h2 id="bound-title">Stop at…</h2>
+  <p class="bound-sub" id="bound-sub"></p>
+
+  <div class="seg" id="bound-units" role="group" aria-label="bound this by"></div>
+
+  <div class="chips" id="bound-chips" role="group" aria-label="quick choices"></div>
+
+  <!-- Logarithmic, so one throw of the dial covers a minute and four hours. The number
+       field beside it is the one that is authoritative; the dial only writes into it. -->
+  <input id="bound-dial" class="dial" type="range" min="0" max="1000" step="1"
+         aria-label="fine adjustment">
+  <div class="dial-ends"><span id="bound-min">–</span><span id="bound-max">–</span></div>
+
+  <label class="bound-exact">
+    <input id="bound-value" type="number" min="1" inputmode="numeric">
+    <span id="bound-unit-label">minutes</span>
+  </label>
+
+  <p class="bound-preview" id="bound-preview" aria-live="polite"></p>
+
+  <div class="bound-actions">
+    <button type="button" class="ghost" id="bound-cancel">Cancel</button>
+    <button type="button" id="bound-now" hidden>Stop now</button>
+    <button type="button" class="primary" id="bound-ok">Queue stop</button>
+  </div>
+</dialog>
+
 <script src="/static/app.js"></script>
 </body>
 </html>

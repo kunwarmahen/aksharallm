@@ -31,6 +31,7 @@ from ..config import Config, config_to_dict, load_config
 from ..data.loader import MixedTokenDataset, TokenDataset
 from ..model.transformer import Transformer
 from ..tokenizer.tokenizer import Tokenizer
+from . import stopfile
 from .schedule import get_lr
 
 
@@ -115,17 +116,14 @@ def claim_pid_file(out_dir: Path) -> Path:
 
 
 def stop_file_target(path: Path) -> int | None:
-    """Read a step number out of the STOP file, if it holds one.
+    """The step a STOP file asks for, or None for "stop now" / no step in it.
 
-    An empty STOP file means "stop now". A STOP file containing a number means "stop when
-    you reach that step" -- so a run that's already going can be given a bounded finish
-    (`echo 20000 > checkpoints/<run>/STOP`) without being restarted. Anything unreadable
-    or non-numeric is treated as "stop now": the safe reading of an ambiguous stop.
+    Kept as a thin reading of `stopfile.read` because a step is what most callers want.
+    The full contract -- empty, a step, or an `@epoch` deadline -- lives in
+    `aksharallm.train.stopfile`, which the SFT and QAT loops share with this one.
     """
-    try:
-        return int(path.read_text().strip())
-    except (OSError, ValueError):
-        return None
+    req = stopfile.read(path)
+    return req.step if req else None
 
 
 def save_checkpoint(path: Path, model, optimizer, cfg: Config, step: int, best_val: float, extra=None):
@@ -255,6 +253,9 @@ def main():
     if stop_at is not None:
         print(f"stop         after step {stop_at:,} "
               f"({stop_at - start_step + 1:,} steps this run, then save and exit)")
+    if cfg.train.stop_after_s is not None:
+        print(f"stop         after {fmt_dur(cfg.train.stop_after_s)} of training "
+              "(measured from the first step, so pre-flight and compilation are free)")
     print(f"started      {datetime.now():%Y-%m-%d %H:%M:%S}")
     print("=" * 78)
 
@@ -279,7 +280,9 @@ def main():
     #   Ctrl-C, or `kill <pid>` (SIGTERM)  -> finishes the current step, then saves
     #   `touch <out_dir>/STOP`             -> same, but doesn't need the terminal
     #   `echo N > <out_dir>/STOP`          -> keeps going, then stops at step N
-    #   train.stop_after / train.stop_at   -> the same bound, decided at launch
+    #   `echo @<epoch> > <out_dir>/STOP`   -> keeps going, then stops at that wall-clock time
+    #   train.stop_after / train.stop_at   -> the same step bound, decided at launch
+    #   train.stop_after_s                 -> a time budget for this session, ditto
     # In every case we save ckpt_last.pt at the *exact* current step and exit cleanly, so
     # rerunning the same command with resume:auto picks up with zero lost work.
     # (scripts/stop.sh drives all of these from the pid file phase2.sh writes.)
@@ -306,6 +309,10 @@ def main():
     run_t0 = t0  # start of this invocation; never reset, so "up" is true wall-clock
     prev_log_step = start_step - 1  # so the first window measures the steps it really covers
     running_loss = None
+    # The time budget starts here, not at launch: "run it for 30 minutes" means 30 minutes
+    # of training, and pre-flight plus torch.compile can eat ten of them before step one.
+    stop_by = None if cfg.train.stop_after_s is None else run_t0 + cfg.train.stop_after_s
+    announced = None  # the STOP request already printed, so a queued stop is logged once
 
     def log_session(event: str, **kw):
         rec = {"event": event, "time": time.time(),
@@ -314,7 +321,7 @@ def main():
         logf.flush()
 
     log_session("session_start", pid=os.getpid(), start_step=start_step,
-                max_steps=cfg.train.max_steps, stop_at=stop_at,
+                max_steps=cfg.train.max_steps, stop_at=stop_at, stop_by=stop_by,
                 tokens_per_step=tokens_per_step)
 
     for step in range(start_step, cfg.train.max_steps):
@@ -350,21 +357,24 @@ def main():
         # Decided *before* logging, so a bounded stop's final step always gets a log line
         # even when it isn't a multiple of log_every. Stopping at 699 with log_every=50
         # used to leave no loss or throughput reading at the step you stopped on.
+        # Four ways to be asked to stop, checked in the order they take effect: a signal,
+        # the STOP file (empty / a step / an `@epoch` deadline), the step bound this launch
+        # was given, and its time budget. The file is re-read every step and never copied
+        # into `stop_at`, so `stop.sh --cancel` -- which only removes the file -- really does
+        # put the run back on the budget it launched with.
         why = None
+        request = None if stop["now"] else stopfile.read(stop_file)
         if stop["now"]:
             why = "signal"
-        elif stop_file.exists():
-            target = stop_file_target(stop_file)
-            if target is None:
-                why = "STOP file"
-            elif step >= target:
-                why = f"STOP file asked for step {target}"
-            elif target != stop_at:
-                stop_at = target  # also re-aims the eta at the new finish line
-                print(f"[stop] STOP file asks to stop after step {target} "
-                      f"({target - step} steps from now)")
+        else:
+            why = stopfile.reached(request, step)
+            if why is None and request is not None and request != announced:
+                announced = request
+                print(f"[stop] STOP file asks to {request.describe(step)}")
         if why is None and stop_at is not None and step >= stop_at:
             why = f"reached stop step {stop_at}"
+        if why is None and stop_by is not None and time.time() >= stop_by:
+            why = f"reached this session's {fmt_dur(cfg.train.stop_after_s)} time budget"
 
         # ---- logging --------------------------------------------------------------
         if step % cfg.train.log_every == 0 or why:
@@ -383,10 +393,18 @@ def main():
             mem = torch.cuda.max_memory_allocated() / 1e9 if device == "cuda" else 0
             s_per_step = dt / steps_done
             up = time.time() - run_t0
-            # ETA counts to whichever comes first: the budget, or a bounded stop. Both
-            # last-step numbers are inclusive (max_steps=N means the last step is N-1).
+            # ETA counts to whichever comes first: the budget, a bounded stop, or a queued
+            # one. Both last-step numbers are inclusive (max_steps=N means the last is N-1).
+            # A deadline is compared in seconds rather than converted to steps -- it is
+            # already the answer the eta is trying to estimate.
             last_step = stop_at if stop_at is not None else cfg.train.max_steps - 1
+            if request is not None and request.step is not None:
+                last_step = min(last_step, request.step)
             eta = max(last_step - step, 0) * s_per_step
+            deadlines = [d for d in (stop_by, request.deadline if request else None)
+                         if d is not None]
+            if deadlines:
+                eta = min(eta, max(0.0, min(deadlines) - time.time()))
             print(f"[{stamp()}] step {step:>6} | loss {loss_sum:.4f} "
                   f"(ema {running_loss:.4f}) | ppl {math.exp(min(running_loss, 20)):>7.1f} | "
                   f"lr {lr:.2e} | gnorm {grad_norm:.2f} | {tok_per_sec/1e3:.1f}k tok/s | "

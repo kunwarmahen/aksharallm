@@ -154,6 +154,30 @@ def test_stop_refuses_when_nothing_is_running(repo):
         QuantJobs(repo).stop()
 
 
+def test_only_qat_can_be_stopped_at_a_step_or_a_time(repo, spy_popen, monkeypatch):
+    """RTN, GPTQ and AWQ are one pass over the weights. Offering "stop in 10 minutes" for
+    them would be a promise about a loop that has no steps to check the clock between."""
+    _ckpt(repo, "tiny", "ckpt_best.pt")
+    q = QuantJobs(repo)
+    q.start({"checkpoint": "tiny/ckpt_best.pt", "method": "gptq"})
+    monkeypatch.setattr(q, "_pid", lambda: 424242)
+    assert q.can_bound() is False
+    with pytest.raises(RunError, match="single pass"):
+        q.stop("in", seconds=600)
+
+
+def test_a_qat_job_takes_a_stop_file_and_honours_a_bounded_stop(repo, spy_popen, monkeypatch):
+    _ckpt(repo, "tiny", "ckpt_best.pt")
+    q = QuantJobs(repo)
+    q.start({"checkpoint": "tiny/ckpt_best.pt", "method": "qat", "qat_steps": 800})
+    assert f"--stop-file {q.stop_file}" in " ".join(spy_popen["cmd"])
+    monkeypatch.setattr(q, "_pid", lambda: 424242)
+    assert q.can_bound() is True
+    q.stop("at", steps=300)
+    assert q.stop_file.read_text() == "300"
+    assert q.stop_request()["target"] == 300
+
+
 # ---- the command line it builds ------------------------------------------------------
 
 def test_builds_the_cli_command_the_docs_describe(repo, spy_popen):

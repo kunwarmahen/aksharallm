@@ -91,6 +91,7 @@ def repo(tmp_path):
     scripts.mkdir()
     (scripts / "phase2.sh").write_text(
         '#!/usr/bin/env bash\necho "args: $*"\necho "STOP_AFTER=${STOP_AFTER:-}"\n'
+        'echo "STOP_IN=${STOP_IN:-}"\n'
         'echo "SKIP_SMOKE=${SKIP_SMOKE:-}"\necho "LAUNCH_LOG=${LAUNCH_LOG:-}"\n')
     (scripts / "stop.sh").write_text('#!/usr/bin/env bash\necho "args: $*"\n')
     for s in scripts.iterdir():
@@ -214,9 +215,22 @@ def test_stopping_a_run_that_is_not_training_is_refused(store):
 def test_a_queued_stop_is_reported(store, repo):
     (repo / "checkpoints" / "demo" / "STOP").write_text("350\n")
     s = store.status("demo")
-    assert s["stop"] == {"target": 350, "now": False}
+    assert (s["stop"]["target"], s["stop"]["now"], s["stop"]["deadline"]) == (350, False, None)
+    assert s["stop"]["label"] == "stop after step 350"
     (repo / "checkpoints" / "demo" / "STOP").write_text("")
     assert store.status("demo")["stop"]["now"] is True
+
+
+def test_a_queued_stop_by_time_is_reported_as_a_deadline(store, repo):
+    """The portal must not turn a deadline into a step estimate on the way through: the
+    page can project one for the meter, but the status has to say what was actually asked
+    for, or a slowdown would silently move a stop the badge still claims is at step N."""
+    when = time.time() + 900
+    (repo / "checkpoints" / "demo" / "STOP").write_text(f"@{int(when)}\n")
+    stop = store.status("demo")["stop"]
+    assert stop["target"] is None and stop["now"] is False
+    assert abs(stop["deadline"] - when) < 1
+    assert stop["label"].startswith("stop at ")
 
 
 def test_log_tail_reads_only_the_end(store):
@@ -318,27 +332,59 @@ def test_start_runs_phase2_with_the_env_it_promises(store, repo, monkeypatch):
     assert f"LAUNCH_LOG={res['log']}" in text, "phase2.sh records the log stop.sh should show"
 
 
-@pytest.mark.parametrize("mode,steps,expected", [
-    ("now", None, "args: demo"),
-    ("after", 500, "--after 500"),
-    ("at", 9000, "--at 9000"),
-    ("cancel", None, "--cancel"),
+@pytest.mark.parametrize("mode,steps,seconds,expected", [
+    ("now", None, None, "args: demo"),
+    ("after", 500, None, "--after 500"),
+    ("at", 9000, None, "--at 9000"),
+    ("in", None, 1800, "--in 1800s"),
+    ("cancel", None, None, "--cancel"),
 ])
 def test_stop_shells_out_to_stop_sh_with_the_matching_flags(
-        store, repo, mode, steps, expected):
+        store, repo, mode, steps, seconds, expected):
     rdir = repo / "checkpoints" / "demo"
     if mode == "cancel":
         (rdir / "STOP").write_text("9000\n")
     real = spawn("-m", "aksharallm.train.pretrain", "configs/demo.yaml")
     try:
         (rdir / "train.pid").write_text(f"{real.pid}\n")
-        res = store.stop("demo", mode, steps)
+        res = store.stop("demo", mode, steps, seconds)
         log = repo / res["log"]
         assert wait_for(lambda: log.exists() and log.read_text().strip())
         assert expected in log.read_text()
     finally:
         real.kill()
         real.wait()
+
+
+def test_a_timed_stop_is_bounded_and_asks_for_a_duration(store, repo):
+    """The two ways to get a stop that never fires: no duration, or one so far out that it
+    is really a schedule. Both are refused with the panel that does handle them named."""
+    real = spawn("-m", "aksharallm.train.pretrain", "configs/demo.yaml")
+    try:
+        (repo / "checkpoints" / "demo" / "train.pid").write_text(f"{real.pid}\n")
+        with pytest.raises(RunError, match="at least one second"):
+            store.stop("demo", "in", seconds=0)
+        with pytest.raises(RunError, match="schedule"):
+            store.stop("demo", "in", seconds=runs_mod.MAX_STOP_SECONDS + 1)
+    finally:
+        real.kill()
+        real.wait()
+
+
+def test_a_session_is_bounded_by_steps_or_by_time_but_not_both(store, monkeypatch):
+    """Both would work — the trainer honours whichever lands first — but a session with two
+    finish lines is one whose end nobody can predict, which defeats the point of setting one."""
+    monkeypatch.setitem(runs_mod.LAUNCHERS, "demo", {})
+    with pytest.raises(RunError, match="not both"):
+        store.start("demo", stop_after=500, stop_after_s=1800)
+
+
+def test_start_with_a_time_budget_passes_it_to_phase2(store, repo, monkeypatch):
+    monkeypatch.setitem(runs_mod.LAUNCHERS, "demo", {})
+    res = store.start("demo", stop_after_s=1800, skip_smoke=True)
+    log = repo / res["log"]
+    assert wait_for(lambda: log.exists() and "LAUNCH_LOG=" in log.read_text())
+    assert "STOP_IN=1800s" in log.read_text()
 
 
 # ---- the HTTP layer --------------------------------------------------------------------

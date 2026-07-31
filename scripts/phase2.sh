@@ -14,6 +14,9 @@
 # Env knobs:
 #   PURE=1              FineWeb-Edu only, no code blend
 #   STOP_AFTER=500      train 500 steps this launch, then save and exit (chunked training)
+#   STOP_IN=30m         same, bounded by wall-clock instead: 30m / 90s / 2h / 1h30m, or a
+#                       bare number read as minutes. Counted from the first training step,
+#                       so pre-flight and torch.compile do not eat into it.
 #   SKIP_SMOKE=1        skip the 50-step smoke test (see below -- resumes only)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -22,7 +25,23 @@ PY=${PY:-.venv/bin/python}
 NEED_GB=25
 PURE=${PURE:-0}
 STOP_AFTER=${STOP_AFTER:-}
+STOP_IN=${STOP_IN:-}
 SKIP_SMOKE=${SKIP_SMOKE:-0}
+
+# Seconds from "30m" / "90s" / "2h" / "1h30m", or a bare number read as minutes. Same
+# grammar as scripts/stop.sh --in, because they are the same idea at two different moments.
+if [ -n "$STOP_IN" ]; then
+    d=${STOP_IN,,}
+    if [[ $d =~ ^[0-9]+$ ]]; then
+        STOP_IN_S=$((d * 60))
+    elif [[ $d =~ ^(([0-9]+)h)?(([0-9]+)m)?(([0-9]+)s)?$ ]] && [ -n "$d" ]; then
+        STOP_IN_S=$(( ${BASH_REMATCH[2]:-0} * 3600 + ${BASH_REMATCH[4]:-0} * 60 + ${BASH_REMATCH[6]:-0} ))
+    else
+        echo "cannot read STOP_IN='$STOP_IN' as a duration -- try 30m, 90s, 2h or 1h30m" >&2
+        exit 2
+    fi
+    [ "${STOP_IN_S:-0}" -ge 1 ] || { echo "STOP_IN must be at least one second" >&2; exit 2; }
+fi
 
 if [ "$PURE" = "1" ]; then
     CFG=configs/small.yaml;      RUN=small
@@ -155,6 +174,7 @@ rm -f "$RUN_DIR/STOP"   # a STOP left over from a previous stop would end this r
 
 EXTRA=()
 [ -n "$STOP_AFTER" ] && EXTRA+=(-o "train.stop_after=$STOP_AFTER")
+[ -n "$STOP_IN" ] && EXTRA+=(-o "train.stop_after_s=$STOP_IN_S")
 
 nohup $PY -m aksharallm.train.pretrain "$CFG" "${EXTRA[@]}" > "$LOG" 2>&1 &
 PID=$!
@@ -183,6 +203,7 @@ fi
 
 echo "    pid $PID  ->  $PID_FILE  (config: $CFG)"
 [ -n "$STOP_AFTER" ] && echo "    will stop itself after $STOP_AFTER steps"
+[ -n "$STOP_IN" ] && echo "    will stop itself after ${STOP_IN_S}s of training (~$((STOP_IN_S / 60))m)"
 echo "    log $LOG  (this session; $LOG_LINK -> it)"
 echo
 echo "    watch:   tail -f $LOG_LINK"

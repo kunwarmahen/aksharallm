@@ -138,6 +138,8 @@ aksharallm/
 │   │   ├── sft.py            instruction tuning
 │   │   ├── dpo.py            preference tuning
 │   │   ├── schedule.py       learning-rate schedules
+│   │   ├── stopfile.py       the STOP contract: stop now / at step N / at a wall-clock time
+│   │   │                     — shared by pretraining, SFT and QAT
 │   │   └── runlog.py         reads train_log.jsonl back (sessions, series) — shared by
 │   │                         scripts/sessions.py and the portal
 │   ├── portal/           local web portal: start/stop a run, watch it, test it, read it
@@ -160,7 +162,7 @@ aksharallm/
 ├── scripts/
 │   ├── phase1.sh         Phase 1 end to end (data -> pretrain -> generate), ~30 min
 │   ├── phase2.sh         Phase 2: pre-flight, build data, smoke test, background launch
-│   ├── stop.sh           stop a background run cleanly, now or after N more steps
+│   ├── stop.sh           stop a background run cleanly: now, after N steps, or at a time
 │   ├── portal.sh         the web portal (progress, graphs, start/stop); --lan to share
 │   ├── schedule.sh       recurring start/stop windows ("22:00-06:30, mon-fri")
 │   ├── gpu.sh            GPU utilisation/memory/temp/power, now and over time
@@ -193,18 +195,25 @@ flowchart LR
 Both use identical code. Only the config differs.
 
 Six days of compute needn't be six days of calendar. `scripts/phase2.sh` launches in the
-background and records its pid; `scripts/stop.sh` stops it cleanly — now, or after a set
-number of steps — and every stop saves at the exact current step, so re-running resumes with
-no loss spike:
+background and records its pid; `scripts/stop.sh` stops it cleanly — now, after a set number
+of steps, or at a time you name — and every stop saves at the exact current step, so
+re-running resumes with no loss spike:
 
 ```bash
 scripts/phase2.sh                       # launch (pid -> checkpoints/<run>/train.pid)
+STOP_IN=3h scripts/phase2.sh            # ...for one evening, then save and exit
 scripts/stop.sh small-code --status     # alive? at what step?
 scripts/stop.sh small-code --after 500  # do 500 more steps, then save and exit
+scripts/stop.sh small-code --in 20m     # stop twenty minutes from now
+scripts/stop.sh small-code --by 06:30   # stop at half six (tomorrow, if it has passed)
 scripts/stop.sh small-code              # stop now, gracefully
 scripts/phase2.sh                       # resume where it left off
 scripts/sessions.py small-code          # compare the sessions afterwards
 ```
+
+A timed stop is a **deadline written into the run's STOP file**, which the trainer checks
+every step — so it survives closing the terminal or restarting the portal, and stays true
+if the run slows down. Nothing has to sit and watch the clock.
 
 Each session gets its own `logs/<run>/train_<timestamp>.log` (never overwritten), and
 `train_<run>.log` symlinks to the newest one.
@@ -308,7 +317,10 @@ scripts/portal.sh --restart     # stop and start again (never touches a training
 A local page with the progress against the budget and an ETA, live loss / throughput /
 gradient-norm / LR curves (drag sideways across one to zoom into that stretch of steps —
 the y-axis refits to the window; double-click to go back), the per-session table, the tail
-of the log, and buttons for start, stop, "stop after N more steps" and "stop at step N". Five tabs, each with its own
+of the log, and buttons for start (with a budget for the session), stop now, and a **Stop
+at…** dialog where you pick steps or time from presets — 1 / 5 / 10 / 30 min, 1 / 2 / 4 h —
+or a logarithmic dial, and read what it means before committing: which step it lands on,
+what time it finishes, how many checkpoints happen on the way. Five tabs, each with its own
 address so a view can be bookmarked: **Dashboard** (the run), **Playground** (talk to the
 checkpoint it is producing), **Code** (have the source explained to you), **Quantize**
 (make it 4-bit and measure what that cost) and **Docs** (read this guide in the browser,

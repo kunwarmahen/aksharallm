@@ -184,23 +184,31 @@ class Handler(BaseHTTPRequestHandler):
                 if action == "start":
                     return self._json(self.store.start(
                         run, stop_after=self._int(data, "stop_after"),
+                        stop_after_s=self._int(data, "stop_after_s"),
                         skip_smoke=bool(data.get("skip_smoke"))))
                 if action == "stop":
                     return self._json(self.store.stop(
                         run, mode=str(data.get("mode", "now")),
-                        steps=self._int(data, "steps")))
+                        steps=self._int(data, "steps"),
+                        seconds=self._int(data, "seconds")))
             # quantization: /api/quant/<start|stop>
             if len(parts) == 3 and parts[:2] == ["api", "quant"]:
                 if parts[2] == "start":
                     return self._json(self.quant.start(data))
                 if parts[2] == "stop":
-                    return self._json(self.quant.stop())
+                    return self._json(self.quant.stop(
+                        mode=str(data.get("mode", "now")),
+                        steps=self._int(data, "steps"),
+                        seconds=self._int(data, "seconds")))
             # fine-tuning: /api/lora/<start|stop>
             if len(parts) == 3 and parts[:2] == ["api", "lora"]:
                 if parts[2] == "start":
                     return self._json(self.finetune.start(data))
                 if parts[2] == "stop":
-                    return self._json(self.finetune.stop())
+                    return self._json(self.finetune.stop(
+                        mode=str(data.get("mode", "now")),
+                        steps=self._int(data, "steps"),
+                        seconds=self._int(data, "seconds")))
             # post-training: /api/pipeline/<base>/<stage>/<start|stop>
             if len(parts) == 5 and parts[:2] == ["api", "pipeline"]:
                 base, stage, action = parts[2], parts[3], parts[4]

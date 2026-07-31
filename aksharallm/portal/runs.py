@@ -19,7 +19,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from ..train import runlog
+from ..train import runlog, stopfile
 
 #: Run names come off the wire and end up in paths and a subprocess argument, so they are
 #: whitelisted rather than escaped: letters, digits, dash, underscore, dot, no leading dot.
@@ -37,6 +37,11 @@ PHASE_IDLE = "idle"
 PHASE_LAUNCHING = "launching"   # phase2.sh is in pre-flight/data/smoke, no trainer yet
 PHASE_TRAINING = "training"
 PHASE_STOPPING = "stopping"     # a stop was requested and the trainer is still alive
+
+#: Longest timed stop the buttons will queue. A deadline is a promise the trainer keeps for
+#: as long as it runs, so there is no technical limit — but "stop this in 14 hours" is a
+#: schedule, and saying so points at the panel that survives a reboot and repeats itself.
+MAX_STOP_SECONDS = 12 * 3600
 
 
 def repo_root() -> Path:
@@ -213,14 +218,15 @@ class RunStore:
     def stop_request(self, run: str) -> dict | None:
         """The pending stop, read out of the STOP file the trainer polls.
 
-        Empty file == stop after the current step. A number == stop on reaching that step.
-        (`pretrain.stop_file_target` is the trainer's half of this contract.)
+        Empty file == stop after the current step; a number == stop on reaching that step;
+        `@<epoch>` == stop at that wall-clock time. `aksharallm.train.stopfile` is the
+        trainer's half of this contract, and the only place the three forms are defined.
         """
-        path = self.run_dir(run) / "STOP"
-        if not path.exists():
+        req = stopfile.read(self.run_dir(run) / "STOP")
+        if req is None:
             return None
-        target = _read_int(path)
-        return {"target": target, "now": target is None}
+        return {"target": req.step, "deadline": req.deadline, "now": req.now,
+                "label": req.describe()}
 
     # ---- status ------------------------------------------------------------------------
     def status(self, run: str, max_points: int = 2000) -> dict:
@@ -235,10 +241,15 @@ class RunStore:
         launcher = self.launcher(run)
         stop = self.stop_request(run)
         if pid:
-            # A queued stop at a step we haven't reached yet is not "stopping" — the run is
-            # training normally and merely has a finish line. Only an imminent stop is.
-            imminent = stop and (stop["now"] or (last["step"] is not None
-                                                 and stop["target"] <= last["step"]))
+            # A queued stop at a step (or a time) we haven't reached yet is not "stopping" —
+            # the run is training normally and merely has a finish line. Only an imminent
+            # stop is. A deadline counts as imminent once the clock passes it, which is the
+            # window between the deadline and the trainer finishing the step it is on.
+            imminent = bool(stop) and (
+                stop["now"]
+                or (stop["target"] is not None and last["step"] is not None
+                    and stop["target"] <= last["step"])
+                or (stop["deadline"] is not None and time.time() >= stop["deadline"]))
             phase = PHASE_STOPPING if imminent else PHASE_TRAINING
         elif launcher:
             phase = PHASE_LAUNCHING
@@ -297,7 +308,8 @@ class RunStore:
         return out
 
     # ---- actions -----------------------------------------------------------------------
-    def start(self, run: str, stop_after: int | None = None, skip_smoke: bool = False) -> dict:
+    def start(self, run: str, stop_after: int | None = None, skip_smoke: bool = False,
+              stop_after_s: int | None = None) -> dict:
         """Launch `scripts/phase2.sh` detached, with its output going to a launch log.
 
         Detached (`start_new_session`) for the same reason phase2.sh nohups the trainer: the
@@ -314,6 +326,12 @@ class RunStore:
             raise RunError(f"a launch of '{run}' is already in pre-flight (pid {live['pid']}).")
         if stop_after is not None and stop_after < 1:
             raise RunError("stop_after must be at least 1 step.")
+        if stop_after_s is not None and stop_after_s < 1:
+            raise RunError("a time budget must be at least one second.")
+        if stop_after is not None and stop_after_s is not None:
+            # Both would work — the trainer honours whichever lands first — but a session
+            # bounded two ways at once is a session nobody can predict the end of.
+            raise RunError("bound this session by steps or by time, not both.")
 
         script = self.root / "scripts" / "phase2.sh"
         if not script.exists():
@@ -327,6 +345,8 @@ class RunStore:
         env = {**os.environ, **LAUNCHERS[run]}
         if stop_after is not None:
             env["STOP_AFTER"] = str(stop_after)
+        if stop_after_s is not None:
+            env["STOP_IN"] = f"{stop_after_s}s"
         if skip_smoke:
             env["SKIP_SMOKE"] = "1"
         # phase2.sh records this path in launch.meta, so `scripts/stop.sh --status` can point
@@ -340,23 +360,25 @@ class RunStore:
                                     stderr=subprocess.STDOUT, start_new_session=True)
         info = {"pid": proc.pid, "log": str(log.relative_to(self.root)),
                 "started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "stop_after": stop_after, "skip_smoke": bool(skip_smoke)}
+                "stop_after": stop_after, "stop_after_s": stop_after_s,
+                "skip_smoke": bool(skip_smoke)}
         return {"ok": True, "action": "start", **info,
                 "note": "pre-flight runs tests, checks the data, then a 50-step smoke test "
                         "before the real run starts — expect several minutes of log first."
                         if not skip_smoke else
                         "smoke test skipped: resuming a config that has already trained."}
 
-    def stop(self, run: str, mode: str = "now", steps: int | None = None) -> dict:
+    def stop(self, run: str, mode: str = "now", steps: int | None = None,
+             seconds: int | None = None) -> dict:
         """Ask a live run to stop, via `scripts/stop.sh`.
 
-        `now` finishes the step in flight and saves; `after`/`at` queue a bounded finish and
-        return immediately; `cancel` withdraws a queued one. Stopping is always safe — the
-        trainer saves `ckpt_last.pt` at the exact step it stops on and the resume continues
-        with no loss spike.
+        `now` finishes the step in flight and saves; `after`/`at` queue a bounded finish in
+        steps and `in` queues one in wall-clock, all returning immediately; `cancel`
+        withdraws a queued one. Stopping is always safe — the trainer saves `ckpt_last.pt`
+        at the exact step it stops on and the resume continues with no loss spike.
         """
         self.check(run)
-        if mode not in ("now", "after", "at", "cancel"):
+        if mode not in ("now", "after", "at", "in", "cancel"):
             raise RunError(f"unknown stop mode: {mode!r}")
         if mode in ("after", "at"):
             if not steps or steps < 1:
@@ -368,6 +390,12 @@ class RunStore:
                 if cur is not None and steps <= cur:
                     raise RunError(f"step {steps} is already behind this run "
                                    f"(it is at {cur}) — use 'stop now'.")
+        if mode == "in":
+            if not seconds or seconds < 1:
+                raise RunError("a timed stop needs a duration of at least one second.")
+            if seconds > MAX_STOP_SECONDS:
+                raise RunError(f"a timed stop is capped at {MAX_STOP_SECONDS // 3600} hours "
+                               "— past that, bound the run by steps or use the schedule.")
         launching = None if mode == "cancel" else self.launcher(run)
         if mode != "cancel" and not self.trainer_pid(run):
             # Nothing is training, but a pre-flight may be minutes from starting one.
@@ -390,6 +418,8 @@ class RunStore:
             args += ["--after", str(steps)]
         elif mode == "at":
             args += ["--at", str(steps)]
+        elif mode == "in":
+            args += ["--in", f"{int(seconds)}s"]
         elif mode == "cancel":
             args += ["--cancel"]
 
@@ -411,6 +441,10 @@ class RunStore:
                                 "(~30s for a 300M model).",
                          "after": f"queued: {steps} more steps, then save and exit.",
                          "at": f"queued: finish step {steps}, then save and exit.",
+                         "in": (f"queued: {stopfile.fmt_left(seconds or 0)} more training, "
+                                f"until about "
+                                f"{datetime.fromtimestamp(time.time() + (seconds or 0)):%H:%M}"
+                                ", then save and exit."),
                          "cancel": "queued stop withdrawn; the run continues to its budget."}[mode]}
 
     # ---- logs --------------------------------------------------------------------------

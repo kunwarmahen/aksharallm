@@ -233,32 +233,56 @@ A second Ctrl-C forces an immediate exit (you lose only the current step). Pulli
 — power loss, `kill -9` — costs you at most the steps since the last periodic
 `ckpt_every` save (default every 500 steps ≈ 20 minutes at Phase 2 throughput).
 
-### Stopping after N more steps
+### Stopping after N more steps — or after twenty minutes
 
-Waiting up to babysit a `kill` is the wrong way to train in chunks. Three ways to say
-"do this much, then put yourself away", all landing in the same save-and-exit path:
+Waiting up to babysit a `kill` is the wrong way to train in chunks. Every way to say "do
+this much, then put yourself away" lands in the same save-and-exit path:
 
 | you want | how |
 |---|---|
 | this launch does N steps | `train.stop_after: N` (or `STOP_AFTER=N scripts/phase2.sh`) |
+| this launch trains for 30 minutes | `train.stop_after_s: 1800` (or `STOP_IN=30m scripts/phase2.sh`) |
 | finish absolute step N, then stop | `train.stop_at: N` |
 | tell a run **already going** to finish at step N | `echo N > checkpoints/<run>/STOP` |
+| tell a run **already going** to stop in 20 minutes | `scripts/stop.sh <run> --in 20m` |
+| …or to stop at 06:30 | `scripts/stop.sh <run> --by 06:30` |
 
-All three are **inclusive**: the step you name is trained, gets its log line, and is what
-lands in `ckpt_last.pt`; the resume starts at N+1. That is deliberately *not* `max_steps`
-semantics (`max_steps: N` makes the last step N-1) — if you asked to stop at 700 you want to
-see step 700, not 699.
+The step bounds are **inclusive**: the step you name is trained, gets its log line, and is
+what lands in `ckpt_last.pt`; the resume starts at N+1. That is deliberately *not*
+`max_steps` semantics (`max_steps: N` makes the last step N-1) — if you asked to stop at 700
+you want to see step 700, not 699.
 
 The final step is logged **whatever `log_every` is**. Stopping at 699 with `log_every: 50`
 would otherwise print no loss, throughput or gradient norm for the step you stopped on, and
 leave the JSONL's last data record 49 steps behind the checkpoint — the numbers you stopped
 to look at, missing.
 
-The third is the useful one mid-run, and it's why the STOP file is *read* rather than just
-tested for existence: an empty STOP means "stop now", a STOP holding a number means "stop
-at that step". `scripts/stop.sh <run> --at N` and `--after N` write it for you (`--after`
-reads the current step out of `train_log.jsonl` and adds N). Anything non-numeric in the
-file is treated as "stop now" — an ambiguous stop request should stop, not be ignored.
+`train.stop_after_s` is counted from the **first training step**, not from launch: pre-flight
+and `torch.compile` can eat ten minutes before step one, and "train for half an hour" does
+not mean "spend half an hour, twenty minutes of it compiling".
+
+#### The STOP file holds three things, not two
+
+The mid-run ones are the useful ones, and they are why the STOP file is *read* rather than
+just tested for existence (`aksharallm/train/stopfile.py` is the whole contract, shared by
+pretraining, SFT and QAT):
+
+```
+(empty)       stop after the current step
+20000         stop on reaching step 20000
+@1753985400   stop on the first step at or after this epoch time
+```
+
+`scripts/stop.sh <run> --at N / --after N / --in 30m / --by 06:30` write these for you
+(`--after` reads the current step out of `train_log.jsonl` and adds N; `--in` and `--by`
+convert to an epoch). Anything unreadable is treated as "stop now" — an ambiguous stop
+request should stop, not be ignored.
+
+The deadline lives **in the file** rather than in a timer somewhere, and that is the whole
+design. A timer in your shell dies when you close the terminal; a timer in the portal dies
+when the portal restarts; a duration converted to a step count when you press the button is
+wrong the moment throughput changes — an eval pass, a thermal throttle, another process on
+the card. A deadline the trainer reads every step is true in all of those cases.
 
 ```mermaid
 flowchart TD
@@ -267,13 +291,23 @@ flowchart TD
     A -- no --> B{STOP file?}
     B -- "empty" --> Z
     B -- "holds N" --> C{step >= N?}
+    B -- "holds @t" --> T{now >= t?}
     C -- yes --> Z
-    C -- "no" --> D[re-aim the eta at N<br/>keep training]
-    B -- no --> E{stop_after / stop_at<br/>reached?}
+    T -- yes --> Z
+    C -- no --> D[re-aim the eta at N<br/>keep training]
+    T -- no --> D2[re-aim the eta at t<br/>keep training]
+    B -- no --> E{stop_after / stop_at /<br/>stop_after_s reached?}
     E -- yes --> Z
     E -- no --> F[keep training]
     Z --> R[rerun the same command:<br/>resume:auto continues<br/>with no loss spike]
 ```
+
+The eta counts to whichever finish line comes first, and a deadline is compared in seconds
+rather than converted to steps — it is already the answer the eta is estimating.
+
+The file is never copied into the trainer's own bound, which is what makes
+`scripts/stop.sh --cancel` (it just removes the file) genuinely put the run back on the
+budget it launched with.
 
 Because a deferred stop exits through the *same* path as Ctrl-C, nothing about resume
 changes: a chunked run is still mathematically one continuous run.

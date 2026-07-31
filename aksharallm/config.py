@@ -90,6 +90,9 @@ class TrainConfig:
     # resume picks up the one after it.
     stop_after: int | None = None  # do N steps in this invocation, then stop
     stop_at: int | None = None  # finish this absolute step, then stop
+    # The same idea measured in wall-clock rather than steps: "train for half an hour".
+    # Counted from the first training step, so pre-flight and torch.compile don't eat it.
+    stop_after_s: int | None = None  # train for N seconds this invocation, then stop
 
 
 @dataclass

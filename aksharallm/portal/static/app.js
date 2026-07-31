@@ -449,6 +449,7 @@ const state = {
   zoom: {},          // per chart: the dragged-out { x0, x1 } window, or absent for all of it
   busy: false,
   view: 'dashboard', // 'dashboard' | 'code'
+  budget: null,      // {unit:'after'|'in', value} for the next launch; null = the whole budget
 };
 
 function flash(msg, kind = '') {
@@ -465,9 +466,20 @@ function live(text, kind) {
 
 /* ---------------------------------------------------------------- render -------------- */
 
+/** What a queued stop says on the badge: a step, or a clock time with how long is left. */
+function stopLabel(stop) {
+  if (!stop || stop.now) return '';
+  if (stop.deadline != null) {
+    const left = stop.deadline - Date.now() / 1000;
+    return ` · stops ${fmtWhen(Math.max(0, left))}`
+      + (left > 0 ? ` (${fmt.dur(left)} left)` : '');
+  }
+  return ` · stop queued at ${fmt.int(stop.target)}`;
+}
+
 function renderPhase(s) {
   const badge = $('#phase');
-  const queued = s.stop && !s.stop.now ? ` · stop queued at ${fmt.int(s.stop.target)}` : '';
+  const queued = stopLabel(s.stop);
   const stage = s.launcher && s.launcher.stage ? ` · ${s.launcher.stage}` : '';
   const label = {
     training: 'training',
@@ -485,13 +497,26 @@ function renderControls(s) {
   $('#btn-start').title = s.start_hint || 'runs scripts/phase2.sh: pre-flight, data check, '
     + 'smoke test, then the real run (resumes from ckpt_last.pt)';
   $('#btn-stop').disabled = !s.can_stop || state.busy;
-  /* A bounded stop needs a step to count from, which a pre-flight doesn't have yet. */
-  for (const id of ['#btn-stop-after', '#btn-stop-at']) {
-    $(id).disabled = !s.can_bound || state.busy;
-  }
+  /* A bounded stop needs a step (or a clock) to count from, which a pre-flight has neither
+   * of yet — there is no trainer to read the file. */
+  $('#btn-stop-at').disabled = !s.can_bound || state.busy;
   $('#btn-stop').textContent = s.phase === 'launching' ? 'Abort launch' : 'Stop now';
   $('#btn-cancel-stop').disabled = !s.stop || state.busy;
   $('#btn-start').textContent = s.step == null ? 'Start run' : `Resume from ${fmt.int(s.step + 1)}`;
+  $('#btn-budget').disabled = !s.can_start || state.busy;
+  renderSessionBudget();
+}
+
+/** The Start button's companion: what the next session is bounded by, in its own words.
+ *
+ * Not `renderBudget` — that name is taken by the Finetune tab's memory-budget table, and a
+ * second declaration of it silently replaces the first for the whole file. */
+function renderSessionBudget() {
+  const b = state.budget;
+  $('#budget-label').textContent = !b ? 'to budget'
+    : b.unit === 'in' ? fmtMins(Math.round(b.value / 60))
+    : `${fmt.int(b.value)} steps`;
+  $('#btn-budget').classList.toggle('is-set', !!b);
 }
 
 function renderProgress(s) {
@@ -515,11 +540,23 @@ function renderProgress(s) {
   $('#eta').textContent = s.phase === 'idle' || last.eta_s == null ? '–' : fmt.dur(last.eta_s);
   $('#meter-fill').style.width = `${(pct || 0) * 100}%`;
 
+  /* The finish line on the meter. A step target is exact; a deadline has to be projected
+   * through the last measured s/step, so it is drawn dashed and says "about" — the mark
+   * would otherwise claim a precision the clock cannot give it. */
   const mark = $('#meter-stop');
-  if (s.stop && !s.stop.now && s.max_steps) {
+  const sps = secPerStep(s);
+  const at = !s.stop || s.stop.now ? null
+    : s.stop.target != null ? s.stop.target
+    : (sps && s.step != null && s.stop.deadline != null)
+      ? s.step + Math.max(0, s.stop.deadline - Date.now() / 1000) / sps
+      : null;
+  if (at != null && s.max_steps) {
     mark.hidden = false;
-    mark.style.left = `calc(${Math.min(100, (s.stop.target / s.max_steps) * 100)}% - 1px)`;
-    mark.title = `queued stop at step ${fmt.int(s.stop.target)}`;
+    mark.classList.toggle('is-estimate', s.stop.target == null);
+    mark.style.left = `calc(${Math.min(100, (at / s.max_steps) * 100)}% - 1px)`;
+    mark.title = s.stop.target != null
+      ? `queued stop at step ${fmt.int(at)}`
+      : `queued stop at ${fmtWhen(s.stop.deadline - Date.now() / 1000)} — about step ${fmt.int(at)}`;
   } else {
     mark.hidden = true;
   }
@@ -1939,6 +1976,8 @@ function renderQuantStatus(st) {
   const cur = st.current;
   const running = st.running;
   $('#q-stop').hidden = !running;
+  $('#q-stop').textContent = !st.can_bound ? 'Stop'
+    : st.stop && !st.stop.now ? 'Change stop…' : 'Stop…';
   $('#q-run').disabled = running || !quant.ckpts.some((c) => c.can_quantize);
   $('#q-compare').disabled = $('#q-run').disabled;
 
@@ -1946,7 +1985,8 @@ function renderQuantStatus(st) {
     const state = running ? 'running' : cur.state;
     const started = cur.started ? new Date(cur.started * 1000).toLocaleTimeString() : '';
     $('#q-state').textContent =
-      `${state} — ${cur.method} on ${cur.checkpoint} (${cur.device}), started ${started}`;
+      `${state} — ${cur.method} on ${cur.checkpoint} (${cur.device}), started ${started}`
+      + stopLabel(st.stop);
     $('#q-cmd').innerHTML = `<code>python -m ${escHtml(cur.cmd || '')}</code>`;
   } else {
     $('#q-state').textContent = 'nothing running';
@@ -2047,8 +2087,41 @@ function wireQuantTab() {
   $('#q-run').addEventListener('click', () => startQuant(false));
   $('#q-compare').addEventListener('click', () => startQuant(true));
   $('#q-stop').addEventListener('click', async () => {
-    try { await post('/api/quant/stop', {}); flash('Stopped the quantization job.', 'ok'); }
-    catch (err) { flash(err.message, 'error'); }
+    const st = quant.status || {};
+    /* Only QAT has steps to stop at — the other methods are one pass over the weights, so
+     * the button stays the blunt instrument it was, and says what that costs. */
+    if (!st.can_bound) {
+      if (!confirm('Stop this job now?\n\nRTN, GPTQ and AWQ are a single pass over the '
+        + 'weights with no useful halfway point, so this kills it and writes nothing.')) return;
+      try { await post('/api/quant/stop', { mode: 'now' }); flash('Stopped the quantization job.', 'ok'); }
+      catch (err) { flash(err.message, 'error'); }
+      pollQuant();
+      return;
+    }
+    const at = progressFromLog(st.log, /qat step (\d+)\/(\d+)/);
+    const chosen = await boundPicker.open({
+      title: 'Stop this QAT run at…',
+      sub: at ? `It is at step ${fmt.int(at.step)} of ${fmt.int(at.total)}. Stopping early `
+        + 'still exports and measures the model — QAT only nudges a trained checkpoint, so a '
+        + 'partly-recovered one is usable.'
+        : 'Stopping early still exports and measures the model.',
+      unit: 'in', showNow: true, nowLabel: 'Stop now (writes nothing)',
+      units: [
+        { ...UNIT_MINUTES, preview: (v) => `stops about ${fmtWhen(v)}, then exports` },
+        { ...UNIT_MORE_STEPS, id: 'at', noun: 'stop at step',
+          min: 10, max: at ? at.total : 5000, value: at ? at.step + 100 : 200,
+          preview: (v) => (at && v <= at.step ? 'already past that step — it will stop at once'
+            : `stops at QAT step ${fmt.int(v)}${at ? ` of ${fmt.int(at.total)}` : ''}, then exports`) },
+      ],
+    });
+    if (!chosen) return;
+    const body = chosen === 'now' ? { mode: 'now' }
+      : chosen.unit === 'in' ? { mode: 'in', seconds: chosen.value }
+      : { mode: 'at', steps: chosen.value };
+    try {
+      const res = await post('/api/quant/stop', body);
+      flash(res.note || 'Stop requested.', 'ok');
+    } catch (err) { flash(err.message, 'error'); }
     pollQuant();
   });
   for (const id of ['#q-method', '#q-group', '#q-bits']) {
@@ -2245,6 +2318,7 @@ function renderLoraStatus(st) {
   const cur = st.current;
   const running = st.running;
   $('#l-stop').hidden = !running;
+  $('#l-stop').textContent = st.stop && !st.stop.now ? 'Change stop…' : 'Stop…';
   $('#l-run').disabled = running || !lora.ckpts.some((c) => !c.error)
                          || !(st.datasets || []).length;
 
@@ -2254,7 +2328,8 @@ function renderLoraStatus(st) {
     const what = cur.method === 'full' ? 'full fine-tune'
                                        : `${cur.method} r=${cur.r} on ${cur.targets}`;
     $('#l-state').textContent =
-      `${label} — ${what}, ${cur.checkpoint} (${cur.device}), started ${started}`;
+      `${label} — ${what}, ${cur.checkpoint} (${cur.device}), started ${started}`
+      + stopLabel(st.stop);
     $('#l-cmd').innerHTML = `<code>python -m ${escHtml(cur.cmd || '')}</code>`;
   } else {
     $('#l-state').textContent = 'nothing running';
@@ -2298,8 +2373,31 @@ async function startLora() {
 function wireLoraTab() {
   $('#l-run').addEventListener('click', startLora);
   $('#l-stop').addEventListener('click', async () => {
-    try { await post('/api/lora/stop', {}); flash('Stopped the fine-tuning job.', 'ok'); }
-    catch (err) { flash(err.message, 'error'); }
+    const st = lora.status || {};
+    const at = progressFromLog(st.log, /step\s+(\d+)\/(\d+)/);
+    const chosen = await boundPicker.open({
+      title: 'Stop this fine-tune at…',
+      sub: (at ? `It is at step ${fmt.int(at.step)} of ${fmt.int(at.total)}. ` : '')
+        + 'However it stops, it evaluates once more and writes sft_last and sft_best — a '
+        + 'stopped fine-tune still leaves a usable adapter.',
+      unit: 'in', showNow: true,
+      units: [
+        { ...UNIT_MINUTES, max: 6 * 3600, chips: [60, 300, 600, 1800, 3600, 2 * 3600],
+          preview: (v) => `stops about ${fmtWhen(v)}, then evaluates and saves` },
+        { ...UNIT_MORE_STEPS, id: 'at', noun: 'stop at step',
+          min: 10, max: at ? at.total : 10000, value: at ? at.step + 200 : 500,
+          preview: (v) => (at && v <= at.step ? 'already past that step — it will stop at once'
+            : `stops at step ${fmt.int(v)}${at ? ` of ${fmt.int(at.total)}` : ''}, then saves`) },
+      ],
+    });
+    if (!chosen) return;
+    const body = chosen === 'now' ? { mode: 'now' }
+      : chosen.unit === 'in' ? { mode: 'in', seconds: chosen.value }
+      : { mode: 'at', steps: chosen.value };
+    try {
+      const res = await post('/api/lora/stop', body);
+      flash(res.note || 'Stop requested.', 'ok');
+    } catch (err) { flash(err.message, 'error'); }
     pollLora();
   });
   for (const id of ['#l-method', '#l-rank', '#l-data']) {
@@ -2424,6 +2522,178 @@ async function act(fn, okPrefix) {
     schedule(400);
   }
 }
+
+
+/* ================================================================= bound picker ========
+ * "How long should this go on for?" — asked at launch (how much of the budget does this
+ * session get?) and at every stop (how much longer?), for training runs, fine-tunes and
+ * QAT. One dialog answers all of them, because they differ only in which units make sense.
+ *
+ * Three things make it usable where a prompt() was not:
+ *
+ *   presets   the answer is nearly always one of six numbers. Those are one click.
+ *   the dial  logarithmic, so a single throw spans a minute to twelve hours (or ten steps
+ *             to a hundred thousand) without the low end being a pixel wide. Linear would
+ *             put every useful short stop in the first 2% of the track.
+ *   the line  underneath, in words: what step it lands on, what time it finishes, how many
+ *             checkpoints that is. The number you picked is not the number you care about.
+ *
+ * It resolves to {unit, value} in the unit's own base (steps, or seconds), or the string
+ * 'now', or null if dismissed. The caller decides what those mean to its endpoint.
+ */
+const boundPicker = (() => {
+  const dlg = () => $('#bound');
+  let spec = null;      // the descriptor passed to open()
+  let unit = null;      // the unit descriptor currently selected
+  let value = 0;        // in the unit's own base
+  let resolve = null;
+
+  /* Slider position <-> value, logarithmically. */
+  const toPos = (v) => Math.round(1000 * Math.log(v / unit.min) / Math.log(unit.max / unit.min));
+  const toValue = (p) => unit.min * Math.pow(unit.max / unit.min, p / 1000);
+
+  /** Round to something a person would have typed: coarser as the number grows. */
+  function snap(v) {
+    let g = 1;
+    for (const [below, gran] of unit.snap) { if (v < below) { g = gran; break; } g = gran; }
+    return Math.min(unit.max, Math.max(unit.min, Math.round(v / g) * g));
+  }
+
+  function setValue(v, from) {
+    value = unit.none ? null : snap(v);
+    if (from !== 'field') $('#bound-value').value = unit.none ? '' : value / (unit.step || 1);
+    if (from !== 'dial') $('#bound-dial').value = unit.none ? 0 : toPos(value);
+    for (const chip of $$('#bound-chips .chip')) {
+      chip.classList.toggle('is-on', Number(chip.dataset.value) === value);
+    }
+    $('#bound-preview').textContent = unit.preview ? unit.preview(value) : '';
+  }
+
+  function selectUnit(id) {
+    unit = spec.units.find((u) => u.id === id) || spec.units[0];
+    for (const btn of $$('#bound-units .seg-btn')) {
+      const on = btn.dataset.unit === unit.id;
+      btn.classList.toggle('is-on', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
+    /* A unit with nothing to choose (the whole budget) keeps only its preview line. */
+    const hide = !!unit.none;
+    for (const sel of ['#bound-chips', '#bound-dial', '.dial-ends', '.bound-exact']) {
+      $(sel).hidden = hide;
+    }
+    $('#bound-chips').innerHTML = hide ? '' : unit.chips.map((v) =>
+      `<button type="button" class="chip" data-value="${v}">${escHtml(unit.fmt(v))}</button>`).join('');
+    $('#bound-unit-label').textContent = unit.noun || '';
+    $('#bound-min').textContent = hide ? '' : unit.fmt(unit.min);
+    $('#bound-max').textContent = hide ? '' : unit.fmt(unit.max);
+    /* A unit with no scale to pick from still has to refresh the preview line, so it is
+     * `setValue(null)` rather than an early return — the sentence is the whole dialog. */
+    setValue(hide ? null
+      : unit.value != null ? unit.value : unit.chips[Math.min(2, unit.chips.length - 1)]);
+  }
+
+  function close(result) {
+    dlg().close();
+    const r = resolve; resolve = null;
+    if (r) r(result);
+  }
+
+  function open(next) {
+    spec = next;
+    $('#bound-title').textContent = spec.title;
+    $('#bound-sub').textContent = spec.sub || '';
+    $('#bound-sub').hidden = !spec.sub;
+    $('#bound-ok').textContent = spec.okLabel || 'Queue stop';
+    $('#bound-now').hidden = !spec.showNow;
+    $('#bound-now').textContent = spec.nowLabel || 'Stop now';
+    $('#bound-units').innerHTML = spec.units.map((u) =>
+      `<button type="button" class="seg-btn" data-unit="${u.id}" aria-pressed="false">`
+      + `${escHtml(u.label)}</button>`).join('');
+    selectUnit(spec.unit || spec.units[0].id);
+    dlg().showModal();
+    $(unit.none ? '#bound-ok' : '#bound-value').focus();
+    return new Promise((r) => { resolve = r; });
+  }
+
+  /* Wired once, from wire(), like every other panel. */
+  function wireBound() {
+    $('#bound-units').addEventListener('click', (e) => {
+      const btn = e.target.closest('.seg-btn');
+      if (btn) selectUnit(btn.dataset.unit);
+    });
+    $('#bound-chips').addEventListener('click', (e) => {
+      const chip = e.target.closest('.chip');
+      if (chip) setValue(Number(chip.dataset.value));
+    });
+    $('#bound-dial').addEventListener('input', (e) => setValue(toValue(Number(e.target.value)), 'dial'));
+    $('#bound-value').addEventListener('input', (e) => {
+      const n = Number(e.target.value);
+      if (n > 0) setValue(n * (unit.step || 1), 'field');
+    });
+    $('#bound-value').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); close({ unit: unit.id, value }); }
+    });
+    $('#bound-ok').addEventListener('click', () => close({ unit: unit.id, value }));
+    $('#bound-now').addEventListener('click', () => close('now'));
+    $('#bound-cancel').addEventListener('click', () => close(null));
+    /* Escape and the backdrop both dismiss; `cancel` fires for Escape only. */
+    dlg().addEventListener('cancel', () => close(null));
+    dlg().addEventListener('click', (e) => { if (e.target === dlg()) close(null); });
+  }
+
+  return { open, wire: wireBound };
+})();
+
+/** Minutes as a person says them: 45m, 1h, 2h30m. */
+function fmtMins(mins) {
+  if (mins < 60) return `${mins} min`;
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return m ? `${h}h${String(m).padStart(2, '0')}` : `${h} hr${h > 1 ? 's' : ''}`;
+}
+
+/** The seconds-per-step to reason with, or null when nothing has been logged yet. */
+function secPerStep(s) {
+  const v = s && s.last && s.last.s_per_step;
+  return v && v > 0 ? v : null;
+}
+
+/** {step, total} from the last matching line of a job's log tail, or null.
+ *
+ * The fine-tune and QAT panels have no step field in their status — they stream a log. It
+ * is the log the person is already reading, so reading the same number out of it keeps the
+ * dialog and the panel telling one story. */
+function progressFromLog(lines, re) {
+  for (let i = (lines || []).length - 1; i >= 0; i--) {
+    const m = re.exec(lines[i]);
+    if (m) return { step: Number(m[1]), total: Number(m[2]) };
+  }
+  return null;
+}
+
+/** "about 13:07" for a number of seconds from now. */
+function fmtWhen(seconds) {
+  return new Date(Date.now() + seconds * 1000)
+    .toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/* The unit descriptors. Chips are the answers people actually give; the dial covers the
+ * rest. `step` is the divisor between what the field shows and what the API is sent —
+ * minutes on screen, seconds on the wire. */
+const UNIT_MINUTES = {
+  id: 'in', label: 'Time', noun: 'minutes', step: 60,
+  min: 60, max: 12 * 3600, value: 30 * 60,
+  chips: [60, 300, 600, 1800, 3600, 2 * 3600, 4 * 3600],
+  snap: [[600, 60], [3600, 300], [14400, 900], [Infinity, 1800]],
+  fmt: (v) => fmtMins(Math.round(v / 60)),
+};
+
+const UNIT_MORE_STEPS = {
+  id: 'after', label: 'Steps', noun: 'more steps',
+  min: 10, max: 100000, value: 500,
+  chips: [10, 50, 100, 500, 1000, 5000, 10000],
+  snap: [[100, 10], [1000, 50], [10000, 100], [Infinity, 500]],
+  fmt: (v) => fmt.int(v),
+};
 
 
 /* ================================================================= playground ==========
@@ -3012,17 +3282,50 @@ function wire() {
   wirePlay();
   wireQuantTab();
   wireLoraTab();
+  boundPicker.wire();
   for (const tab of $$('.tab')) {
     tab.addEventListener('click', () => showView(tab.dataset.view));
   }
   $('#run-select').addEventListener('change', (e) => selectRun(e.target.value));
 
   $('#btn-start').addEventListener('click', () => {
-    const after = $('#stop-after').value.trim();
     act(() => post(`/api/run/${encodeURIComponent(state.run)}/start`, {
-      stop_after: after ? Number(after) : null,
+      stop_after: state.budget && state.budget.unit === 'after' ? state.budget.value : null,
+      stop_after_s: state.budget && state.budget.unit === 'in' ? state.budget.value : null,
       skip_smoke: $('#skip-smoke').checked,
     }), 'Launching.');
+  });
+
+  /* The session budget uses the same picker as the stop, with one extra unit for "no
+   * bound at all" — which is the default, and has to stay one click away. */
+  $('#btn-budget').addEventListener('click', async () => {
+    const s = state.status || {};
+    const sps = secPerStep(s);
+    const from = (s.step == null ? 0 : s.step + 1);
+    const chosen = await boundPicker.open({
+      title: 'Budget for this session',
+      sub: `'${state.run}' resumes at step ${fmt.int(from)}. Whatever you pick here, the `
+        + 'trainer saves and exits when it lands, and the next start carries on from there.',
+      okLabel: 'Set budget',
+      unit: (state.budget && state.budget.unit) || 'none',
+      units: [
+        { ...UNIT_MORE_STEPS, label: 'Steps', noun: 'steps this session',
+          value: (state.budget && state.budget.unit === 'after') ? state.budget.value : 500,
+          preview: (v) => `finishes step ${fmt.int(from + v - 1)}`
+            + (sps ? ` · about ${fmt.dur(v * sps)} at the last measured ${sps.toFixed(2)}s/step` : '')
+            + (s.max_steps && from + v - 1 >= s.max_steps - 1 ? ' — that is the whole budget' : '') },
+        { ...UNIT_MINUTES, label: 'Time', noun: 'minutes this session',
+          value: (state.budget && state.budget.unit === 'in') ? state.budget.value : 30 * 60,
+          preview: (v) => `trains for ${fmtMins(Math.round(v / 60))} from the first step`
+            + (sps ? ` · roughly ${fmt.int(v / sps)} steps at ${sps.toFixed(2)}s/step` : '')
+            + ' · pre-flight and compilation are not counted' },
+        { id: 'none', label: 'Whole budget', none: true,
+          preview: () => 'runs to the config\'s own max_steps, or until you stop it' },
+      ],
+    });
+    if (chosen === null) return;
+    state.budget = chosen.unit === 'none' ? null : chosen;
+    renderSessionBudget();
   });
 
   // Post-training panel: one delegated handler for all SFT/DPO/GRPO start/stop buttons.
@@ -3049,19 +3352,35 @@ function wire() {
       s.phase === 'launching' ? 'Aborting.' : 'Stop requested.');
   });
 
-  $('#btn-stop-after').addEventListener('click', () => {
-    const n = prompt('Train how many more steps, then save and exit?', '500');
-    if (!n) return;
-    act(() => post(`/api/run/${encodeURIComponent(state.run)}/stop`,
-      { mode: 'after', steps: Number(n) }), 'Queued.');
-  });
-
-  $('#btn-stop-at').addEventListener('click', () => {
-    const cur = (state.status && state.status.step) || 0;
-    const n = prompt('Finish which step, then save and exit?', String(cur + 1000));
-    if (!n) return;
-    act(() => post(`/api/run/${encodeURIComponent(state.run)}/stop`,
-      { mode: 'at', steps: Number(n) }), 'Queued.');
+  $('#btn-stop-at').addEventListener('click', async () => {
+    const s = state.status || {};
+    const cur = s.step || 0;
+    const sps = secPerStep(s);
+    const every = (s.config && s.config.ckpt_every) || null;
+    /* How many periodic checkpoints land before the stop — the honest cost of stopping
+     * later rather than sooner, and the number that decides whether it is worth waiting. */
+    const ckpts = (steps) => (every ? ` · ${Math.floor(((cur % every) + steps) / every)} `
+      + `checkpoint${Math.floor(((cur % every) + steps) / every) === 1 ? '' : 's'} on the way` : '');
+    const chosen = await boundPicker.open({
+      title: `Stop '${state.run}' at…`,
+      sub: `It is at step ${fmt.int(cur)}. It finishes the step it lands on, saves `
+        + 'ckpt_last.pt there and exits — starting again resumes from it with no loss spike.',
+      unit: 'in',
+      units: [
+        { ...UNIT_MINUTES,
+          preview: (v) => `stops about ${fmtWhen(v)}`
+            + (sps ? ` · around step ${fmt.int(cur + v / sps)}${ckpts(v / sps)}` : '') },
+        { ...UNIT_MORE_STEPS,
+          preview: (v) => `finishes step ${fmt.int(cur + v)}`
+            + (sps ? ` · about ${fmt.dur(v * sps)}, so around ${fmtWhen(v * sps)}` : '')
+            + ckpts(v) },
+      ],
+    });
+    if (!chosen) return;
+    const body = chosen.unit === 'in'
+      ? { mode: 'in', seconds: chosen.value }
+      : { mode: 'after', steps: chosen.value };
+    act(() => post(`/api/run/${encodeURIComponent(state.run)}/stop`, body), 'Queued.');
   });
 
   $('#btn-cancel-stop').addEventListener('click', () => {

@@ -224,6 +224,8 @@ scripts/stop.sh                      # graceful stop of the default run; waits f
 scripts/stop.sh small-code --status  # is it alive, and at what step? changes nothing
 scripts/stop.sh small-code --after 500   # queue: 500 more steps, then save and exit
 scripts/stop.sh small-code --at 20000    # queue: finish step 20000, then save and exit
+scripts/stop.sh small-code --in 30m      # queue: 30 more minutes, then save and exit
+scripts/stop.sh small-code --by 06:30    # queue: train until half six, then save and exit
 scripts/stop.sh small-code --cancel      # withdraw a queued stop; the run carries on
 FORCE=1 scripts/stop.sh small-code   # SIGKILL if the graceful stop hasn't landed in WAIT=300s
 ```
@@ -236,7 +238,7 @@ flowchart LR
     S[scripts/stop.sh] -->|reads| LP
     S -->|reads| PID
     S -->|"no trainer yet:<br/>abort the launch"| P
-    S -->|"empty STOP = now<br/>N in STOP = at step N"| STOP[checkpoints/run/STOP]
+    S -->|"empty = now<br/>N = at step N<br/>@t = at that time"| STOP[checkpoints/run/STOP]
     STOP --> T
     T -->|save + exit 0| CK[ckpt_last.pt at the exact step]
     CK -->|re-run phase2.sh| T
@@ -244,7 +246,10 @@ flowchart LR
 ```
 
 `--at N` and `--after N` are inclusive — step N is trained, logged and checkpointed, and the
-resume starts at N+1.
+resume starts at N+1. `--in` and `--by` take durations (`30m`, `90s`, `2h`, `1h30m`, or a
+bare number of minutes) and clock times, and put an `@<epoch>` deadline in the STOP file for
+the trainer itself to honour — nothing has to stay alive to make the stop happen, which is
+why closing the terminal, or restarting the portal, does not lose it.
 
 With no pid file (a run launched by hand, or started before this existed) `stop.sh` finds
 the process by its command line and adopts the pid into the file. A graceful stop removes
@@ -361,6 +366,28 @@ The whole thing is the standard library plus hand-written SVG: `aksharallm/porta
 `aksharallm/train/runlog.py` is the shared reader that `scripts/sessions.py` uses too, so the
 table in the terminal and the chart in the browser cannot disagree.
 
+#### "Stop it in twenty minutes" — the picker
+
+Every "how long?" in the portal is one dialog: the **this session** button beside Start, and
+**Stop at…** on the dashboard, the Finetune tab and a running QAT job. Pick the unit — steps
+or time — take a preset (1 / 5 / 10 / 30 min, 1 / 2 / 4 h; 10 / 50 / 100 / 500 / 1k / 5k
+steps), or turn the dial for anything between, and read the sentence underneath: what step
+it lands on, what time it finishes, how many checkpoints happen on the way.
+
+The dial is **logarithmic**. On a linear track from one minute to twelve hours, every stop
+anyone actually wants lives in the first 4% of it; log spacing gives the short end the room
+it earns. The exact field beside it is always there for a number you already know.
+
+Two details worth stating, because they are the difference between a control you trust and
+one you check afterwards:
+
+- A **time** stop is a deadline in the STOP file, not a step count computed when you pressed
+  the button. If the run halves in speed, "30 minutes" is still 30 minutes.
+- The finish line on the progress meter is therefore *projected* for a timed stop — drawn
+  dotted, and labelled "about step N", because the exact step is not knowable in advance.
+
+This is the one-off. For anything that repeats, the next section is what you want.
+
 ### Scheduling it: "train overnight, hand the GPU back at breakfast"
 
 Six days of compute over evenings is a lot of remembering to press things. So starts and
@@ -378,6 +405,12 @@ scripts/schedule.sh log                   # what it actually did, and why
 …or in the portal's **Schedule** panel: pick a run, a start and stop time, click the days,
 press Add. Both edit the same `schedule.json` in the repo root, so a window added in the
 browser is `scripts/schedule.sh`'s to pause, and vice versa.
+
+A schedule is for something that **repeats**. Writing a rule to stop a run once, tonight, is
+the wrong tool — it needs something watching the clock, and you have to remember to remove
+it. Use `--in`/`--by` or the Stop at… dialog for that: the deadline goes to the trainer,
+which honours it whether or not anything else is still running, and it is gone once it
+fires.
 
 A window is stored as the two rules it really is, and the stop's days are shifted when it
 crosses midnight — `22:00 → 06:30, mon-fri` means starts Mon–Fri and stops **Tue–Sat**.

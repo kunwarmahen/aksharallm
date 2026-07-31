@@ -16,6 +16,7 @@ from aksharallm.config import load_config
 from aksharallm.data.loader import MixedTokenDataset, TokenDataset
 from aksharallm.tokenizer.tokenizer import Tokenizer, train_bpe
 from aksharallm.train.dpo import dpo_loss
+from aksharallm.train import stopfile
 from aksharallm.train.pretrain import fmt_dur, resolve_stop_step, stop_file_target
 from aksharallm.train.schedule import get_lr
 
@@ -315,12 +316,14 @@ def test_empty_stop_file_means_stop_now(tmp_path):
     p = tmp_path / "STOP"
     p.write_text("")
     assert stop_file_target(p) is None
+    assert stopfile.read(p).now is True
 
 
 def test_stop_file_with_a_step_number_is_a_deferred_stop(tmp_path):
     p = tmp_path / "STOP"
     p.write_text("20000\n")
     assert stop_file_target(p) == 20000
+    assert stopfile.read(p) == stopfile.StopRequest(step=20000)
 
 
 def test_garbage_stop_file_is_treated_as_stop_now(tmp_path):
@@ -328,6 +331,58 @@ def test_garbage_stop_file_is_treated_as_stop_now(tmp_path):
     p = tmp_path / "STOP"
     p.write_text("soon-ish")
     assert stop_file_target(p) is None
+    assert stopfile.read(p).now is True
+    # …including a deadline that is not a number, which is the shape a truncated write takes.
+    p.write_text("@later")
+    assert stopfile.read(p).now is True
+
+
+def test_a_missing_stop_file_is_not_a_stop(tmp_path):
+    """The distinction the trainer polls on: no file at all means carry on."""
+    assert stopfile.read(tmp_path / "STOP") is None
+    assert stopfile.reached(None, 500) is None
+
+
+def test_a_deadline_stop_file_fires_on_time_not_on_a_step(tmp_path):
+    """The contract that makes "stop in 20 minutes" survive a portal restart: the deadline
+    lives in the file, and the trainer -- not a timer somewhere -- decides when it lands."""
+    p = tmp_path / "STOP"
+    stopfile.write(p, stopfile.StopRequest(deadline=1_000_000.0))
+    assert p.read_text() == "@1000000"
+    req = stopfile.read(p)
+    assert (req.step, req.now) == (None, False)
+    assert stopfile.reached(req, step=999_999, now=999_999.0) is None   # not yet
+    assert "reached stop time" in stopfile.reached(req, step=3, now=1_000_000.0)
+
+
+def test_a_step_stop_fires_at_or_past_its_step():
+    req = stopfile.StopRequest(step=700)
+    assert stopfile.reached(req, 699) is None
+    assert "700" in stopfile.reached(req, 700)
+    assert stopfile.reached(req, 5000) is not None  # a target already behind us still fires
+
+
+@pytest.mark.parametrize("text,seconds", [
+    ("30m", 1800), ("90s", 90), ("2h", 7200), ("1h30m", 5400), ("45", 2700), ("1h30m15s", 5415),
+])
+def test_durations_parse_the_way_people_say_them(text, seconds):
+    """A bare number is minutes: "give it another 30" is never half a minute. The same
+    grammar is implemented in scripts/stop.sh, so both doors take the same words."""
+    assert stopfile.parse_duration(text) == seconds
+
+
+@pytest.mark.parametrize("bad", ["", "soon", "-5", "0s", "30x"])
+def test_an_unreadable_duration_is_refused_rather_than_guessed(bad):
+    with pytest.raises(ValueError):
+        stopfile.parse_duration(bad)
+
+
+def test_a_clock_time_already_past_means_tomorrow(tmp_path):
+    """"--by 06:30" typed at midnight is the whole night, not a deadline in the past."""
+    from datetime import datetime
+    noon = datetime(2026, 7, 31, 12, 0, 0).timestamp()
+    assert stopfile.deadline_from_clock("18:00", now=noon) == noon + 6 * 3600
+    assert stopfile.deadline_from_clock("06:30", now=noon) == noon + 18.5 * 3600
 
 
 @pytest.mark.parametrize("start,stop_after,stop_at,last_step", [
@@ -359,5 +414,8 @@ def test_stop_after_and_stop_at_default_to_off_and_parse_from_overrides(tmp_path
     cfg_path.write_text("name: t\n")
     assert load_config(cfg_path).train.stop_after is None
     assert load_config(cfg_path).train.stop_at is None
-    cfg = load_config(cfg_path, ["train.stop_after=500", "train.stop_at=20000"])
-    assert (cfg.train.stop_after, cfg.train.stop_at) == (500, 20000)
+    assert load_config(cfg_path).train.stop_after_s is None
+    cfg = load_config(cfg_path, ["train.stop_after=500", "train.stop_at=20000",
+                                 "train.stop_after_s=1800"])
+    assert (cfg.train.stop_after, cfg.train.stop_at, cfg.train.stop_after_s) \
+        == (500, 20000, 1800)
