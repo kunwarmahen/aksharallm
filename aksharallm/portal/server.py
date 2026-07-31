@@ -46,6 +46,7 @@ from ..infer.playground import Playground
 from .explain import ExplainConfig, Ollama, SourceTree, build_messages
 from .gpu import Sampler, snapshot
 from .pipeline import Pipeline
+from .finetune import FinetuneJobs
 from .quantize import QuantJobs
 from .runs import PHASE_LAUNCHING, PHASE_TRAINING, LAUNCHERS, RunError, RunStore, repo_root
 from .schedule import Rule, Schedule, Scheduler, parse_days
@@ -71,7 +72,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def __init__(self, *args, store: RunStore, scheduler: Scheduler, sampler: Sampler,
                  source: SourceTree, explain: ExplainConfig, playground: Playground,
-                 pipeline: Pipeline, quant: QuantJobs, quiet: bool = True, **kw):
+                 pipeline: Pipeline, quant: QuantJobs, finetune: FinetuneJobs,
+                 quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
         self.sampler = sampler
@@ -80,6 +82,7 @@ class Handler(BaseHTTPRequestHandler):
         self.playground = playground
         self.pipeline = pipeline
         self.quant = quant
+        self.finetune = finetune
         self.quiet = quiet
         super().__init__(*args, **kw)
 
@@ -192,6 +195,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(self.quant.start(data))
                 if parts[2] == "stop":
                     return self._json(self.quant.stop())
+            # fine-tuning: /api/lora/<start|stop>
+            if len(parts) == 3 and parts[:2] == ["api", "lora"]:
+                if parts[2] == "start":
+                    return self._json(self.finetune.start(data))
+                if parts[2] == "stop":
+                    return self._json(self.finetune.stop())
             # post-training: /api/pipeline/<base>/<stage>/<start|stop>
             if len(parts) == 5 and parts[:2] == ["api", "pipeline"]:
                 base, stage, action = parts[2], parts[3], parts[4]
@@ -222,6 +231,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.quant.status(tail=max(0, lines)))
         if parts == ["quant", "checkpoints"]:
             return self._json({"checkpoints": self.quant.checkpoints()})
+        if parts == ["lora"]:
+            lines = int((query.get("lines") or [200])[0])
+            return self._json(self.finetune.status(tail=max(0, lines)))
+        if parts == ["lora", "checkpoints"]:
+            return self._json({"checkpoints": self.finetune.checkpoints()})
+        if parts == ["lora", "budget"]:
+            # The tab's headline: what each strategy costs, before running anything.
+            ckpt = (query.get("checkpoint") or [None])[0]
+            if not ckpt:
+                return self._error(400, "budget needs ?checkpoint=<run/name.pt>")
+            targets = (query.get("targets") or ["all-linear"])[0]
+            return self._json(self.finetune.budget(ckpt, targets=targets))
         if len(parts) == 2 and parts[0] == "pipeline":
             # post-training stages + gating for a base run: /api/pipeline/<base>
             return self._json(self.pipeline.status(parts[1]))
@@ -407,6 +428,7 @@ class Handler(BaseHTTPRequestHandler):
             params=params, device=(str(data["device"]) if data.get("device") else None),
             probe=(str(data["probe"]) if data.get("probe") else None),
             task=(str(data["task"]) if data.get("task") else None),
+            adapter=(str(data["adapter"]) if data.get("adapter") else None),
             record=data.get("record", True) is not False)
 
         self.send_response(200)
@@ -552,9 +574,10 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
     playground = Playground(store.root, busy_cb=busy)
     pipeline = Pipeline(store.root)
     quant = QuantJobs(store.root)
+    finetune = FinetuneJobs(store.root)
     handler = partial(Handler, store=store, scheduler=scheduler, sampler=sampler,
                       source=source, explain=explain, playground=playground,
-                      pipeline=pipeline, quant=quant, quiet=quiet)
+                      pipeline=pipeline, quant=quant, finetune=finetune, quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True

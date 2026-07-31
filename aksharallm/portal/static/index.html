@@ -21,6 +21,7 @@
     <button class="tab" data-view="play" type="button">Playground</button>
     <button class="tab" data-view="code" type="button">Code</button>
     <button class="tab" data-view="quant" type="button">Quantize</button>
+    <button class="tab" data-view="lora" type="button">Finetune</button>
     <button class="tab" data-view="docs" type="button">Docs</button>
   </nav>
 
@@ -326,6 +327,13 @@ skipped. phase2.sh ignores the skip when there is no checkpoint to resume.">
         <span class="field-label">checkpoint</span>
         <select id="play-ckpt" aria-label="checkpoint"></select>
       </label>
+      <!-- One base model, several specialisations. Switching this is the fastest way to
+           hear what a fine-tune actually did: same weights, same prompt, one 4 MB file
+           different. -->
+      <label class="field wide" id="play-adapter-field" hidden>
+        <span class="field-label">adapter</span>
+        <select id="play-adapter" aria-label="adapter"></select>
+      </label>
       <div class="play-meta" id="play-meta"></div>
       <div class="play-warn" id="play-warn" role="status" hidden></div>
 
@@ -576,6 +584,121 @@ skipped. phase2.sh ignores the skip when there is no checkpoint to resume.">
   </section>
 </div><!-- /view-quant -->
 
+
+<!-- The Finetune tab: teach the model something new without training the model.
+     Leads with the memory budget, because that is the number that explains why LoRA
+     exists — you can read the whole trade-off here without running anything. Every
+     button shells out to `python -m aksharallm.train.sft`, the same command you
+     would type. -->
+<div id="view-lora" class="view" hidden>
+
+  <!-- The diagram earns its space — it is the explanation, and it is one compact row.
+       The prose does not, so it lives behind a disclosure: a layman gets it in one click,
+       and everyone else gets straight to the controls. -->
+  <section class="lora-why">
+    <div class="lora-diagram" aria-label="how an adapter attaches to a layer">
+      <div class="lora-node lora-frozen">
+        <strong>frozen weights</strong>
+        <span>W &nbsp;·&nbsp; never trained, can be 4-bit</span>
+      </div>
+      <div class="lora-plus">+</div>
+      <div class="lora-node lora-trained">
+        <strong>adapter</strong>
+        <span>B @ A &nbsp;·&nbsp; ~1% of the numbers, starts at zero</span>
+      </div>
+      <div class="lora-eq">=</div>
+      <div class="lora-node lora-out"><strong>fine-tuned layer</strong>
+        <span>y = Wx + (α/r)·BAx</span></div>
+      <details class="lora-explain">
+        <summary>what is this?</summary>
+        <p id="l-why"></p>
+      </details>
+    </div>
+  </section>
+
+  <section class="lora-layout">
+
+    <aside class="panel lora-form">
+      <div class="panel-head">
+        <h2>Fine-tune</h2>
+        <span class="panel-note" id="l-state">nothing running</span>
+      </div>
+
+      <label class="field wide">
+        <span class="field-label">start from</span>
+        <select id="l-ckpt" aria-label="checkpoint"></select>
+      </label>
+      <div class="q-hint" id="l-ckpt-note"></div>
+
+      <label class="field wide">
+        <span class="field-label">teach it with</span>
+        <select id="l-data" aria-label="dataset"></select>
+      </label>
+      <div class="q-hint" id="l-data-note"></div>
+
+      <label class="field wide">
+        <span class="field-label">method</span>
+        <select id="l-method" aria-label="method"></select>
+      </label>
+      <div class="q-hint" id="l-method-note"></div>
+
+      <div class="q-row">
+        <label class="field">
+          <span class="field-label">rank</span>
+          <select id="l-rank" aria-label="rank"></select>
+        </label>
+        <label class="field">
+          <span class="field-label">epochs</span>
+          <input id="l-epochs" type="number" min="1" max="20" step="1" value="2">
+        </label>
+      </div>
+      <div class="q-hint" id="l-rank-note"></div>
+
+      <label class="field wide">
+        <span class="field-label">which layers</span>
+        <select id="l-targets" aria-label="target layers"></select>
+      </label>
+      <div class="q-hint" id="l-targets-note"></div>
+
+      <label class="field wide">
+        <span class="field-label">device</span>
+        <select id="l-device" aria-label="device">
+          <option value="">auto</option>
+          <option value="cuda">cuda</option>
+          <option value="cpu">cpu</option>
+        </select>
+      </label>
+      <div class="q-hint" id="l-device-note"></div>
+
+      <div class="q-actions">
+        <button id="l-run" type="button">Fine-tune</button>
+        <button id="l-stop" class="ghost" type="button" hidden>Stop</button>
+      </div>
+      <div class="q-hint" id="l-cmd"></div>
+    </aside>
+
+    <section class="panel lora-main">
+      <div class="panel-head">
+        <h2>What it would cost</h2>
+        <span class="panel-note" id="l-budget-note">memory, before you run anything</span>
+      </div>
+      <div id="l-headline" class="lora-headline"></div>
+      <div id="l-budget" class="lora-budget"></div>
+
+      <div class="panel-head lora-sep"><h2>Adapters you have</h2>
+        <span class="panel-note">swap them in the Playground</span></div>
+      <div id="l-adapters" class="lora-adapters"></div>
+
+      <div class="q-logwrap">
+        <div class="panel-head"><h2>Job output</h2>
+          <span class="panel-note">live, from <code>logs/finetune/</code></span></div>
+        <pre id="l-log" class="q-log">Pick a checkpoint and a dataset, then press Fine-tune.</pre>
+      </div>
+    </section>
+
+  </section>
+</div><!-- /view-lora -->
+
 <footer class="footer">
   <span id="foot-root">–</span>
   <span class="foot-dashboard">Stopping is safe at any step: the trainer saves
@@ -588,6 +711,11 @@ skipped. phase2.sh ignores the skip when there is no checkpoint to resume.">
   <code>python -m aksharallm.quant</code> — the same command you would type — and writes its
   measurements to <code>logs/quant/</code>. int8 is free; int4 costs perplexity and
   <em>saves memory, not time</em>. See docs/10 for why smaller is not faster.</span>
+  <span class="foot-lora" hidden>An adapter is a few MB, not a new copy of the model — one
+  base plus one adapter per skill. Jobs shell out to
+  <code>python -m aksharallm.train.sft</code> and write beside the base they came from, so
+  the Playground picks them up. See docs/11 for why the rank and the target layers matter
+  more than anything else here.</span>
   <span class="foot-play" hidden>Every generation is recorded in
   <code>logs/playground.jsonl</code> with the step and loss of the checkpoint that produced
   it, so the same prompt at step 7,000 and step 30,000 can be put side by side. While a run
