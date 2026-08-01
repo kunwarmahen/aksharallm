@@ -146,3 +146,8 @@ input.dial {
 }
 .flash.error { border-left-color: var(--critical); }
 .flash.ok { border-left-color: var(--good); }
+
+/* The one destructive control on the page. Quiet until you point at it: a red button
+   beside Start invites the mis-click it is trying to prevent. */
+button.danger { color: var(--ink-muted); }
+button.danger:hover:not(:disabled) { color: var(--serious); border-color: var(--serious); }

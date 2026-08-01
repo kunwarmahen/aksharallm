@@ -920,3 +920,154 @@ def test_a_log_without_session_markers_falls_back_to_the_logged_step(tmp_path, m
     st = runs_mod.RunStore(tmp_path).status("demo")
     assert st["last"]["trained_to"] == 7980
     assert st["finished"] is False
+
+
+# ---- archiving and deleting a run --------------------------------------------------------
+
+def _finished_run(root, name="demo", steps=8000, size=1024):
+    """A run directory that looks like one that trained its whole budget."""
+    rdir = root / "checkpoints" / name
+    ldir = root / "logs" / name
+    rdir.mkdir(parents=True, exist_ok=True)
+    ldir.mkdir(parents=True, exist_ok=True)
+    (rdir / "train_log.jsonl").write_text("\n".join([
+        json.dumps({"event": "session_start", "max_steps": steps, "start_step": 0}),
+        json.dumps({"step": steps - 20, "loss": 1.4, "ema": 1.4}),
+        json.dumps({"step": steps - 20, "val_loss": 1.41}),
+        json.dumps({"event": "session_end", "reason": "max_steps", "last_step": steps - 1}),
+    ]) + "\n")
+    (rdir / "ckpt_best.pt").write_bytes(b"x" * size)
+    (ldir / "train_20260801-000000.log").write_text("step 7980 ...\n")
+    return rdir, ldir
+
+
+def test_archiving_keeps_everything_under_a_timestamped_name(tmp_path):
+    from aksharallm.portal import runs as runs_mod
+
+    _finished_run(tmp_path)
+    store = runs_mod.RunStore(tmp_path)
+    res = store.archive("demo")
+
+    assert res["archive"].startswith("demo.")
+    assert not (tmp_path / "checkpoints" / "demo").exists(), "a rename, not a copy"
+    assert (tmp_path / "checkpoints" / res["archive"] / "ckpt_best.pt").exists()
+    assert (tmp_path / "logs" / res["archive"]).is_dir()
+    # And it is still a run the portal can show.
+    assert res["archive"] in store.runs()
+    st = store.status(res["archive"])
+    assert st["archived"] is True and st["can_start"] is False
+    assert st["step"] == 7980 and st["last"]["best_val"] == 1.41
+
+
+def test_an_archive_name_is_still_a_legal_run_name(tmp_path):
+    """It reaches paths and command lines like any other, so it goes through the same regex."""
+    from aksharallm.portal import runs as runs_mod
+
+    _finished_run(tmp_path)
+    name = runs_mod.RunStore(tmp_path).archive("demo")["archive"]
+    assert runs_mod.RUN_NAME_RE.match(name)
+
+
+def test_starting_a_finished_run_fresh_archives_it_first(tmp_path, monkeypatch):
+    from aksharallm.portal import runs as runs_mod
+
+    _finished_run(tmp_path)
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts" / "phase2.sh").write_text("#!/bin/sh\n")
+    monkeypatch.setitem(runs_mod.LAUNCHERS, "demo", {})
+
+    store = runs_mod.RunStore(tmp_path)
+    assert store.status("demo")["can_restart"] is True
+
+    # Patched only now: `status()` reads /proc through the same module, and a stubbed Popen
+    # would break the liveness check rather than the launch.
+    def fake_popen(cmd, **kw):
+        return _FakeProc()
+
+    monkeypatch.setattr(runs_mod.subprocess, "Popen", fake_popen)
+    res = store.start("demo", fresh=True)
+
+    assert res["archived"].startswith("demo.")
+    # The new run must start into an empty directory, or the trainer would resume into a
+    # budget that is already spent.
+    assert not (tmp_path / "checkpoints" / "demo" / "train_log.jsonl").exists()
+    assert (tmp_path / "checkpoints" / res["archived"] / "train_log.jsonl").exists()
+
+
+class _FakeProc:
+    pid = 4242
+
+
+def test_archiving_a_live_run_is_refused(tmp_path, monkeypatch):
+    from aksharallm.portal import runs as runs_mod
+
+    rdir, _ = _finished_run(tmp_path)
+    (rdir / "train.pid").write_text("999")
+    monkeypatch.setattr(runs_mod, "_alive", lambda pid: True)
+    monkeypatch.setattr(runs_mod, "_cmdline", lambda pid: "python -m aksharallm.train.pretrain")
+
+    with pytest.raises(runs_mod.RunError, match="training"):
+        runs_mod.RunStore(tmp_path).archive("demo")
+
+
+def test_deleting_needs_the_name_repeated_back(tmp_path):
+    """The browser asks the human, but this endpoint is what removes the files."""
+    from aksharallm.portal import runs as runs_mod
+
+    _finished_run(tmp_path)
+    store = runs_mod.RunStore(tmp_path)
+    with pytest.raises(runs_mod.RunError, match="confirm"):
+        store.delete("demo", confirm=None)
+    with pytest.raises(runs_mod.RunError):
+        store.delete("demo", confirm="yes")
+    assert (tmp_path / "checkpoints" / "demo").exists(), "nothing removed on a bad confirm"
+
+
+def test_deleting_removes_artifacts_and_keeps_the_config(tmp_path):
+    """The config is source and is committed; the artifacts are reproducible output. A
+    mis-click should not cost the recipe as well as the result."""
+    from aksharallm.portal import runs as runs_mod
+
+    _finished_run(tmp_path)
+    (tmp_path / "configs").mkdir(exist_ok=True)
+    (tmp_path / "configs" / "demo.yaml").write_text("model:\n  d_model: 8\n")
+
+    res = runs_mod.RunStore(tmp_path).delete("demo", confirm="demo")
+    assert not (tmp_path / "checkpoints" / "demo").exists()
+    assert not (tmp_path / "logs" / "demo").exists()
+    assert (tmp_path / "configs" / "demo.yaml").exists()
+    assert res["freed"] > 0 and "kept" in res["note"]
+
+
+def test_deleting_a_live_run_is_refused(tmp_path, monkeypatch):
+    from aksharallm.portal import runs as runs_mod
+
+    rdir, _ = _finished_run(tmp_path)
+    (rdir / "train.pid").write_text("999")
+    monkeypatch.setattr(runs_mod, "_alive", lambda pid: True)
+    monkeypatch.setattr(runs_mod, "_cmdline", lambda pid: "python -m aksharallm.train.pretrain")
+
+    with pytest.raises(runs_mod.RunError, match="training"):
+        runs_mod.RunStore(tmp_path).delete("demo", confirm="demo")
+    assert (rdir / "ckpt_best.pt").exists()
+
+
+def test_delete_refuses_a_name_that_escapes_the_run_directories(tmp_path):
+    from aksharallm.portal import runs as runs_mod
+
+    _finished_run(tmp_path)
+    store = runs_mod.RunStore(tmp_path)
+    for bad in ("../configs", "..", "demo/../../etc", "/etc"):
+        with pytest.raises(runs_mod.RunError):
+            store.delete(bad, confirm=bad)
+
+
+def test_a_deleted_run_leaves_the_others_alone(tmp_path):
+    from aksharallm.portal import runs as runs_mod
+
+    _finished_run(tmp_path, "demo")
+    _finished_run(tmp_path, "other")
+    store = runs_mod.RunStore(tmp_path)
+    store.delete("demo", confirm="demo")
+    assert store.runs() == ["other"]
+    assert (tmp_path / "checkpoints" / "other" / "ckpt_best.pt").exists()

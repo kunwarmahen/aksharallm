@@ -23,6 +23,13 @@ before the real run. Skipping is only sane when resuming a config that has alrea
     <button id="btn-cancel-stop" class="ghost" type="button">Cancel queued stop</button>
   </div>
 
+  <!-- Destructive, so it sits in its own group away from Start and Stop, is styled as a
+       quiet ghost, and asks twice: once in the browser, once by making the API repeat the
+       run's name back. -->
+  <div class="control-group">
+    <button id="btn-delete" class="ghost danger" type="button">Delete run…</button>
+  </div>
+
   <div class="control-group control-status">
     <span id="live" class="live" title="polling">
       <span class="dot"></span><span id="live-label">connecting…</span>

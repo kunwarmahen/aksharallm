@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -157,6 +159,34 @@ class RunStore:
     def config_path(self, run: str) -> Path:
         return self.root / "configs" / f"{run}.yaml"
 
+    def is_archived(self, run: str) -> bool:
+        """A snapshot of a finished run, set aside so a new one can start.
+
+        Decided by a marker file the archiver writes, not by "has no config" — a run whose
+        YAML was renamed or never committed is not an archive, it is a run with no config,
+        and conflating the two would label half of somebody's checkpoints directory. Not by
+        the name either: `RUN_NAME_RE` allows dots, so a legitimately dotted run name would
+        be misread.
+
+        Archives are read-only by construction rather than by a flag: the launcher table is
+        keyed on config names, so there is nothing to start. They stay in the picker because
+        being able to open one and read what it did is the entire point of keeping it.
+        """
+        return (self.run_dir(run) / "archive.meta").exists()
+
+    def dir_bytes(self, run: str) -> int:
+        total = 0
+        for base in (self.run_dir(run), self.log_dir(run)):
+            if not base.is_dir():
+                continue
+            for path in base.rglob("*"):
+                try:
+                    if path.is_file() and not path.is_symlink():
+                        total += path.stat().st_size
+                except OSError:
+                    continue
+        return total
+
     # ---- discovery ---------------------------------------------------------------------
     def runs(self) -> list[str]:
         """Every run the portal knows: one per config, plus any checkpoint dir with a log.
@@ -294,11 +324,26 @@ class RunStore:
         if reached is None:
             reached = step
         finished = bool(max_steps and reached is not None and reached + 1 >= max_steps)
+        archived = self.is_archived(run)
 
         return {
             "run": run,
             "phase": phase,
             "finished": finished,
+            "archived": archived,
+            # Whether deleting this run leaves a recipe behind. The delete dialog says so,
+            # and saying it wrongly is worse than not saying it.
+            "has_config": self.config_path(run).exists(),
+            # Deleting is refused for anything alive; everything else is fair game, and the
+            # confirmation is the human's, not the code's, to give.
+            "can_delete": phase == PHASE_IDLE and (self.run_dir(run).is_dir()
+                                                   or self.log_dir(run).is_dir()),
+            # A finished run cannot resume — there is nothing left in its budget — but it can
+            # be set aside and started again from step 0, which is what "run it again" means
+            # for an experiment. Archiving keeps the old one readable in the picker.
+            "can_restart": (run in LAUNCHERS and phase == PHASE_IDLE and finished
+                            and not archived),
+            "size_bytes": self.dir_bytes(run),
             "pid": pid,
             "launcher": launcher,
             "stop": stop,
@@ -315,14 +360,18 @@ class RunStore:
             "series": runlog.series(records, max_points=max_points),
             "checkpoints": self._checkpoints(run),
             "logs": self._logs(run),
-            "can_start": run in LAUNCHERS and phase == PHASE_IDLE and not finished,
+            "can_start": (run in LAUNCHERS and phase == PHASE_IDLE and not finished
+                          and not archived),
             # A pre-flight is stoppable too — that aborts the launch. Bounded stops are not:
             # there is no step count to count from until the trainer exists.
             "can_stop": phase in (PHASE_TRAINING, PHASE_STOPPING, PHASE_LAUNCHING),
             "can_bound": phase in (PHASE_TRAINING, PHASE_STOPPING),
             "start_hint": (
+                (f"'{run}' is an archive of a finished run — read-only. Its config is gone, "
+                 "so there is nothing to start.") if archived else
                 (f"'{run}' has trained its whole budget: {max_steps:,} of {max_steps:,} "
-                 f"steps. To train it further, raise train.max_steps in configs/{run}.yaml."
+                 f"steps. Start fresh to archive it and begin again from step 0, or raise "
+                 f"train.max_steps in configs/{run}.yaml to carry on training this one."
                  ) if finished and run in LAUNCHERS else
                 None if run in LAUNCHERS else
                            f"no launcher for '{run}' — the portal can start "
@@ -336,16 +385,113 @@ class RunStore:
     def summary(self, run: str) -> dict:
         """The short form for the run switcher: no series, no sessions."""
         full = self.status(run, max_points=0)
-        keep = ("run", "phase", "pid", "step", "max_steps", "progress", "can_start", "can_stop")
+        keep = ("run", "phase", "pid", "step", "max_steps", "progress", "can_start",
+                "can_stop", "archived", "finished")
         out = {k: full[k] for k in keep}
         out["ema"] = full["last"]["ema"]
         out["best_val"] = full["last"]["best_val"]
         out["updated"] = full["last"].get("step_time")
         return out
 
+    # ---- archive and delete --------------------------------------------------------------
+    def _idle_or_raise(self, run: str, verb: str) -> None:
+        if (pid := self.trainer_pid(run)):
+            raise RunError(f"'{run}' is training as pid {pid} — stop it before you {verb} it.")
+        if (live := self.launcher(run)):
+            raise RunError(f"'{run}' is in pre-flight (pid {live['pid']}) — stop it before "
+                           f"you {verb} it.")
+
+    def _owned(self, path: Path) -> Path:
+        """A path this store is allowed to move or remove.
+
+        Every name has already been through `RUN_NAME_RE`, so this cannot fail for any input
+        the API accepts — which is exactly why it is here. The one operation in this file
+        that removes data should not depend on a regex three functions away still being
+        right, so it resolves symlinks and re-checks containment immediately before acting.
+        """
+        resolved = path.resolve()
+        for base in (self.root / "checkpoints", self.root / "logs"):
+            if resolved.parent == base.resolve():
+                return resolved
+        raise RunError(f"refusing to touch {path}: outside checkpoints/ and logs/")
+
+    def archive(self, run: str) -> dict:
+        """Set a finished run aside under a timestamped name, keeping all of it.
+
+        `tiny-moe` becomes `tiny-moe.20260801-105843` — a rename, not a copy, so a 3 GB run
+        is set aside instantly and nothing is duplicated. The new name passes `RUN_NAME_RE`
+        (dots are legal) and sorts next to the original in the picker, and because no
+        `configs/<name>.yaml` exists for it, it is read-only from then on.
+        """
+        self.check(run)
+        self._idle_or_raise(run, "archive")
+        if self.is_archived(run):
+            raise RunError(f"'{run}' is already an archive.")
+        if not self.run_dir(run).is_dir():
+            raise RunError(f"'{run}' has nothing to archive yet.")
+
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        name = f"{run}.{stamp}"
+        if not RUN_NAME_RE.match(name):
+            raise RunError(f"bad archive name: {name}")
+        moved = []
+        for src, dst in ((self.run_dir(run), self.run_dir(name)),
+                         (self.log_dir(run), self.log_dir(name))):
+            if src.is_dir():
+                if dst.exists():
+                    raise RunError(f"{dst} already exists — archive by hand.")
+                self._owned(src).rename(dst)
+                moved.append(str(dst.relative_to(self.root)))
+        # The marker is what makes this an archive rather than a directory with a date in
+        # its name, and it records what it was archived from — which is the question asked
+        # of it a month later.
+        (self.run_dir(name) / "archive.meta").write_text(
+            f"archived {datetime.now():%Y-%m-%d %H:%M:%S}\nfrom    {run}\n"
+            f"config  configs/{run}.yaml (as it was then)\n")
+        # The stable `train_<run>.log` symlink points into the directory that just moved.
+        link = self.root / f"train_{run}.log"
+        if link.is_symlink():
+            link.unlink()
+        return {"ok": True, "action": "archive", "run": run, "archive": name,
+                "moved": moved,
+                "note": f"'{run}' is now '{name}' and is read-only. Starting '{run}' again "
+                        "begins a new run from step 0."}
+
+    def delete(self, run: str, confirm: str | None = None) -> dict:
+        """Remove a run's checkpoints and logs. Its config, if any, is left alone.
+
+        The config is source and is committed; the artifacts are hundreds of megabytes of
+        reproducible output. Deleting the two together would mean a mis-click loses the
+        recipe as well as the result.
+
+        `confirm` must repeat the run's name. The browser asks the human first, but the
+        API is the thing that actually removes files, so it does not rely on a dialog it
+        cannot see having been shown.
+        """
+        self.check(run)
+        if confirm != run:
+            raise RunError(f"deleting '{run}' needs confirm='{run}' — nothing was removed.")
+        self._idle_or_raise(run, "delete")
+
+        freed = self.dir_bytes(run)
+        removed = []
+        for base in (self.run_dir(run), self.log_dir(run)):
+            if base.is_dir():
+                shutil.rmtree(self._owned(base))
+                removed.append(str(base.relative_to(self.root)))
+        link = self.root / f"train_{run}.log"
+        if link.is_symlink():
+            link.unlink()
+        kept = self.config_path(run)
+        return {"ok": True, "action": "delete", "run": run, "removed": removed,
+                "freed": freed,
+                "note": (f"removed {', '.join(removed) or 'nothing'} ({freed / 1e9:.2f} GB)."
+                         + (f" configs/{run}.yaml was kept — start it again for a fresh run."
+                            if kept.exists() else ""))}
+
     # ---- actions -----------------------------------------------------------------------
     def start(self, run: str, stop_after: int | None = None, skip_smoke: bool = False,
-              stop_after_s: int | None = None) -> dict:
+              stop_after_s: int | None = None, fresh: bool = False) -> dict:
         """Launch `scripts/phase2.sh` detached, with its output going to a launch log.
 
         Detached (`start_new_session`) for the same reason phase2.sh nohups the trainer: the
@@ -356,6 +502,12 @@ class RunStore:
         if run not in LAUNCHERS:
             raise RunError(f"no launcher for '{run}': the portal can start "
                            f"{', '.join(sorted(LAUNCHERS))}. Start it from a terminal.")
+        archived_as = None
+        if fresh:
+            # Set the finished run aside FIRST, so what launches next sees an empty
+            # directory and starts at step 0 instead of resuming into a spent budget.
+            if self.run_dir(run).is_dir():
+                archived_as = self.archive(run)["archive"]
         if (pid := self.trainer_pid(run)):
             raise RunError(f"'{run}' is already training as pid {pid}.")
         if (live := self.launcher(run)):
@@ -398,9 +550,11 @@ class RunStore:
         info = {"pid": proc.pid, "log": str(log.relative_to(self.root)),
                 "started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "stop_after": stop_after, "stop_after_s": stop_after_s,
-                "skip_smoke": bool(skip_smoke)}
+                "skip_smoke": bool(skip_smoke), "archived": archived_as}
         return {"ok": True, "action": "start", **info,
-                "note": "pre-flight runs tests, checks the data, then a 50-step smoke test "
+                "note": (f"'{archived_as}' keeps the previous run; this one starts at step 0. "
+                         if archived_as else "")
+                        + "pre-flight runs tests, checks the data, then a 50-step smoke test "
                         "before the real run starts — expect several minutes of log first."
                         if not skip_smoke else
                         "smoke test skipped: resuming a config that has already trained."}
@@ -577,3 +731,74 @@ class RunStore:
 
     def _config_max_steps(self, run: str) -> int | None:
         return self._config_summary(run).get("max_steps")
+
+
+# --------------------------------------------------------------------------------------
+# a terminal for the two housekeeping actions
+# --------------------------------------------------------------------------------------
+
+def main(argv: list[str] | None = None) -> int:
+    """`python -m aksharallm.portal.runs list|archive|delete <run>`
+
+    The portal's buttons call the functions above directly rather than shelling out here —
+    unlike start and stop, these are file operations, not processes to supervise. This exists
+    so the same two actions are available without a browser, and so `delete` can be typed
+    deliberately by someone who wants to think about it first.
+    """
+    import argparse
+
+    ap = argparse.ArgumentParser(prog="python -m aksharallm.portal.runs",
+                                 description="List, archive or delete a run's artifacts.")
+    ap.add_argument("action", choices=("list", "archive", "delete"))
+    ap.add_argument("run", nargs="?")
+    ap.add_argument("--root", default=None)
+    ap.add_argument("--yes", action="store_true",
+                    help="skip the confirmation prompt for delete")
+    args = ap.parse_args(argv)
+
+    store = RunStore(args.root)
+    try:
+        if args.action == "list":
+            print()
+            print(f"  {'run':<28} {'kind':<9} {'step':>8} {'size':>9}  phase")
+            for name in store.runs():
+                st = store.status(name, max_points=0)
+                kind = "archive" if st["archived"] else "run"
+                step = "–" if st["step"] is None else f"{st['step']:,}"
+                print(f"  {name:<28} {kind:<9} {step:>8} "
+                      f"{st['size_bytes'] / 1e9:>8.2f}G  {st['phase']}")
+            print()
+            return 0
+
+        if not args.run:
+            print(f"{args.action} needs a run name", file=sys.stderr)
+            return 2
+
+        if args.action == "archive":
+            print(store.archive(args.run)["note"])
+            return 0
+
+        st = store.status(args.run, max_points=0)
+        if not args.yes:
+            print(f"\n  delete '{args.run}'?")
+            print(f"    checkpoints/{args.run}/ and logs/{args.run}/  "
+                  f"({st['size_bytes'] / 1e9:.2f} GB)")
+            if st["step"] is not None:
+                print(f"    {st['step']:,} steps trained"
+                      + (f", best val {st['last']['best_val']:.4f}"
+                         if st["last"].get("best_val") else ""))
+            if store.config_path(args.run).exists():
+                print(f"    configs/{args.run}.yaml is kept")
+            print("\n  This cannot be undone. Type the run's name to confirm: ", end="")
+            if input().strip() != args.run:
+                print("  not deleted.")
+                return 1
+        print(store.delete(args.run, confirm=args.run)["note"])
+        return 0
+    except RunError as exc:
+        print(f"\n  {exc}\n", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

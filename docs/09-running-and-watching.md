@@ -452,11 +452,35 @@ steps short of its budget forever.
 Since 2026-08-01 the final step also gets a log line of its own, the way a bounded stop
 always has, so new runs end their logs where they end.
 
-A run that has spent its budget says **"Budget spent"** on the Start button instead of
-offering a resume: starting it again is harmless (the trainer sees there is nothing to do and
-exits without touching the checkpoint) but it runs a full pre-flight to get there, and "ran 0
-steps" after forty seconds of tests looks exactly like a launch that failed. To keep training
-one, raise `train.max_steps` in its config.
+### Running an experiment again, and throwing one away
+
+A finished run is not a dead end — running an experiment a second time is what you do with an
+experiment. The Start button on one reads **"Start fresh…"**, and pressing it:
+
+1. **archives** the finished run under a timestamped name — `tiny-moe` becomes
+   `tiny-moe.20260801-105843`, a rename rather than a copy, so a 3 GB run is set aside
+   instantly and nothing is duplicated;
+2. launches a new run into the now-empty directory, from step 0.
+
+The archive stays in the run picker, labelled *archived*, and opening it shows everything it
+showed while it was training: the curves, the sessions, the config it ran with, its
+checkpoints, its expert routing if it had any. It is read-only for a structural reason rather
+than a flag — the launcher table is keyed on config names, and an archive has no config.
+
+To carry on training the *same* run instead of starting a new one, raise `train.max_steps` in
+its config; it resumes from `ckpt_last.pt` with no loss spike.
+
+**Delete run…** removes `checkpoints/<run>/` and `logs/<run>/` and nothing else — the config
+is kept, because it is source and is committed while the artifacts are reproducible output.
+It asks twice: the browser shows what goes, what stays and how big it is, and the API itself
+requires the run's name repeated back, so a request that never went through that dialog
+cannot delete anything either. A live run cannot be deleted at all; stop it first.
+
+```bash
+python -m aksharallm.portal.runs list              # every run and archive, with sizes
+python -m aksharallm.portal.runs archive tiny-moe  # set it aside, keep everything
+python -m aksharallm.portal.runs delete  tiny-moe  # prompts for the name before removing
+```
 
 ## What runs where — a cheat sheet
 
@@ -464,6 +488,8 @@ one, raise `train.max_steps` in its config.
 |---|---|---|
 | start / resume the base run | `scripts/phase2.sh` | Dashboard → Start |
 | run a Phase-1-scale experiment | `scripts/experiment.sh tiny-moe` | Dashboard → pick the run → Start |
+| run a finished experiment again | `python -m aksharallm.portal.runs archive tiny-moe`, then start it | Dashboard → **Start fresh…** |
+| throw a run away | `python -m aksharallm.portal.runs delete <run>` | Dashboard → **Delete run…** |
 | …for one evening only | `STOP_IN=3h scripts/phase2.sh` | Dashboard → *this session* → Time |
 | stop it (saving first) | `scripts/stop.sh small-code` | Dashboard → Stop now |
 | stop it in 20 minutes | `scripts/stop.sh small-code --in 20m` | Dashboard → Stop at… |

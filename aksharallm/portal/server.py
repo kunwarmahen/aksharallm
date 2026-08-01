@@ -196,7 +196,16 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(self.store.start(
                         run, stop_after=self._int(data, "stop_after"),
                         stop_after_s=self._int(data, "stop_after_s"),
-                        skip_smoke=bool(data.get("skip_smoke"))))
+                        skip_smoke=bool(data.get("skip_smoke")),
+                        fresh=bool(data.get("fresh"))))
+                if action == "archive":
+                    return self._json(self.store.archive(run))
+                if action == "delete":
+                    # `confirm` must repeat the run's name. The browser asks first, but this
+                    # is the endpoint that removes files, so it does not take a dialog it
+                    # cannot see on trust.
+                    return self._json(self.store.delete(
+                        run, confirm=str(data.get("confirm") or "")))
                 if action == "stop":
                     return self._json(self.store.stop(
                         run, mode=str(data.get("mode", "now")),

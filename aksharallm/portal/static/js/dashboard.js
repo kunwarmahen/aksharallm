@@ -34,7 +34,10 @@ function renderPhase(s) {
 }
 
 function renderControls(s) {
-  $('#btn-start').disabled = !s.can_start || state.busy;
+  /* Three states for one button: start, resume, or set the finished run aside and begin
+   * again. A finished experiment is not a dead end — running it a second time is what you
+   * do with an experiment — so the button changes verb rather than switching off. */
+  $('#btn-start').disabled = !(s.can_start || s.can_restart) || state.busy;
   $('#btn-start').title = s.start_hint || 'runs scripts/phase2.sh: pre-flight, data check, '
     + 'smoke test, then the real run (resumes from ckpt_last.pt)';
   $('#btn-stop').disabled = !s.can_stop || state.busy;
@@ -43,11 +46,18 @@ function renderControls(s) {
   $('#btn-stop-at').disabled = !s.can_bound || state.busy;
   $('#btn-stop').textContent = s.phase === 'launching' ? 'Abort launch' : 'Stop now';
   $('#btn-cancel-stop').disabled = !s.stop || state.busy;
-  /* A finished run says so on the button rather than offering a resume that would run a
-   * full pre-flight and then exit having done nothing. */
-  $('#btn-start').textContent = s.finished ? 'Budget spent'
+  $('#btn-start').textContent = s.can_restart ? 'Start fresh…'
+    : s.finished ? 'Budget spent'
     : s.step == null ? 'Start run' : `Resume from ${fmt.int(s.step + 1)}`;
-  $('#btn-budget').disabled = !s.can_start || state.busy;
+  $('#btn-budget').disabled = !(s.can_start || s.can_restart) || state.busy;
+
+  const del = $('#btn-delete');
+  del.disabled = !s.can_delete || state.busy;
+  del.title = s.can_delete
+    ? `Remove checkpoints/${s.run}/ and logs/${s.run}/ (${fmt.bytes(s.size_bytes)}). `
+      + (s.archived ? 'This is an archive; nothing else refers to it.'
+        : `configs/${s.run}.yaml is kept, so the run can be started again from scratch.`)
+    : 'a live run cannot be deleted — stop it first';
   renderSessionBudget();
 }
 
@@ -359,7 +369,11 @@ function renderLog(log) {
 
 export function renderRuns(runs) {
   const sel = $('#run-select');
-  const labels = runs.map((r) => `${r.run}${r.phase !== 'idle' ? ` — ${r.phase}` : ''}`);
+  /* Archives are labelled, because a picker with `tiny-moe` and `tiny-moe.20260801-105843`
+   * side by side and no explanation is a puzzle. */
+  const labels = runs.map((r) => r.run
+    + (r.phase !== 'idle' ? ` — ${r.phase}`
+      : r.archived ? ' — archived' : r.finished ? ' — finished' : ''));
   /* Rebuild only when something actually changed: replacing the options while the select
    * is open would close it under the pointer every poll. */
   const sig = labels.join('|') + '@' + state.run;

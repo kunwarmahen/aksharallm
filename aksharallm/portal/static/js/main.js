@@ -30,11 +30,59 @@ function wire() {
   $('#run-select').addEventListener('change', (e) => selectRun(e.target.value));
 
   $('#btn-start').addEventListener('click', () => {
+    const s = state.status || {};
+    /* Starting a finished run means archiving it and beginning again from step 0 — a
+     * different thing from resuming, so it is confirmed and says what happens to the old
+     * one. Nothing is deleted here; the archive keeps every checkpoint and every log. */
+    if (s.can_restart) {
+      const best = s.last && s.last.best_val != null ? `, best val ${fmt.num(s.last.best_val, 4)}` : '';
+      if (!confirm(`'${state.run}' has trained its whole budget `
+        + `(${fmt.int(s.max_steps)} steps${best}).\n\n`
+        + `Start a NEW run from step 0?\n\n`
+        + `The finished one is archived under a timestamped name — every checkpoint and log `
+        + `kept, still readable from the run picker. Nothing is deleted.`)) return;
+    }
     act(() => post(`/api/run/${encodeURIComponent(state.run)}/start`, {
       stop_after: state.budget && state.budget.unit === 'after' ? state.budget.value : null,
       stop_after_s: state.budget && state.budget.unit === 'in' ? state.budget.value : null,
       skip_smoke: $('#skip-smoke').checked,
-    }), 'Launching.');
+      fresh: !!s.can_restart,
+    }), s.can_restart ? 'Archiving, then launching.' : 'Launching.');
+  });
+
+  /* Delete: the only control here that destroys anything. The dialog names what goes, what
+   * stays and how big it is, and the API is sent the run's name back as the confirmation —
+   * so a request that never went through this dialog cannot delete anything either. */
+  $('#btn-delete').addEventListener('click', async () => {
+    const s = state.status || {};
+    const run = state.run;
+    const lines = [
+      `Delete '${run}' permanently?`,
+      '',
+      `  checkpoints/${run}/  and  logs/${run}/`,
+      `  ${fmt.bytes(s.size_bytes)}${s.step == null ? '' : `, ${fmt.int(s.step + 1)} steps trained`}`
+        + (s.last && s.last.best_val != null ? `, best val ${fmt.num(s.last.best_val, 4)}` : ''),
+      '',
+      s.archived
+        ? 'This is an archive of a finished run. Its history goes with it.'
+        : s.has_config
+          ? `configs/${run}.yaml is kept, so the run can be started again from scratch.`
+          : 'There is no config for this run, so nothing of it remains afterwards.',
+      '',
+      'This cannot be undone.',
+    ];
+    if (!confirm(lines.join('\n'))) return;
+    try {
+      const res = await post(`/api/run/${encodeURIComponent(run)}/delete`, { confirm: run });
+      /* The selected run no longer exists; fall back to whatever is left. `selectRun` clears
+       * the flash, so the message goes up after the switch, not before it. */
+      const { runs } = await api('/api/runs');
+      renderRuns(runs);
+      if (runs.length) selectRun((runs.find((r) => r.run !== run) || runs[0]).run);
+      flash(res.note || `Deleted ${run}.`, 'ok');
+    } catch (err) {
+      flash(err.message, 'error');
+    }
   });
 
   /* The session budget uses the same picker as the stop, with one extra unit for "no
