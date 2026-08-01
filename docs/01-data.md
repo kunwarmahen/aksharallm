@@ -26,6 +26,13 @@ RECIPES = {
 
 Adding your own is one line — any HuggingFace dataset with a text column works.
 
+There is a fourth source, which is not a download at all: **data written by a model already
+on this machine**. That is worth a chapter of its own, because generating it is four lines
+and *checking it is worth training on* is the entire job —
+[doc 13](13-synthetic-data.md). It reaches the trainer through the tools on this page:
+`prepare_sft` and `prepare_dpo` each grew one recipe, `jsonl`, and everything downstream —
+packing, the assistant-only mask, the preference triples — is unchanged.
+
 ### Why TinyStories first?
 
 A 13.8M-parameter model does not have the capacity to learn all of English. Trained on

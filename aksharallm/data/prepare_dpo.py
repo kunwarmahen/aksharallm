@@ -61,6 +61,36 @@ def _orca(row):
 RECIPES["orca-dpo"] = ("Intel/orca_dpo_pairs", None, "train", _orca)
 
 
+def _jsonl(row):
+    """A local {"prompt", "chosen", "rejected"} row -- what `aksharallm.synth export`
+    writes for the `preference` recipe. The prompt may be a plain string or an already-built
+    message list, because a generated pair has one user turn and a hand-written one might
+    carry a system prompt."""
+    prompt = row["prompt"]
+    msgs = prompt if isinstance(prompt, list) else [{"role": "user", "content": prompt}]
+    return msgs, row["chosen"], row["rejected"]
+
+
+RECIPES["jsonl"] = (None, None, None, _jsonl)
+
+
+def jsonl_rows(path: Path):
+    """Rows from a local JSONL file; a malformed line is skipped, not fatal."""
+    import json
+
+    if not path.is_file():
+        raise SystemExit(f"no such file: {path}")
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield json.loads(line)
+            except ValueError:
+                continue
+
+
 def encode_pair(tok: Tokenizer, prompt_msgs, response: str, seq_len: int):
     """Return (ids, mask) padded to seq_len, or None if it doesn't fit.
 
@@ -86,16 +116,24 @@ def main():
     ap.add_argument("--seq-len", type=int, default=1024)
     ap.add_argument("--max-examples", type=int, default=None)
     ap.add_argument("--val-examples", type=int, default=500)
+    ap.add_argument("--file", default=None,
+                    help="JSONL of {\"prompt\", \"chosen\", \"rejected\"} rows, for the "
+                         "'jsonl' recipe (e.g. data/synth/<name>/dpo.jsonl)")
     args = ap.parse_args()
-
-    from datasets import load_dataset
 
     repo, config, split, convert = RECIPES[args.recipe]
     tok = Tokenizer(args.tokenizer)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    ds = load_dataset(repo, name=config, split=split, streaming=True)
+    if args.recipe == "jsonl":
+        if not args.file:
+            raise SystemExit("the 'jsonl' recipe needs --file <path.jsonl>")
+        ds = jsonl_rows(Path(args.file))
+    else:
+        from datasets import load_dataset
+
+        ds = load_dataset(repo, name=config, split=split, streaming=True)
 
     ct, cm, rt, rm = [], [], [], []
     n_seen = n_skipped = 0

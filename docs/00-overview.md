@@ -121,6 +121,12 @@ biggest quality lever available to a hobbyist is *what text you train on*, not t
 architecture. FineWeb-Edu (educational web pages, filtered by a classifier) beats raw
 CommonCrawl by a wide margin at the same token count. → [doc 1](01-data.md)
 
+Data can also be **written by a bigger model running on the same machine**, which is how you
+get a dataset nobody published — Python exercises whose tests actually pass, for instance.
+The catch is that generated data is the easiest way to make a model *worse* while its
+training loss improves, so most of that work is checking rather than
+generating. → [doc 13](13-synthetic-data.md)
+
 ### 2. Pretraining
 99% of the compute. The model reads billions of tokens and learns language and world
 knowledge. The result is a **base model**: it can *continue* text but has no idea it's

@@ -1,0 +1,138 @@
+/* The Synth tab. Pairs with js/synth.js.
+
+   Same two-column shape as Quantize, Finetune and Eval: what you are asking for on the
+   left, what came back on the right. The right column carries the funnel, the datasets and
+   the sample viewer, because the whole argument of this tab is that a *count* of generated
+   samples means nothing without what was thrown away beside it. */
+
+.sy-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 380px) minmax(0, 1fr);
+  gap: var(--gap);
+  padding: var(--gap) var(--page-pad);
+  max-width: var(--page-max); margin: 0 auto;
+  align-items: start;
+}
+.sy-layout > .panel {
+  height: calc(100vh - 150px); min-height: 420px;
+  display: flex; flex-direction: column; overflow: hidden;
+  min-width: 0;   /* a grid item's automatic minimum is its content's min-content width */
+}
+.sy-form { overflow-y: auto; gap: 10px; }
+.sy-form .field { margin-top: 4px; }
+.sy-main { gap: 12px; overflow-y: auto; }
+
+.sy-hint {
+  font-size: 12px; color: var(--ink-muted); line-height: 1.45;
+  margin: -2px 0 6px; word-break: break-word;
+}
+.sy-hint.warn { color: var(--serious); }
+.sy-fine { font-size: 11px; color: var(--ink-muted); line-height: 1.5; margin: 10px 0 0; }
+.sy-fine code, .sy-hint code { font-family: var(--mono); font-size: 11px; }
+/* `min-width: 0` on both the track's item and the control inside it. A number input carries
+   a default intrinsic width (~120px here plus the spinner), and a grid item's automatic
+   minimum size is its content's min-content width — so two of them in a `1fr 1fr` row push
+   the whole page 23px wider than a 320px phone. Invisible on a desktop; the same shape as
+   gotcha #8. */
+.sy-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.sy-row .field, .sy-form .field { min-width: 0; }
+/* `width: 120px` on every number input is a global in controls.css; inside a two-column
+   track it has to become "as wide as the track". */
+.sy-form input, .sy-form select { min-width: 0; width: 100%; box-sizing: border-box; }
+/* The detail note carries an absolute path, which has no space to break at. */
+.sy-detail .panel-note { min-width: 0; overflow-wrap: anywhere; }
+.sy-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; }
+.sy-more { margin: 4px 0; }
+.sy-more summary { font-size: 12px; color: var(--ink-muted); cursor: pointer; }
+.sy-check {
+  display: grid; grid-template-columns: auto 1fr; gap: 8px; align-items: start;
+  font-size: 12px; line-height: 1.45; margin: 8px 0 2px; cursor: pointer;
+}
+.sy-check em { font-style: normal; color: var(--ink-muted); }
+
+/* ---- progress ------------------------------------------------------------------------ */
+.sy-progress { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--ink-muted); }
+.sy-bar { flex: 1; height: 4px; background: var(--wash); border-radius: 999px; overflow: hidden; }
+.sy-bar > span { display: block; height: 100%; width: 0; background: var(--series-1); transition: width .3s ease; }
+
+/* ---- the funnel ---------------------------------------------------------------------- */
+/* asked -> parsed -> kept, and then every reason a sample was dropped. The bars are
+   proportional to the whole, so "most of the loss is one reason" is visible before any
+   number is read — which is the only thing that says *what to change*. */
+.sy-funnel { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+.sy-funnel-head {
+  display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
+  font-size: 12px; color: var(--ink-muted); margin-bottom: 8px;
+}
+.sy-funnel-head b { color: var(--ink); font-size: 15px; font-weight: 600; }
+.sy-drops { display: flex; flex-direction: column; gap: 3px; }
+.sy-drop { display: grid; grid-template-columns: 130px 1fr 52px; gap: 8px; align-items: center; font-size: 11px; }
+.sy-drop-name { font-family: var(--mono); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sy-drop-bar { height: 6px; background: var(--wash); border-radius: 999px; overflow: hidden; }
+.sy-drop-bar > span { display: block; height: 100%; background: var(--serious); opacity: .55; }
+.sy-drop-n { text-align: right; color: var(--ink-muted); font-family: var(--mono); }
+.sy-drop-why { grid-column: 1 / -1; color: var(--ink-muted); line-height: 1.4; margin: -1px 0 4px 0; }
+
+/* ---- dataset table -------------------------------------------------------------------- */
+.sy-datasets { min-height: 60px; }
+.sy-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.sy-table th, .sy-table td {
+  text-align: right; padding: 5px 10px; border-top: 1px solid var(--border); white-space: nowrap;
+}
+.sy-table th:first-child, .sy-table td:first-child { text-align: left; }
+.sy-table th { color: var(--ink-muted); font-weight: 500; }
+.sy-table tbody tr { cursor: pointer; }
+.sy-table tbody tr:hover td { background: var(--wash); }
+.sy-table tr.on td { background: var(--wash); }
+.sy-table code { font-family: var(--mono); font-size: 11px; }
+.sy-empty { color: var(--ink-muted); font-size: 13px; line-height: 1.5; padding: 8px 2px; }
+
+/* ---- the sample viewer ----------------------------------------------------------------- */
+.sy-detail { border-top: 1px solid var(--border); padding-top: 10px; }
+.sy-tabs { display: flex; gap: 6px; margin: 6px 0 10px; flex-wrap: wrap; }
+.sy-tabs .chip {
+  font-size: 11px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: transparent; color: var(--ink-muted);
+  cursor: pointer;
+}
+.sy-tabs .chip.on { color: var(--ink); border-color: var(--axis); }
+.sy-tabs .sy-export { margin-left: auto; }
+.sy-samples { display: flex; flex-direction: column; gap: 12px; }
+.sy-sample { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+.sy-sample-head {
+  display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
+  font-size: 11px; color: var(--ink-muted); margin-bottom: 6px;
+}
+.sy-sample-head .sy-id { font-family: var(--mono); color: var(--ink); }
+.sy-tag {
+  font-size: 10px; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.sy-tag.ok { color: var(--good); }
+.sy-tag.bad { color: var(--serious); }
+.sy-field { margin: 6px 0; }
+.sy-field-label { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-muted); }
+.sy-text { font-size: 12px; line-height: 1.5; margin: 2px 0 0; white-space: pre-wrap; word-break: break-word; }
+.sy-code {
+  font-family: var(--mono); font-size: 11px; line-height: 1.5; margin: 2px 0 0;
+  background: var(--plane); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 8px 10px; overflow-x: auto; white-space: pre;
+}
+
+/* ---- log ------------------------------------------------------------------------------- */
+.sy-logwrap { display: flex; flex-direction: column; min-height: 140px; }
+.sy-log {
+  font-family: var(--mono); font-size: 11px; line-height: 1.5;
+  background: var(--plane); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px; margin: 0; overflow: auto; max-height: 220px; white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* One column below the width where form and results can sit side by side, and the panels
+   give up their inner scrollers with it — see the same block in evals.css for why. */
+@media (max-width: 900px) {
+  .sy-layout { grid-template-columns: 1fr; }
+  .sy-layout > .panel { height: auto; min-height: 0; max-height: none; overflow: visible; }
+  .sy-form, .sy-main { overflow-y: visible; }
+  .sy-drop { grid-template-columns: 96px 1fr 44px; }
+}

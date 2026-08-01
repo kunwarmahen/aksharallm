@@ -51,6 +51,7 @@ from .gpu import Sampler, snapshot
 from .pipeline import Pipeline
 from .finetune import FinetuneJobs
 from .quantize import QuantJobs
+from .synth import SynthJobs
 from .runs import PHASE_LAUNCHING, PHASE_TRAINING, LAUNCHERS, RunError, RunStore, repo_root
 from .schedule import Rule, Schedule, Scheduler, parse_days
 
@@ -79,7 +80,8 @@ class Handler(BaseHTTPRequestHandler):
     def __init__(self, *args, store: RunStore, scheduler: Scheduler, sampler: Sampler,
                  source: SourceTree, explain: ExplainConfig, playground: Playground,
                  pipeline: Pipeline, quant: QuantJobs, finetune: FinetuneJobs,
-                 evals: EvalJobs, cost: CostConfig, quiet: bool = True, **kw):
+                 evals: EvalJobs, synth: SynthJobs, cost: CostConfig,
+                 quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
         self.sampler = sampler
@@ -90,6 +92,7 @@ class Handler(BaseHTTPRequestHandler):
         self.quant = quant
         self.finetune = finetune
         self.evals = evals
+        self.synth = synth
         self.cost = cost
         self.quiet = quiet
         super().__init__(*args, **kw)
@@ -227,6 +230,17 @@ class Handler(BaseHTTPRequestHandler):
                     names = data.get("datasets")
                     return self._json(self.evals.fetch(
                         [str(n) for n in names] if isinstance(names, list) else None))
+            # synthetic data: /api/synth/<start|stop|export>
+            if len(parts) == 3 and parts[:2] == ["api", "synth"]:
+                if parts[2] == "start":
+                    return self._json(self.synth.start(data))
+                if parts[2] == "stop":
+                    return self._json(self.synth.stop(
+                        mode=str(data.get("mode", "now")),
+                        samples=self._int(data, "samples"),
+                        seconds=self._int(data, "seconds")))
+                if parts[2] == "export":
+                    return self._json(self.synth.export(str(data.get("name") or "")))
             # post-training: /api/pipeline/<base>/<stage>/<start|stop>
             if len(parts) == 5 and parts[:2] == ["api", "pipeline"]:
                 base, stage, action = parts[2], parts[3], parts[4]
@@ -289,6 +303,18 @@ class Handler(BaseHTTPRequestHandler):
             if not name:
                 raise RunError("result needs ?file=<name>.json")
             return self._json(self.evals.result(name))
+        if parts == ["synth"]:
+            lines = int((query.get("lines") or [200])[0])
+            return self._json(self.synth.status(tail=max(0, lines)))
+        if parts == ["synth", "dataset"]:
+            # One dataset with a few kept samples and a few rejects. Both halves: the
+            # rejects are the only thing that says *why* a pass rate is what it is.
+            name = (query.get("name") or [""])[0]
+            if not name:
+                raise RunError("dataset needs ?name=<dataset>")
+            return self._json(self.synth.dataset(
+                name, samples=int((query.get("samples") or [5])[0]),
+                rejects=int((query.get("rejects") or [5])[0])))
         if len(parts) == 2 and parts[0] == "pipeline":
             # post-training stages + gating for a base run: /api/pipeline/<base>
             return self._json(self.pipeline.status(parts[1]))
@@ -662,10 +688,11 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
     quant = QuantJobs(store.root)
     finetune = FinetuneJobs(store.root)
     evals = EvalJobs(store.root)
+    synth = SynthJobs(store.root)
     handler = partial(Handler, store=store, scheduler=scheduler, sampler=sampler,
                       source=source, explain=explain, playground=playground,
                       pipeline=pipeline, quant=quant, finetune=finetune, evals=evals,
-                      cost=cost, quiet=quiet)
+                      synth=synth, cost=cost, quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True

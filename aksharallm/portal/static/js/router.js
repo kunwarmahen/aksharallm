@@ -7,7 +7,7 @@
 import { $, $$ } from './core.js';
 import { state } from './state.js';
 
-export const VIEWS = ['dashboard', 'play', 'code', 'quant', 'lora', 'evals', 'docs'];
+export const VIEWS = ['dashboard', 'play', 'code', 'quant', 'lora', 'evals', 'synth', 'docs'];
 
 /* view -> { open, leave }. A tab registers itself when its module is first imported, so the
  * router never has to name one. `open` runs every time the tab is shown — the tab modules

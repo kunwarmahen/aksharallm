@@ -59,6 +59,12 @@ RECIPES = {
     "smoltalk": ("HuggingFaceTB/smoltalk", "all", "train", _smoltalk),
     "ultrachat": ("HuggingFaceH4/ultrachat_200k", None, "train_sft", _ultrachat),
     "openhermes": ("teknium/OpenHermes-2.5", None, "train", _openhermes),
+    # A local JSONL of {"messages": [...]} rows -- which is exactly what
+    # `python -m aksharallm.synth export` writes. Generated data goes through the same
+    # tokenizing, packing and mask code as a downloaded corpus; the only thing that differs
+    # is where the rows came from, and that is recorded in data/synth/<name>/meta.json
+    # rather than here. Point it at a file with --file.
+    "jsonl": (None, None, None, _identity),
     # Generated locally, no download. Exists so the SFT/DPO/LoRA machinery can be smoke
     # tested end to end in seconds — the shapes, the mask alignment, the packing and the
     # trainers are all exercised for real. It teaches the model a trivially learnable
@@ -89,6 +95,28 @@ def synthetic_rows(n: int, seed: int = 0):
         ]}
 
 
+def jsonl_rows(path: Path):
+    """Rows from a local JSONL file, one JSON object per line.
+
+    A malformed line is skipped rather than fatal: a generation run that was killed
+    mid-write leaves a truncated final line, and losing the last sample is a better outcome
+    than refusing to tokenize the other 4,999.
+    """
+    import json
+
+    if not path.is_file():
+        raise SystemExit(f"no such file: {path}")
+    with path.open("r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield json.loads(line)
+            except ValueError:
+                continue
+
+
 def is_valid(messages) -> bool:
     """Reject rows that would teach the model nothing or teach it something wrong."""
     if not messages or len(messages) < 2:
@@ -110,6 +138,9 @@ def main():
     ap.add_argument("--val-examples", type=int, default=2000)
     ap.add_argument("--synthetic-examples", type=int, default=20000,
                     help="how many rows the 'synthetic' recipe generates")
+    ap.add_argument("--file", default=None,
+                    help="JSONL of {\"messages\": [...]} rows, for the 'jsonl' recipe "
+                         "(e.g. data/synth/<name>/sft.jsonl)")
     args = ap.parse_args()
 
     repo, config, split, convert = RECIPES[args.recipe]
@@ -119,6 +150,10 @@ def main():
 
     if args.recipe == "synthetic":
         ds = synthetic_rows(args.synthetic_examples)
+    elif args.recipe == "jsonl":
+        if not args.file:
+            raise SystemExit("the 'jsonl' recipe needs --file <path.jsonl>")
+        ds = jsonl_rows(Path(args.file))
     else:
         from datasets import load_dataset
 

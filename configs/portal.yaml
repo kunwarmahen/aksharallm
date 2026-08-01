@@ -104,6 +104,69 @@ judge:
   #   num_gpu: 0
 
 # --------------------------------------------------------------------------------------
+# The Synth tab: making training data with a local teacher.
+#
+# The third caller of the same Ollama client, reading a third section. What it wants is
+# different again: the explainer wants speed, the judge wants consistency, and this wants
+# DIVERSITY — the same prompt answered 5,000 times at temperature 0.2 is a dataset with
+# 5,000 rows and about forty distinct ideas in it.
+#
+# The teacher is chosen per recipe, because "the best model for writing Python exercises"
+# and "the best model for writing instruction data" are not the same model and the gap is
+# an order of magnitude in quality-per-hour, in both directions.
+#
+#     python -m aksharallm.synth recipes
+#     python -m aksharallm.synth gen python --name py-v1 --n 200
+#     AKSHARALLM_SYNTH_MODEL_PYTHON=starcoder2:3b      # for one session
+# --------------------------------------------------------------------------------------
+
+synth:
+  # High, and not for taste — see above. The seed grid does most of the work; a low
+  # temperature would undo it.
+  temperature: 0.9
+
+  # Same trap as the other two sections: a reasoning model spends num_predict thinking and
+  # returns an empty answer. See docs/07.
+  think: false
+
+  num_ctx: 8192
+
+  # A whole exercise — problem, solution and tests — has to fit in this.
+  num_predict: 1200
+
+  # Longer than the explainer's: nobody is watching a generation run arrive.
+  timeout_s: 600
+
+  # Longer than elsewhere too. A generation run makes hundreds of calls back to back, and
+  # reloading a 9 GB model between them would dominate the wall clock.
+  keep_alive: 10m
+
+  # THE ONE THAT MATTERS WHILE TRAINING. Unlike the Playground and the Quantize tab, this
+  # cannot quietly fall back to the CPU: the model is loaded by Ollama, in another process,
+  # and the only levers are which teacher is asked for and this. A 14B teacher beside a
+  # Phase-2 run's ~21 GB of 24 can kill the run. Set 0 to keep the teacher on the CPU (slow
+  # but harmless), or use starcoder2:3b, which genuinely fits alongside.
+  #   num_gpu: 0
+
+  # How often one seed may be re-asked after a format failure. Deliberately low: retrying
+  # the same cell until it succeeds biases the dataset towards what the teacher finds easy.
+  max_attempts: 2
+
+  # Per recipe. Anything left out falls back to the built-in default for that recipe
+  # (python: qwen2.5:14b, chat and preference: gemma4:31b).
+  recipes:
+    python:
+      model: qwen2.5:14b
+    chat:
+      model: gemma4:31b
+    preference:
+      model: gemma4:31b
+      # Lower than the section default: a preference pair needs the *flaw* to be the one
+      # asked for, and a very high temperature makes the bad answer bad in three ways at
+      # once, which teaches DPO the wrong difference.
+      temperature: 0.7
+
+# --------------------------------------------------------------------------------------
 # The Playground tab: testing your own checkpoints.
 #
 # This is the other model in the building — not the Ollama one that reads your code, but

@@ -192,6 +192,15 @@ The panels, in plain terms:
   sentence saying what to expect at this size, because the commonest way to misread the
   panel is to see 25% on MMLU and conclude the model is broken. Shells out to
   `python -m aksharallm.eval`. See [doc 12](12-eval.md).
+- **Synth** — make training data with a local teacher, and see what was thrown away. The
+  tab leads with the **funnel** rather than the sample count, because "400 samples at 20%
+  survival" is three different problems depending on which filter took the rest: wrong
+  exercises (`tests_failed`), the teacher repeating itself (`near_duplicate`), or an ignored
+  output format (`unparseable`). Kept samples and rejected ones sit in the same viewer, one
+  click apart. This is the one panel that **cannot** quietly fall back to the CPU — the
+  teacher is loaded by Ollama in another process — so it reports the contention and leaves
+  the choice to you. Shells out to `python -m aksharallm.synth`. See
+  [doc 13](13-synthetic-data.md).
 - **Docs** — this guide, read right in the browser: the sidebar lists every chapter, and the
   reader renders the same `docs/*.md` files **with their diagrams** (the mermaid library is
   vendored locally and loaded only when you open this tab). Same files, no duplication.
@@ -302,7 +311,7 @@ flowchart TD
     charts["charts.js"]
     md["markdown.js"]
     dash["dashboard.js"]
-    tabs["code · docs · quant<br/>lora · evals · play"]
+    tabs["code · docs · quant<br/>lora · evals · synth · play"]
     main["main.js — wire + boot"]
 
     core --> charts & md & router & dash & tabs & main
@@ -402,9 +411,14 @@ too, which is worse:
   below 420px. Narrower than that and the track — and every panel beside it — hangs off the
   screen. Write the floor as `minmax(min(420px, 100%), 1fr)`: identical above 420px, and it
   collapses instead of overflowing below it.
-- A flex item will not shrink past its own content. The tab strip is seven tabs and ~620px
+- A flex item will not shrink past its own content. The tab strip is eight tabs and ~700px
   wide, so it dragged the whole page out to 558px until it was given `min-width: 0` and its
   own `overflow-x: auto` — now it scrolls in place instead of scrolling the page.
+- **A form control can have a fixed width in a global rule.** `input[type="number"]` is
+  `width: 120px` in `controls.css`; two of them in a `1fr 1fr` grid row pushed the Synth tab
+  23px past a 320px phone, because a grid item's automatic minimum is its content's
+  min-content width and the content here is a fixed 120px. `min-width: 0` on the item is
+  half the fix — the control also needs `width: 100%`.
 
 The check, when touching this stylesheet: point a browser at a **running portal with a real
 run selected**, at a 390px viewport, and `document.body.scrollWidth` must equal

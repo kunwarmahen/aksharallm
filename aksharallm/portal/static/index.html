@@ -18,6 +18,7 @@
 <link rel="stylesheet" href="/static/css/quantize.css">
 <link rel="stylesheet" href="/static/css/lora.css">
 <link rel="stylesheet" href="/static/css/evals.css">
+<link rel="stylesheet" href="/static/css/synth.css">
 <link rel="stylesheet" href="/static/css/narrow.css">
 </head>
 <body>
@@ -36,6 +37,7 @@
     <button class="tab" data-view="quant" type="button">Quantize</button>
     <button class="tab" data-view="lora" type="button">Finetune</button>
     <button class="tab" data-view="evals" type="button">Eval</button>
+    <button class="tab" data-view="synth" type="button">Synth</button>
     <button class="tab" data-view="docs" type="button">Docs</button>
   </nav>
 
@@ -70,6 +72,8 @@
 
 <!--#include evals.html -->
 
+<!--#include synth.html -->
+
 <footer class="footer">
   <span id="foot-root">–</span>
   <span class="foot-dashboard">Stopping is safe at any step: the trainer saves
@@ -91,6 +95,12 @@
   against the chance line, the error bar, and what the same suite scored ten thousand steps
   ago. Data is downloaded once into <code>data/eval/</code>; results are kept forever in
   <code>logs/eval/</code>. See docs/12 for what each suite can and cannot tell you.</span>
+  <span class="foot-synth" hidden>Generated data is the easiest way to make a model worse
+  while its loss improves, so read the funnel, not the sample count: <em>which</em> filter
+  the rest of the batch hit is what says whether to change the prompt, the teacher or the
+  seed grid. The python recipe runs the tests it wrote, then runs them again against a
+  stubbed solution. Everything lands in <code>data/synth/</code> with its provenance. See
+  docs/13.</span>
   <span class="foot-play" hidden>Every generation is recorded in
   <code>logs/playground.jsonl</code> with the step and loss of the checkpoint that produced
   it, so the same prompt at step 7,000 and step 30,000 can be put side by side. While a run

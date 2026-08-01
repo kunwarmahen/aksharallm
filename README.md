@@ -101,6 +101,7 @@ Read these in order. They assume no prior knowledge of machine learning.
 | 10 | [Quantization](docs/10-quantization.md) | Storing weights in 4 bits: group scales, RTN/GPTQ/AWQ/QAT, **NF4**, a fused Triton kernel, and why smaller isn't faster |
 | 11 | [LoRA & QLoRA](docs/11-lora.md) | Fine-tuning without training the model: low-rank adapters, a 4-bit frozen base, one base + many skills, and a free DPO reference model |
 | 12 | [Evaluation](docs/12-eval.md) | Is the model actually any good? MMLU/ARC/HellaSwag/PIQA scored by log-likelihood, GSM8K, HumanEval executed for real, an LLM-judge — and why 25% on MMLU is not a failure |
+| 13 | [Synthetic data](docs/13-synthetic-data.md) | Making the training set with a local teacher instead of downloading it: a seed grid instead of a temperature, tests that are **executed twice**, near-duplicate detection, and why the rejection tally is the quality signal |
 
 ---
 
@@ -150,12 +151,20 @@ aksharallm/
 │   │   ├── cost.py           energy ledger + what each run cost in electricity
 │   │   ├── explain.py        source browser + a local Ollama model that explains it
 │   │   ├── evals.py          benchmark jobs; shells out to `python -m aksharallm.eval`
+│   │   ├── synth.py          generation jobs; shells out to `python -m aksharallm.synth`
 │   │   ├── server.py         stdlib http.server + a small JSON API
 │   │   └── static/           the client: no build step, no framework, no dependencies
 │   │       ├── index.html        the shell; server fills its <!--#include --> markers
 │   │       ├── parts/<tab>.html  markup, one file per view
 │   │       ├── js/<tab>.js       ES modules, one per view (+ core/state/router/charts)
 │   │       └── css/<tab>.css     rules, one per view (+ base/chrome/controls/narrow)
+│   ├── synth/            generating training data with a local teacher — see docs/13
+│   │   ├── prompts.py        the seed grid: 480 / 1,296 structurally different prompts
+│   │   ├── recipes.py        python / chat / preference: prompt, parser, export
+│   │   ├── filters.py        validity checks + shingle-based near-duplicate detection
+│   │   ├── verify.py         run the generated tests, then run them against a stub
+│   │   ├── dataset.py        data/synth/<name>/: samples, rejects, provenance
+│   │   └── run.py            the loop, its budgets, and the STOP file
 │   ├── eval/             the benchmark harness — see docs/12
 │   │   ├── sources.py        download benchmarks once into data/eval/, then work offline
 │   │   ├── suites.py         what each benchmark asks, and how an answer is judged right
@@ -294,13 +303,25 @@ adapter off and the model you are already holding *is* the model you started fro
 In order, all written from scratch: **GRPO** ✅ (RL on a reward the code sandbox actually
 verifies) → **quantization** ✅ → **LoRA/QLoRA** ✅ → a **real eval harness** ✅ (MMLU, ARC,
 HellaSwag, PIQA, GSM8K, HumanEval and a model-judged suite — [docs/12](docs/12-eval.md)) →
-**synthetic data + distillation** → **mixture of experts** → **diffusion training** →
-export and serving.
+**synthetic data** ✅ ([docs/13](docs/13-synthetic-data.md)) → **distillation** → **mixture
+of experts** → **diffusion training** → export and serving.
 
 The harness came before the last four deliberately. Mixture of experts, synthetic data and
 distillation are all changes to model *quality*, and validation loss either cannot see them
 or reports them backwards — training on generated text is the easiest way to improve a loss
 curve while making a model worse. You need the instrument before you run the experiment.
+
+**Synthetic data**, built next, turned out to be mostly *filters*. A local teacher writing
+exercises is four lines; the package around it exists because generated data is the easiest
+way to make a model worse while its loss improves. So the Python recipe runs the tests the
+teacher wrote — and then runs them again against a stubbed solution, because tests that pass
+with the function's body removed prove nothing and look identical to real ones. Diversity
+comes from a grid of 480 structurally different prompts rather than from a temperature, and
+every dropped sample is counted by reason, because "30% survived" means three unrelated
+problems depending on *which* filter took the rest. On this machine that loop paid for
+itself immediately: reading the rejects showed a teacher writing correct solutions with
+wrong expected values in the tests, one rule in the template fixed it, and the pass rate
+went 25% → 58%.
 
 Two of the others are worth explaining, because they are not the usual list.
 

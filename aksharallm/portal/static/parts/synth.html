@@ -1,0 +1,113 @@
+<!-- The Synth tab: make training data with a local teacher, and see what was thrown away.
+     Every button shells out to `python -m aksharallm.synth`, so a job started here and one
+     typed into a terminal append to the same dataset and either can stop the other. -->
+<div id="view-synth" class="view" hidden>
+  <section class="sy-layout">
+
+    <aside class="panel sy-form">
+      <div class="panel-head">
+        <h2>Generate</h2>
+        <span class="panel-note">data, from a local teacher</span>
+      </div>
+
+      <label class="field wide">
+        <span class="field-label">recipe</span>
+        <select id="sy-recipe" aria-label="recipe"></select>
+      </label>
+      <div class="sy-hint" id="sy-recipe-note"></div>
+
+      <label class="field wide">
+        <span class="field-label">teacher</span>
+        <select id="sy-teacher" aria-label="teacher model"></select>
+      </label>
+      <div class="sy-hint" id="sy-teacher-note"></div>
+
+      <div class="sy-row">
+        <label class="field">
+          <span class="field-label">dataset</span>
+          <input id="sy-name" type="text" maxlength="40" placeholder="py-v1"
+                 aria-label="dataset name">
+        </label>
+        <label class="field">
+          <span class="field-label">samples</span>
+          <input id="sy-n" type="number" min="1" max="100000" step="10" value="100">
+        </label>
+      </div>
+      <div class="sy-hint" id="sy-name-note">A directory under <code>data/synth/</code>.
+        Generating into a name that already exists appends to it.</div>
+
+      <details class="sy-more">
+        <summary>more</summary>
+        <div class="sy-row">
+          <label class="field">
+            <span class="field-label">dedup</span>
+            <input id="sy-dedup" type="number" min="0.1" max="1" step="0.05" value="0.6">
+          </label>
+          <label class="field">
+            <span class="field-label">seed</span>
+            <input id="sy-seed" type="number" min="0" max="99999" step="1" value="0">
+          </label>
+        </div>
+        <div class="sy-hint">Lower dedup is stricter. The seed picks which shuffle of the
+          prompt grid is walked — change it to generate a second batch that cannot repeat
+          the first one's order.</div>
+        <label class="sy-check"><input type="checkbox" id="sy-verify" checked>
+          <span>run the generated tests <em>(python recipe — off means nothing checks that
+          the code is correct, and every sample says so)</em></span></label>
+        <label class="sy-check"><input type="checkbox" id="sy-mutate" checked>
+          <span>re-run them against a stubbed solution <em>(proves the tests are not
+          vacuous)</em></span></label>
+      </details>
+
+      <div class="sy-actions">
+        <button id="sy-run" type="button">Generate</button>
+        <button id="sy-budget" class="ghost" type="button">Budget…</button>
+        <button id="sy-stop" class="ghost" type="button" hidden>Stop…</button>
+      </div>
+      <div class="sy-hint" id="sy-budget-note"></div>
+      <div class="sy-hint" id="sy-cmd"></div>
+
+      <p class="sy-fine">Stopping is safe at any point: samples are written and counted one
+      at a time, so a stopped run leaves a smaller dataset that is complete — provenance,
+      funnel and all — and running it again adds to it.</p>
+    </aside>
+
+    <section class="panel sy-main">
+      <div class="panel-head">
+        <h2 id="sy-title">Datasets</h2>
+        <span class="panel-note" id="sy-state">nothing running</span>
+      </div>
+
+      <div id="sy-progress" class="sy-progress" hidden>
+        <div class="sy-bar"><span id="sy-bar-fill"></span></div>
+        <span id="sy-progress-label"></span>
+      </div>
+
+      <!-- The funnel is the headline, not the count. A pass rate on its own cannot tell a
+           teacher problem from a prompt problem from a diversity problem. -->
+      <div id="sy-funnel" class="sy-funnel"></div>
+
+      <div class="scroll-x"><div id="sy-datasets" class="sy-datasets"></div></div>
+
+      <div class="sy-detail">
+        <div class="panel-head">
+          <h2 id="sy-detail-title">Sample</h2>
+          <span class="panel-note" id="sy-detail-note">pick a dataset above</span>
+        </div>
+        <div class="sy-tabs" role="group" aria-label="kept or rejected">
+          <button type="button" class="chip on" data-side="kept">kept</button>
+          <button type="button" class="chip" data-side="rejects">rejected</button>
+          <button id="sy-export" class="chip sy-export" type="button">Export for training</button>
+        </div>
+        <div id="sy-samples" class="sy-samples"></div>
+      </div>
+
+      <div class="sy-logwrap">
+        <div class="panel-head"><h2>Job output</h2>
+          <span class="panel-note">live, from <code>logs/synth/</code></span></div>
+        <pre id="sy-log" class="sy-log">Pick a recipe and press Generate.</pre>
+      </div>
+    </section>
+
+  </section>
+</div><!-- /view-synth -->
