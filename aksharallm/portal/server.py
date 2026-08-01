@@ -46,6 +46,7 @@ from ..infer.engine import SamplingParams
 from ..infer.playground import Playground
 from .evals import EvalJobs
 from .explain import ExplainConfig, Ollama, SourceTree, build_messages
+from .cost import CostConfig, report as cost_report
 from .gpu import Sampler, snapshot
 from .pipeline import Pipeline
 from .finetune import FinetuneJobs
@@ -78,7 +79,7 @@ class Handler(BaseHTTPRequestHandler):
     def __init__(self, *args, store: RunStore, scheduler: Scheduler, sampler: Sampler,
                  source: SourceTree, explain: ExplainConfig, playground: Playground,
                  pipeline: Pipeline, quant: QuantJobs, finetune: FinetuneJobs,
-                 evals: EvalJobs, quiet: bool = True, **kw):
+                 evals: EvalJobs, cost: CostConfig, quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
         self.sampler = sampler
@@ -89,6 +90,7 @@ class Handler(BaseHTTPRequestHandler):
         self.quant = quant
         self.finetune = finetune
         self.evals = evals
+        self.cost = cost
         self.quiet = quiet
         super().__init__(*args, **kw)
 
@@ -318,7 +320,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.store,
                 window_s=None if window in ("all", "0") else float(window),
                 index=int((query.get("index") or [0])[0]),
-                sampler=self.sampler))
+                sampler=self.sampler, cost=self.cost))
+        if parts == ["cost"]:
+            # What every run has spent, from the energy ledger — which outlives the rolling
+            # telemetry the /api/gpu window is drawn from.
+            return self._json(cost_report(
+                self.sampler.ledger, self.cost, store=self.store,
+                days=int((query.get("days") or [14])[0])))
         if parts == ["source"]:
             return self._json(self.source.files())
         if parts == ["source", "file"]:
@@ -637,6 +645,7 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
     sampler = Sampler(store)
     source = SourceTree(store.root)
     explain = ExplainConfig.load(store.root)
+    cost = CostConfig.load(store.root)
 
     def busy() -> list[str]:
         """Runs that must not have the card taken away from them.
@@ -656,7 +665,7 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
     handler = partial(Handler, store=store, scheduler=scheduler, sampler=sampler,
                       source=source, explain=explain, playground=playground,
                       pipeline=pipeline, quant=quant, finetune=finetune, evals=evals,
-                      quiet=quiet)
+                      cost=cost, quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True

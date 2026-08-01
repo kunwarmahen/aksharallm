@@ -719,6 +719,73 @@ def test_summary_splits_training_from_idle():
     assert summary["training"]["temp_max"] == 70.0
 
 
+def test_a_post_training_stage_is_tagged_as_training_not_idle(fake_smi, store, repo):
+    """`<base>-sft` has no config and no train_log.jsonl, so RunStore has never heard of it
+    — but it is a trainer holding the whole card, and it used to be recorded as idle time,
+    which put an SFT run's electricity in the wrong column."""
+    sft = spawn("-m", "aksharallm.train.sft", "configs/demo.yaml")
+    try:
+        sdir = repo / "checkpoints" / "demo-sft"
+        sdir.mkdir(parents=True)
+        (sdir / "train.pid").write_text(f"{sft.pid}\n")
+        assert gpumod.activity(store) == ("demo-sft", None)
+        assert gpumod.sample(store)["run"] == "demo-sft"
+    finally:
+        sft.kill()
+        sft.wait()
+
+
+def test_a_portal_job_is_tagged_as_a_job_not_as_a_run(fake_smi, store, repo):
+    """An evaluation is worth billing and is not a training run: two fields, so the charts
+    band one and not the other."""
+    job = spawn("-m", "aksharallm.eval", "demo")
+    try:
+        (repo / "logs" / "eval").mkdir(parents=True, exist_ok=True)
+        (repo / "logs" / "eval" / "eval.pid").write_text(f"{job.pid}\n")
+        assert gpumod.activity(store) == (None, "eval")
+        rec = gpumod.sample(store)
+        assert rec["job"] == "eval" and "run" not in rec
+    finally:
+        job.kill()
+        job.wait()
+
+
+def test_a_stale_job_pid_bills_nobody(fake_smi, store, repo):
+    (repo / "logs" / "eval").mkdir(parents=True, exist_ok=True)
+    (repo / "logs" / "eval" / "eval.pid").write_text("999999999\n")
+    assert gpumod.activity(store) == (None, None)
+
+
+def test_every_sample_is_folded_into_the_ledger(fake_smi, store, repo):
+    """The sampler writes to a file that gets trimmed. If the fold ever stops happening the
+    cost panel keeps working and quietly starts forgetting the past — so this asserts the
+    wiring itself, not the arithmetic (which tests/test_portal_cost.py covers)."""
+    sampler = gpumod.Sampler(store)
+    folded = []
+    sampler.ledger.fold = folded.append
+    for _ in range(3):
+        sampler.tick()
+    written = [json.loads(line) for line in sampler.path.read_text().splitlines()]
+    assert folded == written, "the ledger sees exactly what the telemetry file was given"
+
+
+def test_cost_api_serves_the_panel(server, repo, monkeypatch):
+    monkeypatch.setattr(gpumod, "_run_smi",
+                        lambda fields, timeout=5.0:
+                        FAKE_STATIC if "name" in fields else FAKE_LIVE)
+    (repo / "logs").mkdir(exist_ok=True)
+    (repo / "logs" / "energy.jsonl").write_text(json.dumps(
+        {"start": time.time() - 600, "seconds": 600.0, "label": "demo",
+         "kind": "training", "index": 0, "wh": 51.0, "samples": 120}) + "\n")
+    _, body = get(server + "/api/cost")
+    data = json.loads(body)
+    assert data["total"]["wh"] == 51.0
+    assert data["runs"][0]["label"] == "demo" and data["runs"][0]["kind"] == "training"
+    # No rate is configured in the test repo, so there is no price — and it says so.
+    assert data["configured"] is False and data["total"]["money"] is None
+    assert "per_kwh" in data["hint"]
+
+
 def test_gpu_api_serves_the_panel(server, repo, monkeypatch):
     monkeypatch.setattr(gpumod, "_run_smi",
                         lambda fields, timeout=5.0:

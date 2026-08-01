@@ -172,3 +172,41 @@ infer:
 
   # Longest prompt accepted over HTTP. The real limit is the model's context window.
   max_prompt_chars: 20000
+
+# --------------------------------------------------------------------------------------
+# What a run costs to produce.
+#
+# The GPU sampler already records the card's power draw every five seconds, tagged with
+# whichever run or job was using it, and folds it into logs/energy.jsonl — a permanent
+# ledger, because logs/gpu.jsonl is a rolling buffer and a total that quietly shrinks as
+# old samples are trimmed is worse than no total. This section is the only missing piece:
+# what a unit of that energy costs you.
+#
+# Nothing here is set by default, and an unset rate is reported as unset — the portal shows
+# kWh and hours and says so, rather than inventing a price. Fill in `per_kwh` from your
+# electricity bill and every run gains a number.
+#
+#     python -m aksharallm.portal        # Cost card, in the dashboard's GPU panel
+#     AKSHARALLM_COST_PER_KWH=8.0        # for one session, without editing this file
+# --------------------------------------------------------------------------------------
+
+cost:
+  # Printed in front of every amount. A prefix, not a currency code.
+  currency: "$"
+
+  # What you pay for a kilowatt-hour. This is the honest one on a machine you own.
+  per_kwh: 0.15
+
+  # What an hour of this machine would cost *rented*, for the comparison against a cloud
+  # quote. If both are set they are added: they answer different questions, and neither is
+  # a correction of the other. Set only this one if you have no idea what power costs and
+  # just want "what would these 60 hours have cost on somebody else's A100".
+  #   per_hour: 1.20
+
+  # THE ONE THAT MAKES THE NUMBER MATCH A PLUG METER. nvidia-smi measures the *card*, and
+  # the card is not the machine: CPU, drives, fans and anything else plugged into the same
+  # socket draw their own 60-120 W, and the PSU wastes ~10% of the total as heat on the way
+  # in. Left at 0 and 1.0, the report says "GPU card only — the wall socket draws more",
+  # which is true and is roughly 30% under what you are billed for.
+  #   host_watts: 100
+  #   psu_efficiency: 0.9

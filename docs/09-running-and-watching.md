@@ -139,6 +139,7 @@ flowchart TD
         SE[sessions: one row per evening]
         PT["Post-training panel:<br/>SFT / DPO / GRPO, gated"]
         GP[GPU: utilisation, memory, temperature]
+        CO["Cost: what each run spent,<br/>in kWh and in money"]
         SC[schedule: recurring training windows]
         LG[log: the trainer's output, live]
     end
@@ -169,6 +170,7 @@ The panels, in plain terms:
   prerequisite checkpoint exists; otherwise it's greyed out with the reason as a tooltip
   ("needs …-sft/sft_best.pt — run SFT first"). This is the gate above, made visible.
 - **GPU** — what the card is doing, during a run and between runs.
+- **Cost** — what that cost, per run and in total. See [below](#what-a-run-cost).
 - **Schedule** — recurring start/stop windows (e.g. "train 8pm–7am"), from the browser or
   the shell.
 - **Playground** — send the current checkpoint a prompt *while it is still training*, so you
@@ -195,6 +197,71 @@ The panels, in plain terms:
   vendored locally and loaded only when you open this tab). Same files, no duplication.
 
 Everything a button does, you can do from a terminal — the button just runs the script.
+
+### What a run cost
+
+A model trained on your own machine is not free; it is just billed later, by the electricity
+company.
+The GPU sampler already records the one quantity that answers it — `power.draw`, every five
+seconds, tagged with whatever was running — so the cost of a run is that curve integrated
+over the run's hours, times whatever a kilowatt-hour costs you.
+
+```mermaid
+flowchart LR
+    SMI["nvidia-smi<br/>power.draw, every 5s"] --> TAG{"what is<br/>using the card?"}
+    TAG -->|trainer| RUN["run: small-code<br/>(or …-sft, …-dpo)"]
+    TAG -->|portal job| JOB["job: eval /<br/>quantize / finetune"]
+    TAG -->|nothing| IDLE[idle]
+    RUN & JOB & IDLE --> LED["logs/energy.jsonl<br/>10-minute buckets, permanent"]
+    LED --> RATE["x cost.per_kwh<br/>(+ host watts, PSU loss)"]
+    RATE --> OUT["per run · today · all time<br/>· per 1M tokens"]
+```
+
+Set the rate in `configs/portal.yaml`; until you do, the panel shows kilowatt-hours and says
+so rather than inventing a price:
+
+```yaml
+cost:
+  currency: "₹"
+  per_kwh: 8.0        # your electricity bill
+  per_hour: 1.20      # optional: what an hour of this would cost rented, for comparison
+  host_watts: 100     # the rest of the machine, which nvidia-smi cannot see
+  psu_efficiency: 0.9 # ~10% is lost as heat before the card sees it
+```
+
+From a terminal, which is how you read it over ssh while the run it is billing is still
+going:
+
+```bash
+python -m aksharallm.portal.cost              # totals, per run, cost per million tokens
+python -m aksharallm.portal.cost backfill     # fold existing logs/gpu.jsonl into the ledger
+```
+
+Four decisions in here are worth more than the feature:
+
+- **The ledger is separate from the telemetry.** `logs/gpu.jsonl` is a *rolling* buffer — 8 MB,
+  oldest half dropped — which is right for charts and catastrophic for a total: a three-week
+  run would quietly get *cheaper* as its early samples were deleted. So every sample is
+  folded, as it is written, into ten-minute buckets in `logs/energy.jsonl`, which is
+  append-only and never trimmed. About 15 KB a day.
+- **A gap is not bridged.** The sampler only runs while the portal does. If it was down for
+  an hour, that hour has no reading, and the report says so — as `uncovered`, and as a
+  **coverage** percentage per run. A run recorded at 51% has really cost about twice what the
+  measured column says, which is why "whole run (est.)" is a separate, differently-labelled
+  column rather than quietly folded into the headline.
+- **Cost per million tokens uses the tokens of the *measured* part.** Half a run's energy
+  divided by all of its tokens halves the answer, and it looks precise while being wrong by
+  exactly the fraction nobody was watching.
+- **The card is not the machine.** `nvidia-smi` measures the GPU; the CPU, drives and fans
+  draw their own 60–120 W and the PSU wastes ~10% before any of it arrives. With
+  `host_watts`/`psu_efficiency` unset the report says *GPU card only — the wall socket draws
+  more*, which is honest and roughly 30% under what the meter charges.
+
+The tagging is also why an SFT run stopped being invisible: post-training stages have no
+`configs/<name>.yaml` and write `sft_log.jsonl`, so `RunStore` has never heard of them — the
+sampler now looks for any live `checkpoints/*/train.pid`, and the portal's own detached jobs
+(eval, quantize, fine-tune) are tagged `job` rather than `run`, so they are billed without
+being drawn as training bands on the charts.
 
 ### How the client is put together
 
@@ -367,6 +434,8 @@ Note that Chrome's `--window-size` will not go below about 485px and so cannot t
 | make it 4-bit and measure it | `python -m aksharallm.quant small-code/ckpt_best.pt --compare` | Quantize → Compare all |
 | is it any good yet? | `python -m aksharallm.eval small-code --suite fast` | Eval → Evaluate |
 | has it improved since last week? | `python -m aksharallm.eval report --suite arc-easy` | Eval → the trend chart |
+| what has this cost me? | `python -m aksharallm.portal.cost` | Dashboard → Cost |
+| …including telemetry from before | `python -m aksharallm.portal.cost backfill` | (one-off, from the shell) |
 
 ---
 

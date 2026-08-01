@@ -13,6 +13,15 @@ split is the difference between "my run is slow" and "something else is on the G
     {"time": 1785080103.4, "run": "small-code",
      "gpus": [{"index": 0, "util": 98, "mem_used": 19140, "temp": 71, "power": 310.5}]}
 
+`run` is a trainer — pretraining, or one of the post-training stages. A portal job (an
+evaluation, a quantization, a fine-tune) is tagged `job` instead: both are worth attributing
+power to, but only one of them is a training run, and conflating them would band the charts
+wrong. Neither field is present when the machine is idle.
+
+Every sample is also folded into `cost.Ledger` as it is written. That is not decoration:
+this file is a rolling buffer (see `MAX_BYTES`), so anything that must survive being trimmed
+— and a run's total energy bill must — cannot be computed by reading it back later.
+
 No dependency: `nvidia-smi --query-gpu=… --format=csv` is always there if the driver is,
 and a machine without it degrades to an honest "no NVIDIA GPU detected" rather than an
 exception. (NVML bindings would be cheaper per sample, but they are a package to install,
@@ -28,6 +37,7 @@ import threading
 import time
 from pathlib import Path
 
+from .cost import CostConfig, Ledger, integrate
 from .runs import RunStore, _alive, _cmdline, _read_int
 
 #: Sampled every tick. Order matters — it is the `--query-gpu` order.
@@ -85,8 +95,51 @@ def devices() -> list[dict]:
     return out
 
 
+#: The portal's detached jobs, as (label, pid file under `logs/`, what the process's command
+#: line must contain). The predicate is the one each job's own `status()` uses: a stale pid
+#: file left by a killed job must never bill somebody else's process to it.
+JOB_PIDS = (
+    ("eval", "eval/eval.pid", "aksharallm.eval"),
+    ("quantize", "quant/quant.pid", "aksharallm.quant"),
+    ("finetune", "finetune/finetune.pid", "aksharallm.train.sft"),
+)
+
+
+def activity(store: RunStore) -> tuple[str | None, str | None]:
+    """`(run, job)` — what is using the card right now, by name.
+
+    Trainers win over jobs, because the portal will not start a job on the GPU while a run
+    is training; if both are somehow alive, the run is the thing holding 21 GB.
+    """
+    for run in store.runs():
+        if store.trainer_pid(run):
+            return run, None
+
+    # Post-training stages (`<base>-sft`, `-dpo`, `-grpo`) have no `configs/<name>.yaml` and
+    # write `sft_log.jsonl` rather than `train_log.jsonl`, so `store.runs()` has never heard
+    # of them — but they are trainers, they hold the whole card for hours, and being unknown
+    # here is what made an SFT run's power land in the *idle* column.
+    ckpt = store.root / "checkpoints"
+    try:
+        dirs = sorted(p for p in ckpt.iterdir() if p.is_dir()) if ckpt.is_dir() else []
+    except OSError:
+        dirs = []
+    for d in dirs:
+        pid = _read_int(d / "train.pid")
+        if pid and _alive(pid):
+            args = _cmdline(pid)
+            if "aksharallm.train." in args and "aksharallm_smoke" not in args:
+                return d.name, None
+
+    for label, rel, needle in JOB_PIDS:
+        pid = _read_int(store.root / "logs" / rel)
+        if pid and _alive(pid) and needle in _cmdline(pid):
+            return None, label
+    return None, None
+
+
 def sample(store: RunStore | None = None) -> dict | None:
-    """One reading of every card, tagged with the run that is training, if any."""
+    """One reading of every card, tagged with whatever was running at that moment."""
     rows = _run_smi(FIELDS)
     if not rows:
         return None
@@ -98,10 +151,11 @@ def sample(store: RunStore | None = None) -> dict | None:
                      "temp": _num(d["temp"]), "power": _num(d["power"])})
     rec: dict = {"time": round(time.time(), 1), "gpus": gpus}
     if store is not None:
-        for run in store.runs():
-            if store.trainer_pid(run):
-                rec["run"] = run
-                break
+        run, job = activity(store)
+        if run:
+            rec["run"] = run
+        elif job:
+            rec["job"] = job
     return rec
 
 
@@ -113,6 +167,8 @@ class Sampler:
         self.interval = interval
         self.path = store.root / "logs" / "gpu.jsonl"
         self.pid_path = store.root / "logs" / "gpu.pid"
+        # The permanent half of the record. `logs/gpu.jsonl` is trimmed; this is not.
+        self.ledger = Ledger(store.root / "logs" / "energy.jsonl", interval=interval)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._devices: list[dict] | None = None
@@ -148,6 +204,8 @@ class Sampler:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with open(self.path, "a") as fh:
             fh.write(json.dumps(rec) + "\n")
+        # Fold *before* anything can trim the file this sample was written to.
+        self.ledger.fold(rec)
         return rec
 
     def trim(self) -> None:
@@ -174,6 +232,7 @@ class Sampler:
                     last_trim = time.time()
                 self._stop.wait(self.interval)
         finally:
+            self.ledger.close()     # a clean shutdown loses no energy
             self.release()
 
     def start(self) -> bool:
@@ -309,8 +368,14 @@ def summarise(records: list[dict], index: int = 0) -> dict:
 
 
 def snapshot(store: RunStore, window_s: float | None = 3600, index: int = 0,
-             max_points: int = 900, sampler: Sampler | None = None) -> dict:
-    """Everything the GPU panel shows, in one call."""
+             max_points: int = 900, sampler: Sampler | None = None,
+             cost: CostConfig | None = None) -> dict:
+    """Everything the GPU panel shows, in one call.
+
+    `cost` is optional: with a rate configured, the window also carries what it cost. It is
+    priced here rather than in the browser so there is exactly one implementation of the
+    host-watts-and-PSU arithmetic, and the panel and the cost totals can never disagree.
+    """
     sampler = sampler or Sampler(store)
     devs = sampler.devices()
     if not devs:
@@ -319,6 +384,10 @@ def snapshot(store: RunStore, window_s: float | None = 3600, index: int = 0,
     records = read_records(sampler.path, window_s)
     latest = records[-1] if records else None
     holder = sampler.holder()
+    energy = integrate(records, index, sampler.interval)
+    if cost is not None:
+        energy["price"] = cost.refresh().price(energy["wh"], energy["seconds"])
+        energy["currency"] = cost.currency
     return {
         "available": True,
         "devices": devs,
@@ -332,6 +401,9 @@ def snapshot(store: RunStore, window_s: float | None = 3600, index: int = 0,
         "current": _pick(latest, index) if latest else None,
         "current_age_s": (time.time() - latest["time"]) if latest else None,
         "current_run": latest.get("run") if latest else None,
+        "current_job": latest.get("job") if latest else None,
+        # Energy for exactly the window the charts above are drawing.
+        "energy": energy,
         "series": series(records, index, max_points),
         "spans": training_spans(records),
         "summary": summarise(records, index),

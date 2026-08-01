@@ -147,6 +147,7 @@ aksharallm/
 │   │   ├── runs.py           run state on disk; drives phase2.sh / stop.sh
 │   │   ├── schedule.py       recurring start/stop windows + the clock loop
 │   │   ├── gpu.py            nvidia-smi sampling, history, training-vs-idle summary
+│   │   ├── cost.py           energy ledger + what each run cost in electricity
 │   │   ├── explain.py        source browser + a local Ollama model that explains it
 │   │   ├── evals.py          benchmark jobs; shells out to `python -m aksharallm.eval`
 │   │   ├── server.py         stdlib http.server + a small JSON API
@@ -420,6 +421,21 @@ utilisation, memory, temperature and power, banding the periods when a run was t
 Since each sample records whether a trainer was alive, the summary splits into *while
 training* vs *idle* — which is how you notice that the GPU sat at 40% all night, or that
 something else was resident on it.
+
+### What it cost
+
+```bash
+python -m aksharallm.portal.cost            # per run, today, all time, per 1M tokens
+python -m aksharallm.portal.cost backfill   # fold telemetry taken before the ledger existed
+```
+
+The same power readings, integrated: energy per run, folded as it arrives into permanent
+ten-minute buckets in `logs/energy.jsonl` (the telemetry file itself is a rolling buffer, so
+a total read back from it would quietly shrink as old samples were trimmed). Give it a rate
+in `configs/portal.yaml` — `cost.per_kwh`, plus `host_watts`/`psu_efficiency` if you want the
+number to match a plug meter rather than the card alone — and every run gains a price, a cost
+per million tokens, and a **coverage** figure saying how much of the run was actually
+recorded. With no rate set it shows kilowatt-hours and says so. Portal: the **Cost** panel.
 
 ### Training on a schedule
 

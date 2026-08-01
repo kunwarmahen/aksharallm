@@ -373,7 +373,8 @@ function renderGpu(gpu) {
   $('#gpu-status').textContent = [
     dev.name,
     gpu.sampling ? `sampling every ${gpu.interval_s}s` : 'NOT SAMPLING — no history is being recorded',
-    gpu.current_run ? `${gpu.current_run} is training` : 'no run training',
+    gpu.current_run ? `${gpu.current_run} is training`
+      : gpu.current_job ? `${gpu.current_job} job is running` : 'no run training',
     gpu.samples ? `${fmt.int(gpu.samples)} samples in view` : 'no samples yet',
   ].filter(Boolean).join(' · ');
 
@@ -445,6 +446,95 @@ function renderGpu(gpu) {
     },
   });
   drawCharts();
+}
+
+/* ---------------------------------------------------------------- cost ---------------- */
+
+/** Watt-hours, in the unit a person would say out loud. */
+const wh = (v) => (v == null ? '–'
+  : v >= 1000 ? `${(v / 1000).toFixed(2)} kWh` : `${v.toFixed(v < 10 ? 1 : 0)} Wh`);
+
+/** Money, or a dash. Never 0.00 for "no rate set" — that reads as free. */
+function money(c, v) {
+  if (v == null) return '–';
+  const d = Math.abs(v) >= 10 ? 2 : Math.abs(v) >= 0.1 ? 2 : 4;
+  return `${c.currency || ''}${v.toFixed(d)}`;
+}
+
+/** The headline for a tile: the price when there is one, the energy when there isn't. */
+const headline = (c, b) => (b.money != null ? money(c, b.money) : wh(b.wh));
+
+function renderCost(c, gpu) {
+  if (!c) return;
+  state.cost = c;
+  const rate = [
+    c.per_kwh != null ? `${money(c, c.per_kwh)}/kWh` : null,
+    c.per_hour != null ? `${money(c, c.per_hour)}/hour` : null,
+  ].filter(Boolean).join(' + ');
+
+  $('#cost-status').textContent = c.note || c.hint
+    || `${rate} · measured from ${fmt.int((c.total || {}).buckets)} ledger buckets`
+       + (c.since ? ` since ${new Date(c.since * 1000).toLocaleDateString()}` : '');
+
+  const tile = (id, bundle, note) => {
+    $(`#c-${id}`).textContent = bundle ? headline(c, bundle) : '–';
+    $(`#c-${id}-note`).textContent = bundle ? note(bundle) : '–';
+  };
+  const withEnergy = (b) => `${wh(b.wh)} · ${fmt.dur(b.seconds)}`;
+  tile('total', c.total, withEnergy);
+  tile('today', c.today, withEnergy);
+  tile('week', c.week, withEnergy);
+
+  /* The one number that is not from the ledger: it scopes to whatever window the GPU
+   * charts above are drawing, so the two panels always agree about the same hour. */
+  const e = gpu && gpu.energy;
+  $('#c-window').textContent = e ? (e.price ? headline(c, { ...e, money: e.price.money })
+    : wh(e.wh)) : '–';
+  $('#c-window-note').textContent = e
+    ? `${wh(e.wh)}${e.uncovered_s > 60 ? ` · ${fmt.dur(e.uncovered_s)} not sampled` : ''}`
+    : '–';
+
+  /* Per run: the answer to "which of these spent the money". */
+  const KIND = { training: 'run', job: 'job', idle: 'idle' };
+  const rows = (c.runs || []).map((r) => [
+    r.label || 'idle — nothing running',
+    KIND[r.kind] || r.kind,
+    fmt.dur(r.seconds),
+    wh(r.wh),
+    money(c, r.money),
+    r.coverage == null ? '–' : fmt.pct(r.coverage, 0),
+    r.estimated_money != null ? money(c, r.estimated_money)
+      : r.estimated_wh != null ? wh(r.estimated_wh) : '–',
+    r.tokens == null ? '–' : fmt.compact(r.tokens),
+    r.per_mtoken == null ? (r.wh_per_mtoken == null ? '–' : wh(r.wh_per_mtoken))
+      : money(c, r.per_mtoken),
+  ]);
+  const runsHost = $('#cost-runs');
+  runsHost.textContent = '';
+  if (rows.length) {
+    runsHost.appendChild(table(
+      ['', 'what', 'measured time', 'energy', 'measured cost', 'of run’s life',
+        'whole run (est.)', 'tokens', 'per 1M tokens'], rows));
+  } else {
+    const div = document.createElement('div');
+    div.className = 'chart-empty';
+    div.textContent = 'Nothing measured yet — the ledger fills as the sampler runs.';
+    runsHost.appendChild(div);
+  }
+
+  const dayHost = $('#cost-daily');
+  dayHost.textContent = '';
+  if ((c.daily || []).length) {
+    dayHost.appendChild(table(['day', 'measured time', 'energy', 'cost'],
+      c.daily.slice().reverse().map((d) => [
+        d.day, fmt.dur(d.seconds), wh(d.wh), money(c, d.money)])));
+  }
+
+  $('#cost-basis').textContent = `Measures the ${c.basis}. `
+    + 'Coverage is how much of a run the sampler actually saw — the portal only records '
+    + 'while it is up, so “whole run” and “per 1M tokens” scale the measured part up on the '
+    + 'assumption that the unwatched hours drew power at the same rate. '
+    + (c.configured ? '' : 'Set a rate in configs/portal.yaml to price any of it.');
 }
 
 export function wireGpu() {
@@ -662,7 +752,7 @@ export async function refresh() {
   if (!state.run) return;
   try {
     const q = state.logFile ? `?lines=400&file=${encodeURIComponent(state.logFile)}` : '?lines=400';
-    const [status, log, runs, sched, gpu, pipeline] = await Promise.all([
+    const [status, log, runs, sched, gpu, pipeline, cost] = await Promise.all([
       api(`/api/run/${encodeURIComponent(state.run)}`),
       api(`/api/run/${encodeURIComponent(state.run)}/log${q}`),
       api('/api/runs'),
@@ -670,6 +760,7 @@ export async function refresh() {
       api(`/api/gpu?window=${encodeURIComponent(state.gpuWindow)}`),
       // never let a pipeline hiccup break the dashboard
       api(`/api/pipeline/${encodeURIComponent(baseOf(state.run))}`).catch(() => null),
+      api('/api/cost').catch(() => null),
     ]);
     state.status = status;
     state.log = log;
@@ -685,6 +776,7 @@ export async function refresh() {
     renderConfig(status);
     renderLog(log);
     renderGpu(gpu);
+    renderCost(cost, gpu);
     renderSchedule(sched);
     renderPipeline(pipeline);
     live(`updated ${new Date().toLocaleTimeString()}`, 'on');

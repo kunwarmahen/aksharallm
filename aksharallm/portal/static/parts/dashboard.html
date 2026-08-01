@@ -196,6 +196,34 @@ before the real run. Skipping is only sane when resuming a config that has alrea
     </div>
   </section>
 
+  <!-- Money. Energy is measured from the same samples as the power chart above; the rate
+       comes from `cost:` in configs/portal.yaml, and until it is set this panel shows
+       kilowatt-hours and says what to fill in rather than inventing a price. -->
+  <section class="panel" aria-label="cost">
+    <div class="panel-head">
+      <h2>Cost</h2>
+      <span class="panel-note" id="cost-status">–</span>
+    </div>
+
+    <div class="tiles cost-tiles">
+      <div class="tile"><div class="tile-label">all time</div>
+        <div class="tile-value" id="c-total">–</div><div class="tile-note" id="c-total-note">–</div></div>
+      <div class="tile"><div class="tile-label">today</div>
+        <div class="tile-value" id="c-today">–</div><div class="tile-note" id="c-today-note">–</div></div>
+      <div class="tile"><div class="tile-label">last 7 days</div>
+        <div class="tile-value" id="c-week">–</div><div class="tile-note" id="c-week-note">–</div></div>
+      <div class="tile"><div class="tile-label">in the GPU window</div>
+        <div class="tile-value" id="c-window">–</div><div class="tile-note" id="c-window-note">–</div></div>
+    </div>
+
+    <div class="scroll-x" id="cost-runs"></div>
+    <details class="cost-days">
+      <summary>by day</summary>
+      <div class="scroll-x" id="cost-daily"></div>
+    </details>
+    <p class="cost-basis" id="cost-basis"></p>
+  </section>
+
   <section class="panel" aria-label="schedule">
     <div class="panel-head">
       <h2>Schedule</h2>

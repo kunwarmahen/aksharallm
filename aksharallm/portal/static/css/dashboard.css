@@ -134,3 +134,13 @@
 .badge-pipe-done    { background: #059669; color: #fff; }
 .stage-running { border-color: #d97706; }
 .stage-done    { border-color: #059669; }
+
+/* Cost panel. Same tile grid as the GPU panel above it — it is the same measurement, one
+   step further along (watts -> watt-hours -> money), and it should not look like a
+   different kind of thing. */
+.cost-tiles { margin-bottom: var(--gap); }
+.cost-tiles .tile { border-color: var(--border); }
+#cost-runs { margin-bottom: .6rem; }
+.cost-days > summary { cursor: pointer; font-size: .85rem; opacity: .8; margin-bottom: .4rem; }
+.cost-days[open] > summary { margin-bottom: .6rem; }
+.cost-basis { font-size: .8rem; opacity: .7; margin: .7rem 0 0; max-width: 70ch; }

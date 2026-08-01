@@ -8,6 +8,7 @@ export const state = {
   schedule: null,
   gpu: null,
   gpuWindow: '3600',
+  cost: null,        // the energy ledger's totals, priced
   log: null,
   logFile: null,     // null = whichever file was written most recently
   timer: null,
