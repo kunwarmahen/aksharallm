@@ -209,6 +209,13 @@ The panels, in plain terms:
   teacher is loaded by Ollama in another process — so it reports the contention and leaves
   the choice to you. Shells out to `python -m aksharallm.synth`. See
   [doc 13](13-synthetic-data.md).
+- **Learn** — the repo as a course ([doc 15](15-learning-path.md)). Thirteen lessons, each
+  one *read the doc → open the file → break it → watch a real pytest node go red*. Lessons
+  unlock as their prerequisites are finished, a locked one says what is missing, and a lesson
+  completes only once its check has been **red and then green** — the check passes on clean
+  code, so breaking it is the exercise. Three buttons hand off to the rest of the portal: the
+  doc, the file (in the Code tab), and the probe (in the Playground). Same lessons and the
+  same progress file as `python -m aksharallm.learn`.
 - **Docs** — this guide, read right in the browser: the sidebar lists every chapter, and the
   reader renders the same `docs/*.md` files **with their diagrams** (the mermaid library is
   vendored locally and loaded only when you open this tab). Same files, no duplication.
@@ -319,7 +326,7 @@ flowchart TD
     charts["charts.js"]
     md["markdown.js"]
     dash["dashboard.js"]
-    tabs["code · docs · quant<br/>lora · evals · synth · play"]
+    tabs["code · docs · quant · lora<br/>evals · synth · learn · play"]
     main["main.js — wire + boot"]
 
     core --> charts & md & router & dash & tabs & main
@@ -490,6 +497,7 @@ python -m aksharallm.portal.runs delete  tiny-moe  # prompts for the name before
 | run a Phase-1-scale experiment | `scripts/experiment.sh tiny-moe` | Dashboard → pick the run → Start |
 | run a finished experiment again | `python -m aksharallm.portal.runs archive tiny-moe`, then start it | Dashboard → **Start fresh…** |
 | throw a run away | `python -m aksharallm.portal.runs delete <run>` | Dashboard → **Delete run…** |
+| learn how any of this works | `python -m aksharallm.learn` | **Learn** tab |
 | …for one evening only | `STOP_IN=3h scripts/phase2.sh` | Dashboard → *this session* → Time |
 | stop it (saving first) | `scripts/stop.sh small-code` | Dashboard → Stop now |
 | stop it in 20 minutes | `scripts/stop.sh small-code --in 20m` | Dashboard → Stop at… |

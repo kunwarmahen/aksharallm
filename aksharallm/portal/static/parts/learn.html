@@ -1,0 +1,63 @@
+<!-- The Learn tab: the repo as a course. A list of lessons on the left, the lesson itself on
+     the right, and a Run the check button that executes a real pytest node — the same one a
+     terminal would run, recorded in the same learning/progress.json. -->
+<div id="view-learn" class="view" hidden>
+  <section class="ln-layout">
+
+    <aside class="panel ln-list">
+      <div class="panel-head">
+        <h2>Lessons</h2>
+        <span class="panel-note" id="ln-count">–</span>
+      </div>
+
+      <div class="ln-progress">
+        <div class="ln-bar"><span id="ln-bar-fill"></span></div>
+        <span id="ln-progress-label">–</span>
+      </div>
+
+      <div id="ln-problems" class="ln-problems" hidden></div>
+
+      <ol id="ln-lessons" class="ln-lessons"></ol>
+
+      <p class="ln-fine">A lesson is complete once its check has gone <strong>red and then
+      green</strong> — because the check passes on a clean checkout, and breaking the code
+      is the exercise. Everything here also works from a terminal:
+      <code>python -m aksharallm.learn</code>.</p>
+    </aside>
+
+    <section class="panel ln-main">
+      <div class="panel-head">
+        <h2 id="ln-title">Pick a lesson</h2>
+        <span class="panel-note" id="ln-state"></span>
+      </div>
+
+      <!-- The three hand-offs: read the doc, open the file, try the model. This row is
+           Phase C of the learning path — reading, running and inspecting in one loop
+           instead of three tabs. -->
+      <div class="ln-jump" id="ln-jump" hidden>
+        <button class="chip" id="ln-open-doc" type="button">Read the doc</button>
+        <span class="ln-files" id="ln-files"></span>
+        <button class="chip" id="ln-open-play" type="button" hidden>Try it in the Playground</button>
+      </div>
+
+      <div id="ln-locked" class="ln-locked" hidden></div>
+
+      <article id="ln-body" class="ln-body markdown">
+        <p class="ln-empty">Choose a lesson on the left. The first one is open; the rest
+        unlock as you finish the ones before them.</p>
+      </article>
+
+      <div class="ln-check" id="ln-check" hidden>
+        <div class="ln-check-head">
+          <button id="ln-run" class="primary" type="button">Run the check</button>
+          <code id="ln-verify"></code>
+          <button id="ln-reset" class="ghost" type="button" title="Forget this lesson's
+progress and do it again from the start">Reset</button>
+        </div>
+        <div id="ln-result" class="ln-result" hidden></div>
+        <pre id="ln-output" class="ln-output" hidden></pre>
+      </div>
+    </section>
+
+  </section>
+</div><!-- /view-learn -->

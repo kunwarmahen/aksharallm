@@ -568,4 +568,18 @@ export function wirePlay() {
   });
 }
 
+/* The Learn tab's third hand-off: a lesson that talks about a probe ("watch a half-trained
+ * model loop") can put you in front of that exact probe, with its prompt already loaded. */
+window.addEventListener('open-probe', async (e) => {
+  const wanted = e.detail;
+  if (!wanted) return;
+  await openPlayTab();
+  const items = ($('#play-presets') || {})._items || [];
+  const hit = items.find((it) => it.key === wanted);
+  if (hit && hit.prompt) {
+    $('#play-prompt').value = hit.prompt;
+    $('#play-prompt').focus();
+  }
+});
+
 registerTab('play', { open: openPlayTab, leave: () => clearTimeout(play.statusTimer) });

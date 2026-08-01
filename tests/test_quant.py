@@ -406,3 +406,28 @@ def test_scheme_round_trips_through_a_dict():
 def test_unsupported_bit_widths_are_rejected(bits):
     with pytest.raises(ValueError, match="bits must be"):
         QuantScheme(bits=bits)
+
+
+def test_the_zero_point_is_always_a_representable_code():
+    """The invariant behind "stretch the range to include zero", which nothing else checked.
+
+    `zeros` is the integer code that stands for 0.0, and it is stored alongside the weights
+    as a code — so it has to be one that exists, i.e. inside [qmin, qmax]. Fitting a group's
+    raw [min, max] does not guarantee that: a group living entirely in [1, 2] wants a
+    zero-point of -15, which is not a 4-bit unsigned code at all.
+
+    Found while writing `docs/lessons/09-quantization.md`, whose exercise is to remove the
+    stretch: nothing in the suite went red, so the lesson would have promised a failure that
+    never came. An invariant with a paragraph of comment and no test is one edit from being
+    silently untrue.
+    """
+    for spec in (dict(bits=4, group_size=64), dict(bits=8, group_size=64),
+                 dict(bits=4, group_size=-1)):
+        scheme = QuantScheme(sym=False, **spec)
+        for w in (torch.rand(4, 128) + 1.0,      # entirely positive, never near zero
+                  -torch.rand(4, 128) - 1.0,     # entirely negative
+                  torch.rand(4, 128) * 0.01 + 5.0):
+            _, _, zeros = quantize_group(w, scheme)
+            assert zeros is not None
+            assert zeros.min() >= scheme.qmin, f"{spec}: zero-point below the code range"
+            assert zeros.max() <= scheme.qmax, f"{spec}: zero-point above the code range"

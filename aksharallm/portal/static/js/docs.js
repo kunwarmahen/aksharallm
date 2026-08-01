@@ -78,6 +78,16 @@ async function loadDoc(path) {
   }
 }
 
+/* The Learn tab hands off here: "read docs/06-inference.md" should land on that page, not
+ * on whatever was open last. An event rather than an import, so the two tabs stay strangers
+ * — docs.js does not need to know the learning path exists. */
+window.addEventListener('open-doc', async (e) => {
+  const path = e.detail;
+  if (!path) return;
+  await openDocsTab();
+  loadDoc(path);
+});
+
 async function openDocsTab() {
   if (docState.loaded) return;
   docState.loaded = true;

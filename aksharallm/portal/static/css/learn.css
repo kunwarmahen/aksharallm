@@ -1,0 +1,97 @@
+/* The Learn tab. Pairs with js/learn.js.
+
+   Two columns: the curriculum on the left (short, always visible, shows where you are), the
+   lesson on the right. The same shape as the Docs tab, because it is the same activity with
+   a check attached. */
+
+.ln-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
+  gap: var(--gap);
+  padding: var(--gap) var(--page-pad);
+  max-width: var(--page-max); margin: 0 auto;
+  align-items: start;
+}
+.ln-layout > .panel {
+  height: calc(100vh - 150px); min-height: 420px;
+  display: flex; flex-direction: column; overflow: hidden; min-width: 0;
+}
+.ln-list { overflow-y: auto; }
+.ln-main { overflow-y: auto; gap: 10px; }
+.ln-fine { font-size: 11px; color: var(--ink-muted); line-height: 1.55; margin: 12px 0 0; }
+.ln-fine code { font-family: var(--mono); font-size: 11px; }
+
+/* ---- progress ------------------------------------------------------------------------ */
+.ln-progress { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--ink-muted); margin: 4px 0 10px; }
+.ln-bar { flex: 1; height: 4px; background: var(--wash); border-radius: 999px; overflow: hidden; }
+.ln-bar > span { display: block; height: 100%; width: 0; background: var(--good); transition: width .3s ease; }
+
+/* A lesson that has drifted from the code is the one failure this tab must not hide. */
+.ln-problems {
+  border: 1px solid var(--serious); border-radius: var(--radius); padding: 8px 10px;
+  font-size: 11px; line-height: 1.5; color: var(--serious); margin-bottom: 10px;
+}
+
+/* ---- the curriculum ------------------------------------------------------------------- */
+.ln-lessons { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.ln-lesson {
+  display: grid; grid-template-columns: 20px 1fr; gap: 2px 8px; align-items: start;
+  padding: 7px 6px; border-radius: var(--radius); cursor: pointer; border: 1px solid transparent;
+}
+.ln-lesson:hover { background: var(--wash); }
+.ln-lesson.on { background: var(--wash); border-color: var(--axis); }
+.ln-lesson.locked { cursor: not-allowed; opacity: .55; }
+.ln-mark { font-family: var(--mono); font-size: 12px; color: var(--ink-muted); }
+.ln-lesson.done .ln-mark { color: var(--good); }
+.ln-lesson.red .ln-mark { color: var(--serious); }
+.ln-name { font-size: 13px; color: var(--ink); line-height: 1.35; }
+.ln-sub { grid-column: 2; font-size: 11px; color: var(--ink-muted); line-height: 1.4; }
+
+/* ---- the hand-offs --------------------------------------------------------------------- */
+.ln-jump { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.ln-files { display: flex; gap: 6px; flex-wrap: wrap; }
+.ln-jump .chip {
+  font-size: 11px; padding: 3px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--ink-muted);
+}
+.ln-jump .chip:hover { color: var(--ink); border-color: var(--axis); }
+.ln-jump .chip.file { font-family: var(--mono); }
+
+.ln-locked {
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px;
+  font-size: 12px; color: var(--ink-muted); line-height: 1.5;
+}
+
+/* ---- the lesson body -------------------------------------------------------------------- */
+.ln-body { min-height: 120px; }
+.ln-empty { color: var(--ink-muted); font-size: 13px; line-height: 1.6; }
+
+/* ---- the check --------------------------------------------------------------------------- */
+.ln-check { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 4px; }
+.ln-check-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.ln-check-head code { font-family: var(--mono); font-size: 11px; color: var(--ink-muted); word-break: break-all; }
+.ln-check-head .ghost { margin-left: auto; }
+.ln-result {
+  margin-top: 10px; padding: 9px 11px; border-radius: var(--radius); font-size: 12px;
+  line-height: 1.5; border: 1px solid var(--border);
+}
+/* Red is not an error state here — it is the middle of the exercise, and the colour says
+   "expected" rather than "wrong". */
+.ln-result.pass { border-color: var(--good); }
+.ln-result.fail { border-color: var(--serious); }
+.ln-result .ln-verdict { font-weight: 600; }
+.ln-result.pass .ln-verdict { color: var(--good); }
+.ln-result.fail .ln-verdict { color: var(--serious); }
+.ln-result .ln-summary { font-family: var(--mono); font-size: 11px; display: block; margin: 4px 0; word-break: break-word; }
+.ln-output {
+  font-family: var(--mono); font-size: 11px; line-height: 1.5; margin: 8px 0 0;
+  background: var(--plane); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 10px; overflow: auto; max-height: 260px; white-space: pre-wrap; word-break: break-word;
+}
+
+@media (max-width: 900px) {
+  .ln-layout { grid-template-columns: 1fr; }
+  .ln-layout > .panel { height: auto; min-height: 0; max-height: none; overflow: visible; }
+  .ln-list, .ln-main { overflow-y: visible; }
+  .ln-list { max-height: none; }
+}

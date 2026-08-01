@@ -414,3 +414,42 @@ def test_every_judge_prompt_has_a_rubric():
     for item in suites.JUDGE_PROMPTS:
         assert item.rubric and len(item.rubric) > 20, item.id
         assert item.group
+
+
+def test_a_real_bpe_merge_across_the_boundary_does_not_shift_the_score(tiny_model, tmp_path):
+    """The counting rule, on a tokenizer that actually merges.
+
+    Every other test in this file uses `FakeTokenizer`, which is one byte per token — so
+    `encode(ctx + cont)` and `encode(ctx) + encode(cont)` are identical for it, and neither
+    implementation of `_encode_pair` can be told from the other. That is fine for the rest of
+    the scoring maths and useless for *this* property, which only exists because real BPE
+    merges across the join.
+
+    So this trains a small real tokenizer and picks a pair where the merge demonstrably
+    happens. The first assertion is what makes the test able to fail at all: if the joined
+    encoding ever stopped differing from the separate one, everything below would pass for
+    the wrong reason.
+    """
+    from aksharallm.tokenizer.tokenizer import Tokenizer, train_bpe
+
+    corpus = ["The quick brown fox jumps over the lazy dog again and again.",
+              "She opened the door and saw a garden full of bright red flowers.",
+              "He said hello to his friend and they walked to the park together."] * 60
+    path = tmp_path / "tok.json"
+    train_bpe(iter(corpus), vocab_size=512, out_path=path, min_frequency=1)
+    tok = Tokenizer(path)
+
+    context, continuation = "the la", "zy dog"
+    joined = tok.encode(context + continuation)
+    separate = tok.encode(context) + tok.encode(continuation)
+    assert joined != separate, "this pair no longer merges — pick another or the test is moot"
+
+    ids, n_cont = scoring._encode_pair(tok, context, continuation, max_len=64)
+
+    # The continuation is scored as itself: its ids are exactly what it encodes to alone,
+    # and they are the final n_cont ids of the pair.
+    assert n_cont == len(tok.encode(continuation))
+    assert ids[-n_cont:] == tok.encode(continuation)
+    # And the naive rule -- encode the joined string, count backwards -- would have taken a
+    # different number of tokens, which is the bug this guards.
+    assert n_cont != len(joined) - len(tok.encode(context, bos=True)) + 1

@@ -51,6 +51,7 @@ from .gpu import Sampler, snapshot
 from .pipeline import Pipeline
 from .finetune import FinetuneJobs
 from .quantize import QuantJobs
+from .learn import Learn
 from .synth import SynthJobs
 from .runs import PHASE_LAUNCHING, PHASE_TRAINING, LAUNCHERS, RunError, RunStore, repo_root
 from .schedule import Rule, Schedule, Scheduler, parse_days
@@ -80,7 +81,7 @@ class Handler(BaseHTTPRequestHandler):
     def __init__(self, *args, store: RunStore, scheduler: Scheduler, sampler: Sampler,
                  source: SourceTree, explain: ExplainConfig, playground: Playground,
                  pipeline: Pipeline, quant: QuantJobs, finetune: FinetuneJobs,
-                 evals: EvalJobs, synth: SynthJobs, cost: CostConfig,
+                 evals: EvalJobs, synth: SynthJobs, learn: Learn, cost: CostConfig,
                  quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
@@ -93,6 +94,7 @@ class Handler(BaseHTTPRequestHandler):
         self.finetune = finetune
         self.evals = evals
         self.synth = synth
+        self.learn = learn
         self.cost = cost
         self.quiet = quiet
         super().__init__(*args, **kw)
@@ -250,6 +252,15 @@ class Handler(BaseHTTPRequestHandler):
                         seconds=self._int(data, "seconds")))
                 if parts[2] == "export":
                     return self._json(self.synth.export(str(data.get("name") or "")))
+            # the learning path: /api/learn/<check|reset>
+            if len(parts) == 3 and parts[:2] == ["api", "learn"]:
+                if parts[2] == "check":
+                    # Inline rather than detached: one pytest node is a couple of seconds,
+                    # and a job to poll would be more machinery than the work.
+                    return self._json(self.learn.check(
+                        str(data.get("id") or ""), force=bool(data.get("force"))))
+                if parts[2] == "reset":
+                    return self._json(self.learn.reset(str(data.get("id") or "") or None))
             # post-training: /api/pipeline/<base>/<stage>/<start|stop>
             if len(parts) == 5 and parts[:2] == ["api", "pipeline"]:
                 base, stage, action = parts[2], parts[3], parts[4]
@@ -312,6 +323,13 @@ class Handler(BaseHTTPRequestHandler):
             if not name:
                 raise RunError("result needs ?file=<name>.json")
             return self._json(self.evals.result(name))
+        if parts == ["learn"]:
+            return self._json(self.learn.status())
+        if parts == ["learn", "lesson"]:
+            lesson_id = (query.get("id") or [""])[0]
+            if not lesson_id:
+                raise RunError("lesson needs ?id=<lesson>")
+            return self._json(self.learn.lesson(lesson_id))
         if parts == ["synth"]:
             lines = int((query.get("lines") or [200])[0])
             return self._json(self.synth.status(tail=max(0, lines)))
@@ -698,10 +716,11 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
     finetune = FinetuneJobs(store.root)
     evals = EvalJobs(store.root)
     synth = SynthJobs(store.root)
+    learn = Learn(store.root)
     handler = partial(Handler, store=store, scheduler=scheduler, sampler=sampler,
                       source=source, explain=explain, playground=playground,
                       pipeline=pipeline, quant=quant, finetune=finetune, evals=evals,
-                      synth=synth, cost=cost, quiet=quiet)
+                      synth=synth, learn=learn, cost=cost, quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True

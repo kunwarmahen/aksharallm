@@ -11,6 +11,7 @@ import { wireQuantTab } from './quantize.js';
 import { wireLoraTab } from './lora.js';
 import { wireEvalTab, drawTrend } from './evals.js';
 import { wireSynthTab } from './synth.js';
+import { wireLearnTab } from './learn.js';
 import { wirePlay } from './play.js';
 import './docs.js';
 
@@ -23,6 +24,7 @@ function wire() {
   wireLoraTab();
   wireEvalTab();
   wireSynthTab();
+  wireLearnTab();
   boundPicker.wire();
   for (const tab of $$('.tab')) {
     tab.addEventListener('click', () => showView(tab.dataset.view));

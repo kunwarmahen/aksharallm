@@ -154,6 +154,21 @@ code and math, and it reuses the same sandbox we built to *evaluate* the model a
 
 ---
 
+## Learning it by breaking it
+
+Reading the chapters that follow is one way through this project. There is another, and it
+is better: [doc 15](15-learning-path.md) turns the repo into thirteen lessons that each end
+in *breaking real code* and watching a real test go red. Most of the exercises are bugs that
+actually happened here — a causal mask applied during single-token decoding masks away the
+entire KV cache, and the model trains perfectly while generating garbage.
+
+```bash
+python -m aksharallm.learn        # or the portal's Learn tab
+```
+
+A lesson only counts as done once its check has gone red **and then** green, because the
+check passes on a clean checkout and breaking it is the exercise.
+
 ## What we're realistically going to get
 
 Be honest about scale. Frontier models are trained on ~10²⁵ FLOPs across tens of thousands

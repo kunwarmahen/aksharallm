@@ -22,3 +22,4 @@ PLAN.md
 train_*.log
 # the local training schedule (your evenings, not the project's)
 /schedule.json
+/learning/

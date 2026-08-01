@@ -101,6 +101,7 @@ Read these in order. They assume no prior knowledge of machine learning.
 | 10 | [Quantization](docs/10-quantization.md) | Storing weights in 4 bits: group scales, RTN/GPTQ/AWQ/QAT, **NF4**, a fused Triton kernel, and why smaller isn't faster |
 | 11 | [LoRA & QLoRA](docs/11-lora.md) | Fine-tuning without training the model: low-rank adapters, a 4-bit frozen base, one base + many skills, and a free DPO reference model |
 | 12 | [Evaluation](docs/12-eval.md) | Is the model actually any good? MMLU/ARC/HellaSwag/PIQA scored by log-likelihood, GSM8K, HumanEval executed for real, an LLM-judge — and why 25% on MMLU is not a failure |
+| 15 | [The learning path](docs/15-learning-path.md) | The repo as a course: thirteen lessons that each end in breaking real code and watching a real test go red — and why a lesson only counts once the check has been red *and then* green |
 | 14 | [Mixture of experts](docs/14-moe.md) | More parameters than you compute with: a router, N experts, top-k per token — the load-balancing loss, why upcycling is an identity at init, and the collapse that is invisible in the loss curve |
 | 13 | [Synthetic data](docs/13-synthetic-data.md) | Making the training set with a local teacher instead of downloading it: a seed grid instead of a temperature, tests that are **executed twice**, near-duplicate detection, and why the rejection tally is the quality signal |
 
@@ -155,12 +156,17 @@ aksharallm/
 │   │   ├── explain.py        source browser + a local Ollama model that explains it
 │   │   ├── evals.py          benchmark jobs; shells out to `python -m aksharallm.eval`
 │   │   ├── synth.py          generation jobs; shells out to `python -m aksharallm.synth`
+│   │   ├── learn.py          the Learn tab: lessons, gating, and running their checks
 │   │   ├── server.py         stdlib http.server + a small JSON API
 │   │   └── static/           the client: no build step, no framework, no dependencies
 │   │       ├── index.html        the shell; server fills its <!--#include --> markers
 │   │       ├── parts/<tab>.html  markup, one file per view
 │   │       ├── js/<tab>.js       ES modules, one per view (+ core/state/router/charts)
 │   │       └── css/<tab>.css     rules, one per view (+ base/chrome/controls/narrow)
+│   ├── learn/            the learning path: lessons, gating, checks — see docs/15
+│   │   ├── lessons.py        frontmatter, the prereq graph, and the anti-rot validation
+│   │   ├── progress.py       learning/progress.json + the red-then-green completion rule
+│   │   └── check.py          run one pytest node id, report what it said
 │   ├── synth/            generating training data with a local teacher — see docs/13
 │   │   ├── prompts.py        the seed grid: 480 / 1,296 structurally different prompts
 │   │   ├── recipes.py        python / chat / preference: prompt, parser, export
@@ -184,6 +190,7 @@ aksharallm/
 │       ├── history.py        every generation + the training state that produced it
 │       ├── playground.py     the four above in the order both front ends use
 │       └── cli.py            completion / chat / code, probes, tasks, comparisons
+├── docs/lessons/         the course: one markdown file per lesson, with frontmatter
 ├── scripts/
 │   ├── phase1.sh         Phase 1 end to end (data -> pretrain -> generate), ~30 min
 │   ├── phase2.sh         Phase 2: pre-flight, build data, smoke test, background launch
