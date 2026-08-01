@@ -441,6 +441,23 @@ Note that Chrome's `--window-size` will not go below about 485px and so cannot t
 
 ---
 
+### "It stopped 20 steps early" — it didn't
+
+A run of 8,000 steps with `log_every: 20` writes its last line at step **7,980**, and steps
+are 0-indexed, so the final step is 7,999. Nineteen steps are trained after that last line.
+The trainer's `session_end` record carries the true number (`last_step`), and the dashboard
+reads *that* to decide whether a run is finished — otherwise a completed run reads as 20
+steps short of its budget forever.
+
+Since 2026-08-01 the final step also gets a log line of its own, the way a bounded stop
+always has, so new runs end their logs where they end.
+
+A run that has spent its budget says **"Budget spent"** on the Start button instead of
+offering a resume: starting it again is harmless (the trainer sees there is nothing to do and
+exits without touching the checkpoint) but it runs a full pre-flight to get there, and "ran 0
+steps" after forty seconds of tests looks exactly like a launch that failed. To keep training
+one, raise `train.max_steps` in its config.
+
 ## What runs where — a cheat sheet
 
 | you want to… | command | portal |

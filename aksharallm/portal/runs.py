@@ -282,9 +282,23 @@ class RunStore:
         cfg = self._config_summary(run)
         tokens_per_step = last["tokens_per_step"] or cfg.get("tokens_per_step")
 
+        # A run that has trained its whole budget. Starting it again is not harmful — the
+        # trainer resumes, sees there is nothing to do and exits without touching the
+        # checkpoint — but it runs a full pre-flight (tests, data checks, a smoke test) to
+        # get there, so from the outside it looks like a launch that silently failed. Say so
+        # instead of offering the button.
+        # `trained_to` rather than `step`: the last *logged* step lags the last *trained*
+        # one by up to log_every, so a completed 8,000-step run whose log ends at 7,980
+        # would otherwise read as 20 steps short of its budget forever.
+        reached = last.get("trained_to")
+        if reached is None:
+            reached = step
+        finished = bool(max_steps and reached is not None and reached + 1 >= max_steps)
+
         return {
             "run": run,
             "phase": phase,
+            "finished": finished,
             "pid": pid,
             "launcher": launcher,
             "stop": stop,
@@ -301,12 +315,16 @@ class RunStore:
             "series": runlog.series(records, max_points=max_points),
             "checkpoints": self._checkpoints(run),
             "logs": self._logs(run),
-            "can_start": run in LAUNCHERS and phase == PHASE_IDLE,
+            "can_start": run in LAUNCHERS and phase == PHASE_IDLE and not finished,
             # A pre-flight is stoppable too — that aborts the launch. Bounded stops are not:
             # there is no step count to count from until the trainer exists.
             "can_stop": phase in (PHASE_TRAINING, PHASE_STOPPING, PHASE_LAUNCHING),
             "can_bound": phase in (PHASE_TRAINING, PHASE_STOPPING),
-            "start_hint": (None if run in LAUNCHERS else
+            "start_hint": (
+                (f"'{run}' has trained its whole budget: {max_steps:,} of {max_steps:,} "
+                 f"steps. To train it further, raise train.max_steps in configs/{run}.yaml."
+                 ) if finished and run in LAUNCHERS else
+                None if run in LAUNCHERS else
                            f"no launcher for '{run}' — the portal can start "
                            f"{', '.join(sorted(LAUNCHERS))} (scripts/phase2.sh for the base "
                            "model, scripts/experiment.sh for the Phase-1 experiments); "

@@ -43,7 +43,10 @@ function renderControls(s) {
   $('#btn-stop-at').disabled = !s.can_bound || state.busy;
   $('#btn-stop').textContent = s.phase === 'launching' ? 'Abort launch' : 'Stop now';
   $('#btn-cancel-stop').disabled = !s.stop || state.busy;
-  $('#btn-start').textContent = s.step == null ? 'Start run' : `Resume from ${fmt.int(s.step + 1)}`;
+  /* A finished run says so on the button rather than offering a resume that would run a
+   * full pre-flight and then exit having done nothing. */
+  $('#btn-start').textContent = s.finished ? 'Budget spent'
+    : s.step == null ? 'Start run' : `Resume from ${fmt.int(s.step + 1)}`;
   $('#btn-budget').disabled = !s.can_start || state.busy;
   renderSessionBudget();
 }
@@ -68,6 +71,8 @@ function renderProgress(s) {
   $('#hero-sub').textContent = s.phase === 'launching'
     ? `pre-flight (${(s.launcher && s.launcher.stage) || '?'}) — tests, data check and a `
       + '50-step smoke test run before training starts'
+    : s.finished
+    ? `finished — all ${fmt.int(s.max_steps)} steps trained; raise train.max_steps to go further`
     : s.step == null
     ? (s.can_start ? 'ready to start' : 'nothing logged for this run yet')
     : [
@@ -311,7 +316,11 @@ function renderConfig(s) {
   add('cadence', c.eval_every == null ? null
     : `eval every ${fmt.int(c.eval_every)} · checkpoint every ${fmt.int(c.ckpt_every)} steps`);
   add('data', (c.sources || []).filter(Boolean).length ? code((c.sources || []).join('  ')) : null);
-  add('launch', s.can_start || s.pid ? code(`scripts/phase2.sh   (run ${s.run})`) : null);
+  /* Which launcher this run actually uses — there are two now, and naming the wrong one
+   * sends someone to a script that does not know how to build their data. */
+  add('launch', s.can_start || s.pid || s.finished
+    ? code(s.run.startsWith('tiny') ? `scripts/experiment.sh ${s.run}`
+      : `scripts/phase2.sh   (run ${s.run})`) : null);
 
   const rows = (s.checkpoints || []).map((k) => [
     k.name, fmt.bytes(k.size), fmt.clock(k.mtime), fmt.ago(k.mtime)]);

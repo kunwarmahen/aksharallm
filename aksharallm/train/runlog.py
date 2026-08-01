@@ -229,5 +229,12 @@ def latest(records: Iterable[dict]) -> dict:
         "tokens_per_step": starts[-1].get("tokens_per_step") if starts else None,
         "session_start": starts[-1] if starts else None,
         "session_end": ends[-1] if ends else None,
+        # The furthest step this run has actually trained, which is NOT the last logged
+        # step: with log_every=20 a run of 8,000 steps writes its last line at 7,980 and
+        # then trains nineteen more. The trainer records the true number when it exits, so
+        # trust that over the log line whenever it is higher.
+        "trained_to": max([r["last_step"] for r in ends if r.get("last_step") is not None]
+                          + ([last["step"]] if last.get("step") is not None else []),
+                          default=None),
         "n_sessions": len(starts),
     }

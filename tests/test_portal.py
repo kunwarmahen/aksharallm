@@ -845,3 +845,78 @@ def test_a_second_portal_does_not_steal_the_pid_file(repo):
     # The owner still cleans up after itself.
     wait_for(lambda: not pid_file.exists(), timeout=10)
     assert not pid_file.exists()
+
+
+# ---- a run that has spent its budget ---------------------------------------------------
+
+def test_a_completed_run_is_not_offered_a_start_button(tmp_path, monkeypatch):
+    """The wart this fixes: pressing Start on a finished run ran a full pre-flight — tests,
+    data check, smoke test — and then a trainer that exited having done nothing, which from
+    the outside is indistinguishable from a launch that silently failed."""
+    from aksharallm.portal import runs as runs_mod
+
+    (tmp_path / "checkpoints" / "demo").mkdir(parents=True)
+    log = tmp_path / "checkpoints" / "demo" / "train_log.jsonl"
+    log.write_text("\n".join([
+        json.dumps({"event": "session_start", "max_steps": 100, "start_step": 0}),
+        json.dumps({"step": 80, "loss": 1.0, "ema": 1.0}),
+        json.dumps({"event": "session_end", "reason": "max_steps", "last_step": 99}),
+    ]) + "\n")
+    monkeypatch.setitem(runs_mod.LAUNCHERS, "demo", {})
+
+    store = runs_mod.RunStore(tmp_path)
+    st = store.status("demo")
+    assert st["finished"] is True
+    assert st["can_start"] is False
+    assert "whole budget" in st["start_hint"]
+
+
+def test_the_last_logged_step_is_not_the_last_trained_step(tmp_path, monkeypatch):
+    """With log_every=20 a run of 8,000 steps writes its final line at 7,980 and then trains
+    nineteen more. `trained_to` comes from the trainer's own exit record, which is why a
+    finished run does not read as 20 steps short of its budget forever."""
+    from aksharallm.portal import runs as runs_mod
+
+    (tmp_path / "checkpoints" / "demo").mkdir(parents=True)
+    (tmp_path / "checkpoints" / "demo" / "train_log.jsonl").write_text("\n".join([
+        json.dumps({"event": "session_start", "max_steps": 8000, "start_step": 0}),
+        json.dumps({"step": 7980, "loss": 1.4, "ema": 1.4}),
+        json.dumps({"event": "session_end", "reason": "max_steps", "last_step": 7999}),
+    ]) + "\n")
+    monkeypatch.setitem(runs_mod.LAUNCHERS, "demo", {})
+
+    st = runs_mod.RunStore(tmp_path).status("demo")
+    assert st["step"] == 7980, "the tile still shows what was logged"
+    assert st["last"]["trained_to"] == 7999
+    assert st["finished"] is True
+
+
+def test_a_run_with_steps_left_still_starts(tmp_path, monkeypatch):
+    from aksharallm.portal import runs as runs_mod
+
+    (tmp_path / "checkpoints" / "demo").mkdir(parents=True)
+    (tmp_path / "checkpoints" / "demo" / "train_log.jsonl").write_text("\n".join([
+        json.dumps({"event": "session_start", "max_steps": 8000, "start_step": 0}),
+        json.dumps({"step": 4000, "loss": 1.9, "ema": 1.9}),
+        json.dumps({"event": "session_end", "reason": "STOP file", "last_step": 4000}),
+    ]) + "\n")
+    monkeypatch.setitem(runs_mod.LAUNCHERS, "demo", {})
+
+    st = runs_mod.RunStore(tmp_path).status("demo")
+    assert st["finished"] is False and st["can_start"] is True
+
+
+def test_a_log_without_session_markers_falls_back_to_the_logged_step(tmp_path, monkeypatch):
+    """Runs from before session markers existed have no exit record. Falling back to the
+    last logged step is the conservative answer: it may offer a Start that turns out to have
+    nothing to do, and the launcher says so in a second rather than pretending."""
+    from aksharallm.portal import runs as runs_mod
+
+    (tmp_path / "checkpoints" / "demo").mkdir(parents=True)
+    (tmp_path / "checkpoints" / "demo" / "train_log.jsonl").write_text(
+        json.dumps({"step": 7980, "loss": 1.4, "ema": 1.4}) + "\n")
+    monkeypatch.setitem(runs_mod.LAUNCHERS, "demo", {})
+
+    st = runs_mod.RunStore(tmp_path).status("demo")
+    assert st["last"]["trained_to"] == 7980
+    assert st["finished"] is False

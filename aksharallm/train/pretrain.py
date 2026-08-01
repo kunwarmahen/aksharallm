@@ -324,6 +324,21 @@ def main():
                 max_steps=cfg.train.max_steps, stop_at=stop_at, stop_by=stop_by,
                 tokens_per_step=tokens_per_step)
 
+    if start_step >= cfg.train.max_steps:
+        # Resuming a finished run. It is not an error -- the checkpoint is intact and this
+        # exits without touching it -- but "ran 0 steps" after a full pre-flight looks like
+        # a launch that failed, so say which of the two it is.
+        print(f"\nnothing to do: this run has already trained its full budget of "
+              f"{cfg.train.max_steps:,} steps (the last was {cfg.train.max_steps - 1:,}).")
+        print("to keep training it, raise train.max_steps:\n"
+              f"    python -m aksharallm.train.pretrain {args.config} "
+              f"-o train.max_steps={cfg.train.max_steps * 2}")
+        log_session("session_end", reason="already_complete",
+                    last_step=cfg.train.max_steps - 1, steps=0,
+                    elapsed=time.time() - run_t0, final_val_loss=best_val)
+        logf.close()
+        return
+
     for step in range(start_step, cfg.train.max_steps):
         lr = get_lr(step, base_lr=cfg.optim.lr, warmup_steps=cfg.optim.warmup_steps,
                     max_steps=cfg.train.max_steps, min_lr_ratio=cfg.optim.min_lr_ratio,
@@ -377,7 +392,12 @@ def main():
             why = f"reached this session's {fmt_dur(cfg.train.stop_after_s)} time budget"
 
         # ---- logging --------------------------------------------------------------
-        if step % cfg.train.log_every == 0 or why:
+        # `step == max_steps - 1` is there so a run that finishes *normally* gets a line for
+        # its final step, the way a bounded stop always has. Without it the last line lands
+        # on the last multiple of log_every -- a run of 8,000 steps ends its log at 7,980 and
+        # reads, on a dashboard, as though it stopped 20 steps early.
+        if (cfg.train.log_every and step % cfg.train.log_every == 0) or why \
+                or step == cfg.train.max_steps - 1:
             torch.cuda.synchronize() if device == "cuda" else None
             dt = time.time() - t0
             t0 = time.time()
@@ -435,7 +455,7 @@ def main():
                 wandb.log(rec, step=step)
 
         # ---- eval -----------------------------------------------------------------
-        if step > 0 and step % cfg.train.eval_every == 0:
+        if step > 0 and cfg.train.eval_every and step % cfg.train.eval_every == 0:
             te = time.time()
             val_loss = evaluate(model, val_ds, cfg.train.batch_size,
                                 cfg.train.eval_batches, ctx)
@@ -452,11 +472,13 @@ def main():
                 save_checkpoint(out_dir / "ckpt_best.pt", model, optimizer, cfg, step, best_val)
             t0 = time.time()  # don't bill eval time to the next step's throughput
 
-        if step > 0 and step % cfg.train.sample_every == 0:
+        # `0` reads as "never" for every one of these cadences, which is what a person
+        # writing `sample_every: 0` means. It used to be a ZeroDivisionError on step 1.
+        if step > 0 and cfg.train.sample_every and step % cfg.train.sample_every == 0:
             print("  >> sample:", repr(sample_text(model, tok, "Once upon a time", 80, device)))
             t0 = time.time()
 
-        if step > 0 and step % cfg.train.ckpt_every == 0:
+        if step > 0 and cfg.train.ckpt_every and step % cfg.train.ckpt_every == 0:
             tc = time.time()
             save_checkpoint(out_dir / "ckpt_last.pt", model, optimizer, cfg, step, best_val)
             print(f"  >> saved ckpt_last.pt at step {step}  ({fmt_dur(time.time() - tc)})")

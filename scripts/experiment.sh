@@ -118,6 +118,29 @@ for other in checkpoints/*/train.pid; do
     fi
 done
 
+# Is there anything left to train? Checked BEFORE the test suite, because the alternative
+# is 40 seconds of pre-flight followed by a trainer that exits having done nothing -- which
+# reads as a launch that silently failed. Costs about a second: the checkpoint's step is in
+# its header and `mmap=True` never touches the weights.
+DONE=$($PY - "$CFG" "$RUN_DIR/ckpt_last.pt" <<'EOF'
+import sys, yaml, pathlib
+cfg = yaml.safe_load(open(sys.argv[1])) or {}
+budget = (cfg.get("train") or {}).get("max_steps")
+path = pathlib.Path(sys.argv[2])
+if budget and path.is_file():
+    import torch
+    step = torch.load(path, map_location="cpu", weights_only=False, mmap=True).get("step")
+    if step is not None and step + 1 >= budget:
+        print(f"{step + 1}/{budget}")
+EOF
+)
+if [ -n "$DONE" ]; then
+    echo "    '$RUN' has already trained its whole budget ($DONE steps)."
+    echo "    To train it further, raise train.max_steps in $CFG."
+    echo "    Nothing to do; not starting."
+    exit 0
+fi
+
 $PY -m pytest tests/ -q || { echo "tests failed -- fix before spending GPU hours" >&2; exit 1; }
 
 # ---- data -------------------------------------------------------------------------------

@@ -345,3 +345,114 @@ def test_lora_reports_the_experts_it_cannot_reach():
     skipped = " ".join(f"{n} {why}" for n, why in report.skipped)
     assert "experts" in skipped and "router" in skipped
     assert report.adapted, "attention should still be adapted"
+
+
+# ---- the final step gets a log line ------------------------------------------------------
+
+def test_a_completed_run_logs_its_final_step(tmp_path):
+    """A run of N steps used to end its log at the last multiple of `log_every` — 7,980 of
+    8,000 — and read on a dashboard as though it had stopped 20 steps early. A bounded stop
+    always logged its final step; a natural finish now does too.
+
+    This drives the real trainer end to end, because the rule lives in one condition inside
+    the training loop and asserting it any other way would be asserting a copy of it.
+    """
+    import json
+    import subprocess
+    import sys
+
+    import numpy as np
+
+    from aksharallm.tokenizer.tokenizer import train_bpe
+
+    corpus = ["the quick brown fox jumps over the lazy dog and runs away home. "] * 200
+    tok_path = tmp_path / "tok.json"
+    train_bpe(iter(corpus), vocab_size=300, out_path=tok_path, min_frequency=1)
+
+    rng = np.random.default_rng(0)
+    rng.integers(0, 300, 20000, dtype=np.uint16).tofile(tmp_path / "train.bin")
+    rng.integers(0, 300, 4000, dtype=np.uint16).tofile(tmp_path / "val.bin")
+
+    cfg = tmp_path / "t.yaml"
+    cfg.write_text(f"""
+name: t
+model:
+  vocab_size: 300
+  d_model: 32
+  n_layers: 2
+  n_heads: 4
+  max_seq_len: 32
+data:
+  train_bin: {tmp_path}/train.bin
+  val_bin: {tmp_path}/val.bin
+  tokenizer: {tok_path}
+train:
+  out_dir: {tmp_path}/out
+  batch_size: 2
+  grad_accum: 1
+  seq_len: 16
+  max_steps: 7
+  log_every: 5
+  eval_every: 100
+  eval_batches: 2
+  ckpt_every: 100
+  sample_every: 0
+  compile: false
+""")
+    done = subprocess.run([sys.executable, "-m", "aksharallm.train.pretrain", str(cfg)],
+                          capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr[-2000:]
+
+    lines = (tmp_path / "out" / "train_log.jsonl").read_text().splitlines()
+    steps = [json.loads(l)["step"] for l in lines if '"loss"' in l and '"val_loss"' not in l]
+    # max_steps=7 means steps 0..6, and log_every=5 would otherwise stop the log at 5.
+    assert steps[-1] == 6, f"the final step must be logged, got {steps}"
+
+    ends = [json.loads(l) for l in lines if '"session_end"' in l]
+    assert ends and ends[-1]["last_step"] == 6
+
+
+def test_restarting_a_finished_run_does_nothing_and_says_so(tmp_path):
+    """Pressing Start on a run that has spent its budget used to produce a full pre-flight
+    followed by "ran 0 steps", which reads as a launch that failed."""
+    import subprocess
+    import sys
+
+    import numpy as np
+
+    from aksharallm.tokenizer.tokenizer import train_bpe
+
+    corpus = ["the quick brown fox jumps over the lazy dog and runs away home. "] * 200
+    train_bpe(iter(corpus), vocab_size=300, out_path=tmp_path / "tok.json", min_frequency=1)
+    rng = np.random.default_rng(0)
+    rng.integers(0, 300, 20000, dtype=np.uint16).tofile(tmp_path / "train.bin")
+    rng.integers(0, 300, 4000, dtype=np.uint16).tofile(tmp_path / "val.bin")
+
+    cfg = tmp_path / "t.yaml"
+    cfg.write_text(f"""
+name: t
+model: {{vocab_size: 300, d_model: 32, n_layers: 2, n_heads: 4, max_seq_len: 32}}
+data:
+  train_bin: {tmp_path}/train.bin
+  val_bin: {tmp_path}/val.bin
+  tokenizer: {tmp_path}/tok.json
+train:
+  out_dir: {tmp_path}/out
+  batch_size: 2
+  grad_accum: 1
+  seq_len: 16
+  max_steps: 4
+  log_every: 2
+  eval_every: 100
+  eval_batches: 2
+  ckpt_every: 2
+  sample_every: 0
+  compile: false
+  resume: auto
+""")
+    run = [sys.executable, "-m", "aksharallm.train.pretrain", str(cfg)]
+    assert subprocess.run(run, capture_output=True, text=True).returncode == 0
+    again = subprocess.run(run, capture_output=True, text=True)
+    assert again.returncode == 0
+    assert "nothing to do" in again.stdout
+    assert "raise train.max_steps" in again.stdout
