@@ -17,7 +17,13 @@
   display: flex; flex-direction: column; overflow: hidden; min-width: 0;
 }
 .ln-list { overflow-y: auto; }
-.ln-main { overflow-y: auto; gap: 10px; }
+
+/* Only ONE thing in this panel scrolls: the lesson. The action row is pinned to the bottom,
+   because a button you have to scroll a 400-line lesson to reach is a button people miss —
+   and letting the whole panel scroll instead squashed the row into the text underneath it. */
+.ln-main { overflow: hidden; gap: 10px; }
+.ln-main > .panel-head, .ln-jump, .ln-locked, .ln-check { flex: none; }
+.ln-body { flex: 1 1 auto; overflow-y: auto; min-height: 0; padding-right: 4px; }
 .ln-fine { font-size: 11px; color: var(--ink-muted); line-height: 1.55; margin: 12px 0 0; }
 .ln-fine code { font-family: var(--mono); font-size: 11px; }
 
@@ -35,13 +41,16 @@
 /* ---- the curriculum ------------------------------------------------------------------- */
 .ln-lessons { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
 .ln-lesson {
-  display: grid; grid-template-columns: 20px 1fr; gap: 2px 8px; align-items: start;
+  display: grid; grid-template-columns: 24px 1fr; gap: 2px 8px; align-items: start;
   padding: 7px 6px; border-radius: var(--radius); cursor: pointer; border: 1px solid transparent;
 }
 .ln-lesson:hover { background: var(--wash); }
 .ln-lesson.on { background: var(--wash); border-color: var(--axis); }
 .ln-lesson.locked { cursor: not-allowed; opacity: .55; }
-.ln-mark { font-family: var(--mono); font-size: 12px; color: var(--ink-muted); }
+.ln-mark {
+  font-family: var(--mono); font-size: 12px; color: var(--ink-muted);
+  white-space: nowrap;   /* "[ ]" is three characters and must never wrap to two lines */
+}
 .ln-lesson.done .ln-mark { color: var(--good); }
 .ln-lesson.red .ln-mark { color: var(--serious); }
 .ln-name { font-size: 13px; color: var(--ink); line-height: 1.35; }
@@ -67,7 +76,11 @@
 .ln-empty { color: var(--ink-muted); font-size: 13px; line-height: 1.6; }
 
 /* ---- the check --------------------------------------------------------------------------- */
-.ln-check { border-top: 1px solid var(--border); padding-top: 10px; margin-top: 4px; }
+.ln-check {
+  border-top: 1px solid var(--border); padding-top: 10px; margin-top: 4px;
+  background: var(--surface);   /* it sits over the scrolling lesson; it must not be see-through */
+  max-height: 45%; overflow-y: auto;   /* a long pytest traceback scrolls inside the row */
+}
 .ln-check-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .ln-check-head code { font-family: var(--mono); font-size: 11px; color: var(--ink-muted); word-break: break-all; }
 .ln-check-head .ghost { margin-left: auto; }

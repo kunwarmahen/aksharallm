@@ -12,8 +12,19 @@ export function renderMarkdown(src) {
   const out = [];
   let list = null;      // 'ul' | 'ol' | null
   let para = [];
+  /* The current list item, buffered rather than emitted immediately, so a wrapped item can
+   * be joined onto it. Markdown lets an item run over several lines; without this, the
+   * second line closed the list and started a paragraph, and the *next* item opened a fresh
+   * <ol> numbered from 1 again. Every numbered list in docs/lessons/ hit that. */
+  let item = null;
 
-  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+  const flushItem = () => {
+    if (item) { out.push(`<li>${inline(item.join(' '))}</li>`); item = null; }
+  };
+  const closeList = () => {
+    flushItem();
+    if (list) { out.push(`</${list}>`); list = null; }
+  };
   const closePara = () => {
     if (para.length) { out.push(`<p>${inline(para.join(' '))}</p>`); para = []; }
   };
@@ -79,15 +90,26 @@ export function renderMarkdown(src) {
         out.push(`<h${lvl}>${inline(h[2])}</h${lvl}>`);
         continue;
       }
+      // A horizontal rule. Checked before the list rules, because `---` also matches the
+      // `[-*+]` bullet pattern and would otherwise render as an empty list item.
+      if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+        closePara(); closeList();
+        out.push('<hr>');
+        continue;
+      }
       const ul = line.match(/^\s*[-*+]\s+(.*)$/);
       const ol = line.match(/^\s*\d+[.)]\s+(.*)$/);
       if (ul || ol) {
         closePara();
         const want = ul ? 'ul' : 'ol';
         if (list !== want) { closeList(); out.push(`<${want}>`); list = want; }
-        out.push(`<li>${inline((ul || ol)[1])}</li>`);
+        flushItem();
+        item = [(ul || ol)[1]];
         continue;
       }
+      // Inside a list, a plain line continues the item it follows rather than ending the
+      // list. A blank line (handled above) is what ends it.
+      if (item) { item.push(line.trim()); continue; }
       closeList();
       para.push(line.trim());
     }
