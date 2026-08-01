@@ -1,0 +1,74 @@
+# The mixture-of-experts controlled experiment, at Phase 1 scale.
+#
+# Identical to configs/tiny.yaml in EVERY field except the `n_experts` block below —
+# same data, same vocab, same depth and width, same optimiser, same batch, same number of
+# steps, same seed. That is the whole point: the dense run of this config already exists and
+# reached val loss 1.472, so any difference here is the mixture of experts and nothing else.
+#
+# Held constant: ACTIVE parameters. Each expert is d_ff // top_k = 512 wide, so routing to
+# two of them costs what the dense d_ff=1024 FFN cost. Identical FLOPs per token, ~2.5x the
+# total parameters. That is the claim MoE actually makes, so it is the honest thing to test —
+# a config with 8 full-width experts would be a bigger model winning by being bigger.
+#
+#   dense    d_ff 1024              7.1M FFN params    7.1M active    13.8M total
+#   this     8 experts x 512, k=2  28.3M FFN params    7.1M active    35.0M total
+#
+# Watch the `experts` field on the step line, not just the loss: a collapsed router is a
+# model that is quietly a bit worse, and nothing in the loss curve says so. See docs/14.
+#
+#   scripts/experiment.sh tiny-moe        (or the portal's Start button)
+
+name: tiny-moe
+
+model:
+  vocab_size: 8192        # must match the tokenizer
+  d_model: 384
+  n_layers: 6
+  n_heads: 6
+  n_kv_heads: 6
+  max_seq_len: 512
+  tie_embeddings: true
+  dropout: 0.0
+
+  # ---- the only difference from tiny.yaml ------------------------------------------
+  n_experts: 8            # 8 experts per MoE block
+  moe_top_k: 2            # each token is routed to 2 of them
+  # moe_expert_d_ff: null # unset = d_ff // top_k = 512, i.e. matched ACTIVE parameters
+  moe_aux_alpha: 0.01     # load balancing. Without this a few experts take everything.
+  moe_z_alpha: 1.0e-3     # keeps the router's logits from drifting large
+  moe_every: 1            # every layer is MoE (2 = every other, the common published choice)
+
+data:
+  train_bin: data/tinystories/train.bin
+  val_bin: data/tinystories/val.bin
+  tokenizer: data/tinystories/tokenizer.json
+
+optim:
+  lr: 1.0e-3
+  min_lr_ratio: 0.1
+  warmup_steps: 200
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/tiny-moe
+  batch_size: 48
+  grad_accum: 2           # 48 * 2 * 512 = 49,152 tokens/step — same as the dense run
+  seq_len: 512
+  max_steps: 8000
+  eval_every: 500
+  eval_batches: 40
+  sample_every: 1000
+  ckpt_every: 1000
+  log_every: 20
+  # Off, unlike the dense run. The routing does a sort and one matmul per expert per layer,
+  # and dynamo recompiles on the changing slice shapes — which costs more than the compile
+  # saves at this size. Worth revisiting at 300M, where the matmuls are large enough to pay
+  # for it.
+  compile: false
+  seed: 1337              # the same seed the dense baseline used
+  wandb_project: null
+  resume: auto

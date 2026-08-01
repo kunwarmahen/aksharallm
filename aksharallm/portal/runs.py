@@ -25,13 +25,29 @@ from ..train import runlog, stopfile
 #: whitelisted rather than escaped: letters, digits, dash, underscore, dot, no leading dot.
 RUN_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
-#: How each run is launched. `scripts/phase2.sh` is the Phase-2 launcher and knows two
-#: recipes; a run that isn't in here (e.g. `tiny`) is still fully *visible* in the portal,
-#: it just has no start button, because there is no script that knows how to build its data.
-LAUNCHERS: dict[str, dict[str, str]] = {
-    "small-code": {},              # the blended 85/15 general+Python base (the default)
-    "small": {"PURE": "1"},        # the non-blended FineWeb-Edu-only fallback
+#: How each run is launched: which script, and what environment it needs. Two launchers,
+#: because the runs are two different shapes — `phase2.sh` builds 20 GB of tokens and
+#: pre-flights for a six-day base-model run, `experiment.sh` starts a Phase-1-scale
+#: experiment on data that already exists. A run that is in neither (a config someone added
+#: by hand) is still fully *visible* in the portal; it just has no Start button, because
+#: nothing here knows how to build its data.
+#:
+#: `script` and `env` are both optional so a test can register a run with `{}` and get the
+#: Phase-2 launcher, which is what every caller meant before there were two.
+LAUNCHERS: dict[str, dict] = {
+    "small-code": {},                                        # blended 85/15 base (default)
+    "small": {"env": {"PURE": "1"}},                         # FineWeb-Edu only fallback
+    "tiny-moe": {"script": "scripts/experiment.sh", "args": ["tiny-moe"]},
+    "tiny": {"script": "scripts/experiment.sh", "args": ["tiny"]},
 }
+
+
+def launcher_for(run: str) -> tuple[str, list[str], dict[str, str]]:
+    """(script, args, env) for a startable run."""
+    spec = LAUNCHERS[run]
+    return (spec.get("script", "scripts/phase2.sh"),
+            list(spec.get("args", [])),
+            dict(spec.get("env", {})))
 
 PHASE_IDLE = "idle"
 PHASE_LAUNCHING = "launching"   # phase2.sh is in pre-flight/data/smoke, no trainer yet
@@ -291,8 +307,10 @@ class RunStore:
             "can_stop": phase in (PHASE_TRAINING, PHASE_STOPPING, PHASE_LAUNCHING),
             "can_bound": phase in (PHASE_TRAINING, PHASE_STOPPING),
             "start_hint": (None if run in LAUNCHERS else
-                           f"no launcher for '{run}' — scripts/phase2.sh builds the Phase-2 "
-                           f"runs ({', '.join(LAUNCHERS)}); start this one from a terminal"),
+                           f"no launcher for '{run}' — the portal can start "
+                           f"{', '.join(sorted(LAUNCHERS))} (scripts/phase2.sh for the base "
+                           "model, scripts/experiment.sh for the Phase-1 experiments); "
+                           "start this one from a terminal"),
             "meta": self._text(rdir / "run.meta"),
             "server_time": time.time(),
         }
@@ -318,8 +336,8 @@ class RunStore:
         """
         self.check(run)
         if run not in LAUNCHERS:
-            raise RunError(f"no launcher for '{run}': scripts/phase2.sh only builds "
-                           f"{', '.join(LAUNCHERS)}. Start it from a terminal.")
+            raise RunError(f"no launcher for '{run}': the portal can start "
+                           f"{', '.join(sorted(LAUNCHERS))}. Start it from a terminal.")
         if (pid := self.trainer_pid(run)):
             raise RunError(f"'{run}' is already training as pid {pid}.")
         if (live := self.launcher(run)):
@@ -333,7 +351,8 @@ class RunStore:
             # bounded two ways at once is a session nobody can predict the end of.
             raise RunError("bound this session by steps or by time, not both.")
 
-        script = self.root / "scripts" / "phase2.sh"
+        rel, args, extra_env = launcher_for(run)
+        script = self.root / rel
         if not script.exists():
             raise RunError(f"missing launcher: {script}")
 
@@ -342,20 +361,20 @@ class RunStore:
         self.run_dir(run).mkdir(parents=True, exist_ok=True)
         log = ldir / f"launch_{datetime.now():%Y%m%d-%H%M%S}.log"
 
-        env = {**os.environ, **LAUNCHERS[run]}
+        env = {**os.environ, **extra_env}
         if stop_after is not None:
             env["STOP_AFTER"] = str(stop_after)
         if stop_after_s is not None:
             env["STOP_IN"] = f"{stop_after_s}s"
         if skip_smoke:
             env["SKIP_SMOKE"] = "1"
-        # phase2.sh records this path in launch.meta, so `scripts/stop.sh --status` can point
-        # at the same log the portal is streaming. The launch record itself is written by
-        # phase2.sh (launch.pid + launch.meta) — the portal keeps no private copy.
+        # Both launchers record this path in launch.meta, so `scripts/stop.sh --status` can
+        # point at the same log the portal is streaming. The launch record itself is written
+        # by the script (launch.pid + launch.meta) — the portal keeps no private copy.
         env["LAUNCH_LOG"] = str(log.relative_to(self.root))
 
         with open(log, "wb") as fh:
-            proc = subprocess.Popen(["bash", str(script)], cwd=self.root, env=env,
+            proc = subprocess.Popen(["bash", str(script), *args], cwd=self.root, env=env,
                                     stdin=subprocess.DEVNULL, stdout=fh,
                                     stderr=subprocess.STDOUT, start_new_session=True)
         info = {"pid": proc.pid, "log": str(log.relative_to(self.root)),

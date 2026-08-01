@@ -101,6 +101,7 @@ Read these in order. They assume no prior knowledge of machine learning.
 | 10 | [Quantization](docs/10-quantization.md) | Storing weights in 4 bits: group scales, RTN/GPTQ/AWQ/QAT, **NF4**, a fused Triton kernel, and why smaller isn't faster |
 | 11 | [LoRA & QLoRA](docs/11-lora.md) | Fine-tuning without training the model: low-rank adapters, a 4-bit frozen base, one base + many skills, and a free DPO reference model |
 | 12 | [Evaluation](docs/12-eval.md) | Is the model actually any good? MMLU/ARC/HellaSwag/PIQA scored by log-likelihood, GSM8K, HumanEval executed for real, an LLM-judge — and why 25% on MMLU is not a failure |
+| 14 | [Mixture of experts](docs/14-moe.md) | More parameters than you compute with: a router, N experts, top-k per token — the load-balancing loss, why upcycling is an identity at init, and the collapse that is invisible in the loss curve |
 | 13 | [Synthetic data](docs/13-synthetic-data.md) | Making the training set with a local teacher instead of downloading it: a seed grid instead of a temperature, tests that are **executed twice**, near-duplicate detection, and why the rejection tally is the quality signal |
 
 ---
@@ -112,7 +113,8 @@ aksharallm/
 ├── configs/              YAML run configs — the only thing that changes between runs
 │   ├── tiny.yaml         Phase 1: 13.8M params, TinyStories
 │   ├── small.yaml        Phase 2 (pure): 300M params, FineWeb-Edu only
-│   └── small-code.yaml   Phase 2 (blended): 300M, 85% FineWeb-Edu + 15% Python
+│   ├── small-code.yaml   Phase 2 (blended): 300M, 85% FineWeb-Edu + 15% Python
+│   └── tiny-moe.yaml     the MoE experiment: tiny.yaml + 8 experts, matched active params
 ├── aksharallm/
 │   ├── config.py         dataclass config loading + CLI overrides
 │   ├── tokenizer/        byte-level BPE training and the chat template
@@ -123,7 +125,8 @@ aksharallm/
 │   │   ├── prepare_dpo.py    preference corpus   -> (chosen, rejected) pairs
 │   │   └── loader.py         memmap batch sampling (TokenDataset, MixedTokenDataset)
 │   ├── model/
-│   │   └── transformer.py    the whole architecture, ~300 lines
+│   │   ├── transformer.py    the whole architecture, ~300 lines
+│   │   └── moe.py            mixture of experts: router, sorted dispatch, upcycling — docs/14
 │   ├── quant/            int8/int4/NF4 from scratch — see docs/10
 │   ├── lora/             LoRA + QLoRA adapters from scratch — see docs/11
 │   │   ├── qtensor.py        group scales, zero-points, 4-bit packing
@@ -303,8 +306,22 @@ adapter off and the model you are already holding *is* the model you started fro
 In order, all written from scratch: **GRPO** ✅ (RL on a reward the code sandbox actually
 verifies) → **quantization** ✅ → **LoRA/QLoRA** ✅ → a **real eval harness** ✅ (MMLU, ARC,
 HellaSwag, PIQA, GSM8K, HumanEval and a model-judged suite — [docs/12](docs/12-eval.md)) →
-**synthetic data** ✅ ([docs/13](docs/13-synthetic-data.md)) → **distillation** → **mixture
-of experts** → **diffusion training** → export and serving.
+**synthetic data** ✅ ([docs/13](docs/13-synthetic-data.md)) → **mixture of experts** ✅
+([docs/14](docs/14-moe.md)) → **distillation** → **diffusion training** → export and
+serving.
+
+The mixture of experts is the first of those with a measured answer. Run at Phase 1 scale
+against the dense baseline — same data, seed, batch, steps, and **the same FLOPs per token**,
+because each expert is `d_ff/k` wide rather than a full copy — 8 experts at top-2 reached
+val **1.4081** against the dense **1.4764**, a 4.6% improvement that *widened* throughout
+training. It stores 35.0M parameters to compute with 7.1M of them: memory traded for quality
+at fixed compute, which is the exact opposite of the trade [quantization](docs/10-quantization.md)
+makes. The cost is MFU falling from ~57% to 52%, because a sort and eight small matmuls use
+the card less well than one big one.
+
+What makes it work is the part that has nothing to do with experts: a **load-balancing loss**
+and a routing chart. Without them a few experts win early, take all the gradient, and the
+rest never train — and the loss curve looks completely normal while it happens.
 
 The harness came before the last four deliberately. Mixture of experts, synthetic data and
 distillation are all changes to model *quality*, and validation loss either cannot see them

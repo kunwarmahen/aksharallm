@@ -153,8 +153,11 @@ flowchart TD
 
 The panels, in plain terms:
 
-- **Controls / Progress** — Start, Stop, or Resume the base run, and watch loss fall in
-  real time.
+- **Controls / Progress** — Start, Stop, or Resume a run, and watch loss fall in real time.
+  The Start button works for any run a launcher knows: `scripts/phase2.sh` builds the base
+  models (`small-code`, `small`) and `scripts/experiment.sh` starts the Phase-1-scale
+  experiments (`tiny`, `tiny-moe`) on data that already exists. A config the portal cannot
+  start is still fully visible; it just says so instead of offering a button.
 - **The curves** — loss, throughput, gradient norm, learning rate. Hover for a crosshair
   readout across every series at that step. **Drag sideways across a chart to zoom into
   that stretch of steps**: the y-axis refits to what is inside the window, which is the only
@@ -163,6 +166,11 @@ The panels, in plain terms:
   Double-click the chart — or the range button in its corner — to go back to the whole run.
   Each chart zooms on its own, the GPU charts included; the `table` twin always lists every
   reading, zoomed or not.
+- **Expert routing** — for a mixture-of-experts run only, one line per expert showing the
+  share of tokens it received, with a rule at the even share. It is the only chart on the
+  page that shows a failure the loss curve cannot: if one line climbs while the others sink,
+  the router has collapsed and the model is quietly becoming a smaller dense one. See
+  [doc 14](14-moe.md).
 - **Sessions** — every launch as a row, so a run trained over ten evenings is ten
   comparable lines. Newest first, and the panel keeps a fixed height: past about ten rows
   the table scrolls inside itself (header row pinned) rather than stretching the page.
@@ -438,6 +446,7 @@ Note that Chrome's `--window-size` will not go below about 485px and so cannot t
 | you want to… | command | portal |
 |---|---|---|
 | start / resume the base run | `scripts/phase2.sh` | Dashboard → Start |
+| run a Phase-1-scale experiment | `scripts/experiment.sh tiny-moe` | Dashboard → pick the run → Start |
 | …for one evening only | `STOP_IN=3h scripts/phase2.sh` | Dashboard → *this session* → Time |
 | stop it (saving first) | `scripts/stop.sh small-code` | Dashboard → Stop now |
 | stop it in 20 minutes | `scripts/stop.sh small-code --in 20m` | Dashboard → Stop at… |
@@ -445,6 +454,7 @@ Note that Chrome's `--window-size` will not go below about 485px and so cannot t
 | DPO / GRPO (after SFT) | `scripts/stage.sh dpo\|grpo small-code` | Post-training → Start |
 | watch it | `tail -f train_small-code.log` | Dashboard (live) |
 | talk to it mid-training | `python -m aksharallm.infer.cli small-code` | Playground |
+| generate training data with a teacher | `python -m aksharallm.synth gen python --name py-v1 --n 200` | Synth → Generate |
 | make it 4-bit and measure it | `python -m aksharallm.quant small-code/ckpt_best.pt --compare` | Quantize → Compare all |
 | is it any good yet? | `python -m aksharallm.eval small-code --suite fast` | Eval → Evaluate |
 | has it improved since last week? | `python -m aksharallm.eval report --suite arc-easy` | Eval → the trend chart |

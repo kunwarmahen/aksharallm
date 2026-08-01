@@ -177,6 +177,22 @@ def series(records: Iterable[dict], max_points: int = 2000) -> dict[str, Any]:
         out[key] = [r.get(key) for r in steps]
     out["val_step"] = [r["step"] for r in vals]
     out["val_loss"] = [r["val_loss"] for r in vals]
+
+    # Mixture-of-experts routing, if this run has any. One array per expert rather than one
+    # array of arrays, because the chart draws one line per expert and a collapsing expert
+    # is a line peeling away from the others — which is the entire point of plotting it.
+    moe = [r for r in steps if isinstance(r.get("moe"), dict)]
+    if moe:
+        n = max(len(r["moe"].get("shares") or []) for r in moe)
+        out["moe_step"] = [r["step"] for r in moe]
+        out["moe_experts"] = n
+        out["moe_balance"] = [r["moe"].get("balance") for r in moe]
+        out["moe_dead"] = [r["moe"].get("dead") for r in moe]
+        out["moe_shares"] = [
+            [(r["moe"].get("shares") or [None] * n)[i] if i < len(r["moe"].get("shares") or []) else None
+             for r in moe]
+            for i in range(n)
+        ]
     return out
 
 
@@ -197,6 +213,7 @@ def latest(records: Iterable[dict]) -> dict:
         "step": last.get("step"),
         "loss": last.get("loss"),
         "ema": last.get("ema"),
+        "moe": last.get("moe"),
         "lr": last.get("lr"),
         "grad_norm": last.get("grad_norm"),
         "tok_per_sec": last.get("tok_per_sec"),

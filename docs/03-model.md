@@ -225,6 +225,12 @@ even — `d_ff ≈ (8/3) × d_model` instead of the classic `4 × d_model`.
 If attention is where tokens *communicate*, the FFN is where each token *thinks* on its
 own. It's also where most of the parameters live (~⅔ of the model).
 
+That last sentence is why this is the one part of the architecture worth replacing. A
+**mixture of experts** swaps this single FFN for N of them plus a router, and sends each
+token to only the top-k — more parameters, the same compute per token. It changes exactly
+one line of `Block.__init__` and nothing else about attention, RoPE, the norms or the
+residual path. See [doc 14](14-moe.md).
+
 ---
 
 ## Weight tying

@@ -24,6 +24,26 @@ class ModelConfig:
     tie_embeddings: bool = True
     dropout: float = 0.0
 
+    # ---- mixture of experts (0 = dense; everything below is ignored) -------------------
+    #: How many experts replace the single SwiGLU in each MoE block.
+    n_experts: int = 0
+    #: How many of them each token is routed to.
+    moe_top_k: int = 2
+    #: Width of ONE expert. Left unset it is `d_ff // moe_top_k`, which holds *active*
+    #: parameters equal to the dense model's — identical FLOPs per token, more capacity,
+    #: which is the claim MoE actually makes and therefore the honest thing to compare.
+    #: Set it to `d_ff` for sparse upcycling, where each expert is a copy of a trained FFN.
+    moe_expert_d_ff: int | None = None
+    #: Weight on the load-balancing loss. Without it a few experts take everything and the
+    #: rest never train — and the loss curve does not show it happening.
+    moe_aux_alpha: float = 0.01
+    #: Weight on the router z-loss, which stops the gate's logits drifting large.
+    moe_z_alpha: float = 1e-3
+    #: Put an MoE block every Nth layer (1 = all of them). 2 is the common published choice:
+    #: it halves the parameter growth for most of the benefit, because neighbouring layers
+    #: learn similar things and one of the pair can stay dense.
+    moe_every: int = 1
+
     def __post_init__(self):
         if self.n_kv_heads is None:
             self.n_kv_heads = self.n_heads
@@ -32,6 +52,26 @@ class ModelConfig:
         if self.d_ff is None:
             hidden = int(8 * self.d_model / 3)
             self.d_ff = self.multiple_of * ((hidden + self.multiple_of - 1) // self.multiple_of)
+        if self.n_experts:
+            if not 1 <= self.moe_top_k <= self.n_experts:
+                raise ValueError(f"moe_top_k must be 1..{self.n_experts}, "
+                                 f"got {self.moe_top_k}")
+            if self.moe_expert_d_ff is None:
+                # Matched active parameters. Integer division can lose a little width when
+                # d_ff does not divide by k; that is a real (small) difference and it is
+                # better to be slightly *under* the dense budget than over it, because a
+                # comparison that quietly favours the new thing is worth nothing.
+                self.moe_expert_d_ff = max(1, self.d_ff // self.moe_top_k)
+            if self.moe_every < 1:
+                raise ValueError("moe_every must be >= 1")
+
+    @property
+    def is_moe(self) -> bool:
+        return bool(self.n_experts)
+
+    def moe_layer(self, i: int) -> bool:
+        """Whether layer `i` is a mixture-of-experts block."""
+        return self.is_moe and (i % self.moe_every == 0)
 
     @property
     def head_dim(self) -> int:

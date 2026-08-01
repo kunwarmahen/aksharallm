@@ -405,15 +405,29 @@ def main():
                          if d is not None]
             if deadlines:
                 eta = min(eta, max(0.0, min(deadlines) - time.time()))
+            # Routing, for a mixture of experts. Printed on the step line rather than
+            # buried in the jsonl because router collapse is the failure this model has
+            # that the dense one does not, it starts within the first few hundred steps,
+            # and the loss curve does not show it -- a collapsed MoE is simply a slightly
+            # worse model. `balance` is 1.0 when every expert gets an equal share and 1/N
+            # when one takes everything.
+            routing = raw.routing()
+            moe_line = ""
+            if routing:
+                moe_line = (f" | experts {routing['balance']:.2f} bal"
+                            f" ({routing['min_share']*100:.0f}-{routing['max_share']*100:.0f}%"
+                            + (f", {routing['dead']} dead" if routing["dead"] else "") + ")")
             print(f"[{stamp()}] step {step:>6} | loss {loss_sum:.4f} "
                   f"(ema {running_loss:.4f}) | ppl {math.exp(min(running_loss, 20)):>7.1f} | "
                   f"lr {lr:.2e} | gnorm {grad_norm:.2f} | {tok_per_sec/1e3:.1f}k tok/s | "
                   f"mfu {mfu*100:.1f}% | {mem:.1f}GB | {s_per_step:.2f}s/step | "
-                  f"up {fmt_dur(up)} | eta {fmt_dur(eta)}")
+                  f"up {fmt_dur(up)} | eta {fmt_dur(eta)}{moe_line}")
             rec = {"step": step, "loss": loss_sum, "ema": running_loss, "lr": lr,
                    "grad_norm": float(grad_norm), "tok_per_sec": tok_per_sec, "mfu": mfu,
                    "time": time.time(), "s_per_step": s_per_step, "elapsed": up,
                    "eta_s": eta}
+            if routing:
+                rec["moe"] = routing
             logf.write(json.dumps(rec) + "\n")
             logf.flush()
             if use_wandb:

@@ -200,6 +200,7 @@ def quantize_model(
     quantize_head:  quantize lm_head even when embeddings are tied (see module docstring).
     skip:           substrings; any layer whose name contains one is left in float.
     """
+    _refuse_moe(model)
     t0 = time.monotonic()
     tied = bool(getattr(model.cfg, "tie_embeddings", False))
     report = QuantReport(scheme=scheme)
@@ -237,6 +238,27 @@ def quantize_model(
     report.other_bytes = _other_bytes(model)
     report.seconds = time.monotonic() - t0
     return report
+
+
+def _refuse_moe(model: nn.Module) -> None:
+    """A mixture of experts cannot go through this path, and failing loudly is the point.
+
+    Two separate things would go wrong quietly. The experts are stacked `nn.Parameter`s
+    rather than `nn.Linear`s, so `linear_layers()` does not see them — on the 300M that is
+    68% of the model left in float while the report cheerfully claims a 2.8x saving. And the
+    router's gate *is* an `nn.Linear`, so it would be quantized, which is the one layer that
+    must never be: a wrong route sends the token to a different expert, not to a slightly
+    wrong number, so the error is discrete and unbounded rather than small and averaged out.
+    """
+    from ..model.moe import MoEFeedForward
+
+    layers = [n for n, m in model.named_modules() if isinstance(m, MoEFeedForward)]
+    if layers:
+        raise ValueError(
+            f"this checkpoint is a mixture of experts ({len(layers)} MoE layers) and "
+            "quantizing it here would silently leave every expert in float while "
+            "quantizing the router, which must never be quantized. Quantizing an MoE model "
+            "needs expert-aware packing — see docs/14 § 'What MoE breaks'.")
 
 
 def _rtn_quantizer(name: str, lin: nn.Linear, scheme: QuantScheme) -> QuantLinear:

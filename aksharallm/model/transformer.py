@@ -22,6 +22,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..config import ModelConfig
+from .moe import MoEFeedForward, moe_stats
 
 # torch >= 2.5 can do grouped-query attention inside SDPA without materialising repeated KV.
 _SDPA_HAS_GQA = "enable_gqa" in F.scaled_dot_product_attention.__doc__
@@ -181,12 +182,15 @@ class Block(nn.Module):
     each sublayer reads a normalised *copy* and writes an additive update. That clean
     residual path is what lets gradients reach layer 0 without vanishing."""
 
-    def __init__(self, cfg: ModelConfig):
+    def __init__(self, cfg: ModelConfig, layer_idx: int = 0):
         super().__init__()
         self.attn_norm = RMSNorm(cfg.d_model, cfg.norm_eps)
         self.attn = Attention(cfg)
         self.ffn_norm = RMSNorm(cfg.d_model, cfg.norm_eps)
-        self.ffn = SwiGLU(cfg)
+        # The ONLY thing a mixture of experts changes about the architecture. Attention,
+        # RoPE, the norms and the residual path are untouched, which is why an MoE
+        # checkpoint can be upcycled from a dense one (see `model/moe.py`).
+        self.ffn = MoEFeedForward(cfg) if cfg.moe_layer(layer_idx) else SwiGLU(cfg)
 
     def forward(self, x, cos, sin, cache=None):
         x = x + self.attn(self.attn_norm(x), cos, sin, cache)
@@ -200,7 +204,7 @@ class Transformer(nn.Module):
         self.cfg = cfg
         self.tok_emb = nn.Embedding(cfg.vocab_size, cfg.d_model)
         self.drop = nn.Dropout(cfg.dropout)
-        self.blocks = nn.ModuleList([Block(cfg) for _ in range(cfg.n_layers)])
+        self.blocks = nn.ModuleList([Block(cfg, i) for i in range(cfg.n_layers)])
         self.norm = RMSNorm(cfg.d_model, cfg.norm_eps)
         self.lm_head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
 
@@ -235,6 +239,30 @@ class Transformer(nn.Module):
             if not self.cfg.tie_embeddings:
                 n -= self.lm_head.weight.numel()
         return n
+
+    def num_active_params(self, non_embedding: bool = False) -> int:
+        """Parameters used to compute ONE token. Equals `num_params` on a dense model.
+
+        Both numbers have to be reported for a mixture of experts or every comparison it
+        appears in is misleading: total parameters say what it cost to store, active
+        parameters say what it cost to run, and MoE's whole claim is that those two stop
+        being the same number.
+        """
+        n = self.num_params(non_embedding)
+        for module in self.modules():
+            if isinstance(module, MoEFeedForward):
+                n -= module.n_total_params() - module.n_active_params()
+        return n
+
+    def moe_aux_loss(self) -> torch.Tensor | None:
+        """The summed auxiliary losses from the last forward, or None if dense."""
+        terms = [m.aux_loss for m in self.modules()
+                 if isinstance(m, MoEFeedForward) and m.aux_loss is not None]
+        return torch.stack(terms).sum() if terms else None
+
+    def routing(self) -> dict | None:
+        """Per-expert routing shares from the last forward — see `model/moe.py`."""
+        return moe_stats(self)
 
     def forward(
         self,
@@ -284,6 +312,7 @@ class Transformer(nn.Module):
             targets.reshape(-1),
             ignore_index=-100,
         )
+        self.last_ce = loss.detach()
         if loss_mask is not None:
             # Recompute as a weighted mean when a mask is supplied.
             per_tok = F.cross_entropy(
@@ -294,6 +323,20 @@ class Transformer(nn.Module):
             )
             m = loss_mask.reshape(-1).float()
             loss = (per_tok * m).sum() / m.sum().clamp(min=1)
+            self.last_ce = loss.detach()
+
+        # The balancing loss is added HERE rather than left for the trainer to remember,
+        # because forgetting it does not fail — it trains a model whose experts quietly
+        # collapse, and the loss curve looks fine while that happens.
+        #
+        # And it is added ONLY while training. A validation loss carrying an auxiliary
+        # regularisation term is not a cross-entropy any more, and could not be compared
+        # with the dense baseline's 1.472 — which is the entire point of the 13.8M
+        # experiment. `last_ce` always holds the pure number.
+        if self.training:
+            aux = self.moe_aux_loss()
+            if aux is not None:
+                loss = loss + aux.to(loss.dtype)
         return logits, loss
 
     # ---- optimiser ----------------------------------------------------------------

@@ -101,6 +101,19 @@ before the real run. Skipping is only sane when resuming a config that has alrea
       <div class="chart-table" data-table="gnorm" hidden></div>
     </figure>
 
+    <!-- Only rendered for a mixture-of-experts run, and it is the one chart on this page
+         that shows a failure the loss curve cannot: if a line peels away and the others sink,
+         the router has collapsed and the model is quietly becoming a smaller dense one. -->
+    <figure class="panel chart-card" id="card-moe" hidden>
+      <figcaption>
+        <span class="chart-title">Expert routing</span>
+        <span class="chart-note" id="moe-note">share of tokens each expert received · the rule is an equal share</span>
+        <button class="ghost view-toggle" data-target="moe" type="button">table</button>
+      </figcaption>
+      <div class="chart" data-chart="moe"></div>
+      <div class="chart-table" data-table="moe" hidden></div>
+    </figure>
+
     <figure class="panel chart-card" id="card-lr">
       <figcaption>
         <span class="chart-title">Learning rate</span>

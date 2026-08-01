@@ -149,6 +149,23 @@ def apply_lora(model: nn.Module, config: LoRAConfig) -> LoRAReport:
     for p in model.parameters():
         p.requires_grad_(False)
 
+    # A mixture of experts is adaptable, but not all of it, and the difference has to be
+    # visible in the report rather than inferred from a parameter count. The experts are
+    # stacked Parameters that `adaptable_layers` cannot see, and the router is deliberately
+    # left alone: it is ~0.02% of the model and it decides *which* expert runs, so an
+    # adapter there changes the computation graph rather than nudging a projection.
+    from ..model.moe import MoEFeedForward
+
+    for name, mod in model.named_modules():
+        if isinstance(mod, MoEFeedForward):
+            report.skipped.append(
+                (f"{name}.experts",
+                 f"{mod.n_experts} stacked expert tensors — LoRA reaches nn.Linear layers, "
+                 "so this fine-tune adapts attention only (see docs/14)"))
+            report.skipped.append(
+                (f"{name}.router", "the router chooses which expert runs; adapting it "
+                                   "changes routing, not a projection"))
+
     for name, mod in adaptable_layers(model).items():
         leaf = name.split(".")[-1]
         if name.endswith("lm_head"):

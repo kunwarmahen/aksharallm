@@ -165,6 +165,38 @@ function renderCharts(s) {
       zeroFloor: true,
     },
   };
+
+  /* Mixture of experts only. A dense run has no `moe_shares` and the card stays hidden —
+   * rather than showing an empty chart that reads as a broken one. */
+  const nExperts = ser.moe_experts || 0;
+  const card = $('#card-moe');
+  if (card) card.hidden = !nExperts;
+  if (nExperts) {
+    const mstep = ser.moe_step || [];
+    const even = 1 / nExperts;
+    const last = (ser.moe_balance || []).filter((v) => v != null).slice(-1)[0];
+    const dead = (ser.moe_dead || []).filter((v) => v != null).slice(-1)[0] || 0;
+    $('#moe-note').textContent =
+      `${nExperts} experts · an equal share is ${(100 * even).toFixed(1)}% (the rule)`
+      + (last == null ? '' : ` · balance ${last.toFixed(2)}`)
+      + (dead ? ` · ${dead} expert${dead === 1 ? '' : 's'} receiving almost nothing` : '');
+    state.charts.moe = {
+      label: 'share of routed tokens per expert, by step',
+      yFmt: (v) => `${(100 * v).toFixed(0)}%`,
+      /* One line per expert, all the same colour family: the question is never "which
+       * expert is which", it is "are they together or is one running away". */
+      series: (ser.moe_shares || []).map((y, i) => ({
+        name: `expert ${i}`,
+        color: `--series-${(i % 5) + 1}`,
+        x: mstep, y,
+        fmt: (v) => `${(100 * v).toFixed(1)}%`,
+      })),
+      rules: [{ y: even, label: 'even' }],
+      zeroFloor: true,
+    };
+  } else {
+    delete state.charts.moe;
+  }
   drawCharts();
 }
 
