@@ -190,4 +190,35 @@ domain can beat a general 7B model on that domain, while running 20× faster.
 
 ---
 
+## The code, in reading order
+
+Every chapter ends with a section like this one: the files to open, in the order that makes
+them make sense, and what to look at inside each. Prose about attention is not the same as
+`Attention.forward`, and the point of this project is that the second one is short enough
+to read.
+
+This is the whole model, end to end, in eight files. A day, if you read them in this order:
+
+| # | file | what to look for |
+|---|---|---|
+| 1 | [`aksharallm/tokenizer/tokenizer.py`](../aksharallm/tokenizer/tokenizer.py) | `Tokenizer.encode` / `decode` — text becomes the integers everything else works in |
+| 2 | [`aksharallm/data/prepare.py`](../aksharallm/data/prepare.py) | `tokenize_to_bin` — a corpus becomes one flat file of `uint16` |
+| 3 | [`aksharallm/data/loader.py`](../aksharallm/data/loader.py) | `TokenDataset.get_batch` — `x` and `y`, the same slice one position apart. 60 lines, and it *is* the training objective |
+| 4 | [`aksharallm/model/transformer.py`](../aksharallm/model/transformer.py) | `Attention.forward` → `Block.forward` → `Transformer.forward`. The whole architecture, ~370 lines |
+| 5 | [`aksharallm/train/pretrain.py`](../aksharallm/train/pretrain.py) | `main` — the four lines of the objective, and everything that keeps them alive for six days |
+| 6 | [`aksharallm/infer/generate.py`](../aksharallm/infer/generate.py) | `stream_generate` — prefill, then one token at a time against a KV cache |
+| 7 | [`aksharallm/train/sft.py`](../aksharallm/train/sft.py) | the loss mask: `y[m == 0] = -100`. That one line is what turns a text completer into an assistant |
+| 8 | [`aksharallm/config.py`](../aksharallm/config.py) | `ModelConfig` / `TrainConfig` — every knob the six files above read, and nothing hardcoded |
+
+Then `configs/tiny.yaml` is one run described in 40 lines, and `tests/` is what the repo
+claims is true — `tests/test_model.py` is the best short summary of the architecture there
+is.
+
+Reading order for the *chapters* is just their numbers, with two branches: 10–11
+(quantization, LoRA) are about making a finished model cheaper and can be read any time
+after 3, and 12 (evaluation) is worth reading before 13–14 because it is the instrument
+those two experiments are measured with.
+
+---
+
 Next: [1. Data →](01-data.md)

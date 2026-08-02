@@ -26,6 +26,9 @@ stays resident and an idle timer unloads it (`idle_unload_s`), returning the mem
 **One generation at a time.** Two concurrent generations on one model would each allocate
 their own KV cache and halve each other's speed for no reason. A lock serialises them, and
 a caller who cannot get it is *told* rather than left hanging.
+
+Read with: docs/06-inference.md -- the chapter this implements; it ends with the order to read
+these files in.
 """
 
 from __future__ import annotations

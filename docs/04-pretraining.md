@@ -444,4 +444,26 @@ OOM, and bad configs in 30 seconds instead of six days.
 
 ---
 
+## The code, in reading order
+
+| # | file | what to look for |
+|---|---|---|
+| 1 | [`configs/tiny.yaml`](../configs/tiny.yaml) | a whole run in 40 lines. Read it first — every file below is reading *this* |
+| 2 | [`aksharallm/config.py`](../aksharallm/config.py) | `TrainConfig` / `OptimConfig`, then `load_config` — the YAML plus `-o key=value` overrides, and nothing else configures a run |
+| 3 | [`aksharallm/train/schedule.py`](../aksharallm/train/schedule.py) | `get_lr` — 25 lines, warmup + cosine/wsd. A pure function of the step, which is *why* a resumed run is mathematically identical to an uninterrupted one |
+| 4 | [`aksharallm/train/pretrain.py`](../aksharallm/train/pretrain.py) → `main`, the step loop | the four lines of the objective inside the `grad_accum` loop (note `loss / grad_accum`), then `clip_grad_norm_`, then `optimizer.step()`. Everything else in the loop is logging, evaluating or stopping |
+| 5 | same file | `save_checkpoint` / `load_checkpoint` — write-to-`.tmp`-then-`replace`, and what `resume: auto` restores (weights, Adam state, step) |
+| 6 | same file | `evaluate`, and the logging block — where `tok/s` measures the *actual* window rather than assuming `log_every`, which is the MFU > 100% bug |
+| 7 | [`aksharallm/train/stopfile.py`](../aksharallm/train/stopfile.py) | `parse` → `reached` — the three things a STOP file can hold. The whole stop contract, shared by pretraining, SFT and QAT |
+| 8 | same file + `pretrain.py` | `claim_pid_file`, `resolve_stop_step`, `_request_stop` — the signal handler, the pid file, and the single save-and-exit path every kind of stop goes through |
+| 9 | [`aksharallm/train/runlog.py`](../aksharallm/train/runlog.py) | `split_sessions` / `summarise_session` — how `train_log.jsonl` is read back, by both `scripts/sessions.py` and the portal |
+
+What pins it: `tests/test_pipeline.py::test_warmup_is_linear_and_peaks_at_base_lr`,
+`::test_cosine_decays_to_the_floor_and_never_below`, and the stop-file group
+(`test_empty_stop_file_means_stop_now`, `::test_a_deadline_stop_file_fires_on_time_not_on_a_step`).
+Break the warmup on purpose in [lesson 5](lessons/05-training-loop.md), the stop contract in
+[lesson 6](lessons/06-stop-resume.md).
+
+---
+
 Next: [5. Post-training →](05-posttraining.md)

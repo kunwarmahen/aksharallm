@@ -31,6 +31,9 @@ ever pointed at output from a model you did not train, put it in a container fir
 
 Turn the whole thing off with `infer.run_tests: false` in `configs/portal.yaml`; the code
 tab still generates and shows the function, it just never runs it.
+
+Read with: docs/06-inference.md -- the chapter this implements; it ends with the order to read
+these files in.
 """
 
 from __future__ import annotations

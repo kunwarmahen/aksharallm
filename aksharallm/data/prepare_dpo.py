@@ -14,6 +14,9 @@ things that are matters of degree: tone, length, hedging, when to refuse.
 Stored padded (not packed) because a DPO example is an indivisible triple: the chosen
 and rejected responses must be scored against the same prompt, so we can't let a block
 boundary cut through one.
+
+Read with: docs/05-posttraining.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

@@ -48,6 +48,9 @@ The pieces
 * :mod:`~aksharallm.synth.dataset`  — the writer, the provenance record, and the exports
   that `prepare_sft` / `prepare_dpo` consume.
 * :mod:`~aksharallm.synth.run`      — the generation loop, its budget and its stop file.
+
+Read with: docs/13-synthetic-data.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from .dataset import Dataset, SynthError, list_datasets

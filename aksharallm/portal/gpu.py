@@ -26,6 +26,9 @@ No dependency: `nvidia-smi --query-gpu=… --format=csv` is always there if the 
 and a machine without it degrades to an honest "no NVIDIA GPU detected" rather than an
 exception. (NVML bindings would be cheaper per sample, but they are a package to install,
 and one subprocess every five seconds is not a real cost.)
+
+Read with: docs/09-running-and-watching.md -- the chapter this implements; it ends with the
+order to read these files in. See also docs/07-scaling.md.
 """
 
 from __future__ import annotations

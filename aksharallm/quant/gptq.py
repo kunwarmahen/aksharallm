@@ -38,6 +38,9 @@ accounts for upstream damage too. Here the statistics are collected once, from t
 model. That is simpler, roughly one pass instead of one per block, and gives up a little
 quality at 4 bits. Recorded here rather than glossed over, because it is the honest gap
 between this file and the paper.
+
+Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

@@ -1,4 +1,8 @@
-"""Config objects. Everything that differs between runs lives in a YAML file."""
+"""Config objects. Everything that differs between runs lives in a YAML file.
+
+Read with: docs/04-pretraining.md -- the chapter this implements; it ends with the order to
+read these files in. See also docs/03-model.md.
+"""
 
 from __future__ import annotations
 

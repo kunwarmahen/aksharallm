@@ -14,6 +14,9 @@ question worth being able to answer three model generations later.
 Only the columns a suite actually uses are kept. HellaSwag's validation split carries
 `source_id`, `split_type` and friends that no scorer ever reads; dropping them takes the
 cache from tens of megabytes to a few, and makes the file readable with `head`.
+
+Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read these
+files in.
 """
 
 from __future__ import annotations

@@ -17,6 +17,9 @@ Examples are *packed* end-to-end into fixed seq_len blocks rather than padded. P
 none. The cost is that one window can contain the tail of one conversation and the head
 of the next, which the model sees as an <|im_end|> followed by a fresh <|im_start|> --
 exactly the boundary it needs to learn anyway.
+
+Read with: docs/05-posttraining.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

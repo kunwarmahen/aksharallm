@@ -125,14 +125,14 @@ the rest of the portal: **read the doc** (Docs tab), **open the file** (Code tab
 local model will explain the lines before you break them), and **try it** (Playground, on the
 probe the lesson is about).
 
-## Where the code is
+## The code, in reading order
 
-| file | what it holds |
-|---|---|
-| `docs/lessons/*.md` | the lessons: YAML frontmatter + explanation + exercise |
-| `learn/lessons.py` | parsing, the prereq graph, and `validate()` |
-| `learn/progress.py` | `learning/progress.json`, the red-then-green rule, prereq gating |
-| `learn/check.py` | running one pytest node and reporting it usefully |
-| `learn/__main__.py` | the terminal front end |
-| `portal/learn.py` | the tab's server side — thin, because a check is inline, not a job |
-| `tests/test_lessons.py` | the drift detector |
+| # | file | what to look for |
+|---|---|---|
+| 1 | [`docs/lessons/01-data.md`](lessons/01-data.md) | one lesson, and the shape of all thirteen: frontmatter (`doc`, `files`, `verify`, `prereqs`, `minutes`), explanation, exercise. The `files:` list is this chapter's version of every other chapter's reading order |
+| 2 | [`learn/lessons.py`](../aksharallm/learn/lessons.py) | `Lesson`, the frontmatter parser, the prereq graph, and `validate()` — every referenced doc and file exists, ids unique, no cycle |
+| 3 | [`learn/progress.py`](../aksharallm/learn/progress.py) | `learning/progress.json`, and the red-then-green state machine: a lesson completes only after its check has been seen failing *and* then passing |
+| 4 | [`learn/check.py`](../aksharallm/learn/check.py) | running one pytest node id and turning its output into something worth reading |
+| 5 | [`learn/__main__.py`](../aksharallm/learn/__main__.py) | the terminal front end — `show`, `check`, `validate`, `reset` |
+| 6 | [`portal/learn.py`](../aksharallm/portal/learn.py) | the tab's server side. Thin, because a check is inline rather than a job — the only panel in the portal that does not shell out |
+| 7 | [`tests/test_lessons.py`](../tests/test_lessons.py) | the drift detector: every `verify` is collected as a real node, and lesson bodies are grepped for "line N" |

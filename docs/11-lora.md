@@ -462,6 +462,27 @@ python -m aksharallm.data.prepare_sft synthetic \
    width through every layer, so batch size still has to be tuned. Every budget table in
    this project says so.
 
+## The code, in reading order
+
+Six small files. The first one is the idea; the rest are about attaching it to a model
+without getting the order wrong.
+
+| # | file | what to look for |
+|---|---|---|
+| 1 | [`lora/layer.py`](../aksharallm/lora/layer.py) | `LoRALinear.forward` — `(x @ A.T) @ B.T`, in that order, never materialising `ΔW`. Then `reset_parameters` (why `B` is zero and `A` is not) and the `disable_adapters` context manager |
+| 2 | [`lora/inject.py`](../aksharallm/lora/inject.py) | `PRESETS` / `resolve_targets` (the table above), then `apply_lora` — walking the model, swapping `nn.Linear` for `LoRALinear`, and refusing `lm_head`. Then `prepare_for_training`, which pins `QuantLinear.backend = "torch"` because the Triton kernel has no backward pass |
+| 3 | [`lora/setup.py`](../aksharallm/lora/setup.py) | `prepare_base` → `attach` — **quantize first, inject second**, with the reason in the code. This is the file that stops the silent failure in gotcha 2 |
+| 4 | [`lora/adapter.py`](../aksharallm/lora/adapter.py) | `save_adapter` / `load_adapter_file`, then `check_base` — the three-way identity check (architecture, tokenizer, rank/targets) that refuses a delta applied to the wrong base |
+| 5 | [`lora/merge.py`](../aksharallm/lora/merge.py) | `merge_lora` (into float, and it says so) and `unmerged_equivalent`, which is what the test compares against |
+| 6 | [`lora/cli.py`](../aksharallm/lora/cli.py) | `cmd_budget` — the memory table at the top of this chapter, computed from real shapes without training anything. Then `cmd_show`, `cmd_merge`, `cmd_presets` |
+| 7 | [`train/sft.py`](../aksharallm/train/sft.py) · [`train/dpo.py`](../aksharallm/train/dpo.py) | the integration, and it is small: `add_lora_args` / `wants_lora`, the LR default that moves 20×, and `as_reference` — the reference model that costs nothing |
+| 8 | [`aksharallm/portal/finetune.py`](../aksharallm/portal/finetune.py) | `FinetuneJobs` — the tab shells out to `python -m aksharallm.train.sft`, and its stop file is `logs/finetune/STOP`, deliberately not the base run's |
+
+What pins it: `tests/test_lora.py` — `test_gradients_reach_the_adapters_through_a_four_bit_base`
+(gradients survive dequantization, and `A` is idle at step 0), the merge-equivalence test,
+and the base-mismatch refusal. `tests/test_infer_adapter.py` covers base + adapter at
+inference. Break `B = 0` on purpose in [lesson 10](lessons/10-lora.md).
+
 ## Where this sits
 
 ```

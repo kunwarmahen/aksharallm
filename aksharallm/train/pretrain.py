@@ -8,6 +8,9 @@ The whole of pretraining is this:
 Everything else in this file is the machinery that makes it survive days of wall-clock:
 mixed precision, gradient accumulation, LR scheduling, checkpoint/resume, and throughput
 measurement so you can tell when you've made things slower.
+
+Read with: docs/04-pretraining.md -- the chapter this implements; it ends with the order to read
+these files in.
 """
 
 from __future__ import annotations

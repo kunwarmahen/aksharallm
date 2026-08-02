@@ -346,6 +346,25 @@ judge:
    because the portal writes it there; the reader excludes it by name. Without that the
    running job appears in the table as an empty evaluation.
 
+## The code, in reading order
+
+| # | file | what to look for |
+|---|---|---|
+| 1 | [`eval/suites.py`](../aksharallm/eval/suites.py) | **start here.** `Suite` and the `SUITES` table — every benchmark's chance line, its `expect` sentence and its builder. Then `build_mmlu` / `build_hellaswag` / `build_gsm8k` / `build_humaneval` to see exactly what the model is shown |
+| 2 | [`eval/sources.py`](../aksharallm/eval/sources.py) | `Source` and `fetch` — downloaded once into `data/eval/`, with a `.meta.json` recording which copy of the dataset this is. Note the fallback repositories |
+| 3 | [`eval/scoring.py`](../aksharallm/eval/scoring.py) | `_encode_pair` (the continuation tokenized *with* the context — the subtle one), `loglikelihood`, `score_mc` (`acc` vs `acc_norm` vs `acc_greedy`), `generate_until`, `perplexity`. `_batches` is the token-budget batcher |
+| 4 | [`eval/runner.py`](../aksharallm/eval/runner.py) | `Harness` — one suite at a time, loading the model through `infer.Engine` rather than itself, which is where the device policy, adapters and quantized checkpoints come from free |
+| 5 | [`eval/judge.py`](../aksharallm/eval/judge.py) | `build_messages` / `parse_grade` / `run` — temperature 0, a rubric per prompt, and `Grade` with ungraded distinct from 1 |
+| 6 | [`eval/report.py`](../aksharallm/eval/report.py) | `Results` → `summary_table` / `compare_table` — a folder of JSON, no database, and the trend across steps |
+| 7 | [`eval/__main__.py`](../aksharallm/eval/__main__.py) | `cmd_suites` / `cmd_fetch` / `cmd_run` / `cmd_report` — thin, by design |
+| 8 | [`aksharallm/infer/sandbox.py`](../aksharallm/infer/sandbox.py) | HumanEval's scorer is the same sandbox the Playground and GRPO use. Note who adds the `check(entry_point)` call |
+| 9 | [`aksharallm/portal/evals.py`](../aksharallm/portal/evals.py) | `EvalJobs` — the tab runs the CLI in a subprocess and reads the same result files |
+
+What pins it: `tests/test_eval.py` — the mixed-length batch scored against the same pairs
+one at a time (right-padding under a causal mask), `full_logits` returning exactly what the
+training path returns, and the BPE-boundary test written *for*
+[lesson 11](lessons/11-eval.md) after the original one turned out to be unable to fail.
+
 ## Where this sits
 
 ```

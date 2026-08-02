@@ -8,6 +8,9 @@ and hands over; there is no second implementation behind it.
 
     old:  python -m aksharallm.eval.evaluate small-code --tasks perplexity,hellaswag
     new:  python -m aksharallm.eval small-code --suite perplexity,hellaswag
+
+Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read these
+files in.
 """
 
 from __future__ import annotations

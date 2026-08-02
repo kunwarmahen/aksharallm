@@ -29,6 +29,9 @@ The three:
 difference within a pair, so a rejected answer has to be plausible and worse in one named
 way — and the flaw's name is kept on the sample, which is what makes the dataset auditable
 later ("did we teach it to stop hedging, or only to stop rambling?").
+
+Read with: docs/13-synthetic-data.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

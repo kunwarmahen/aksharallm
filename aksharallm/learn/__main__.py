@@ -8,6 +8,9 @@
 
 The portal's Learn tab is a view over exactly these functions, and the progress file is the
 same one, so a lesson checked here is ticked there.
+
+Read with: docs/15-learning-path.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

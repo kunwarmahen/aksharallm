@@ -247,14 +247,23 @@ Two things to know when reading the numbers:
 
 ---
 
-## Where the code is
+## The code, in reading order
 
-| file | what it holds |
-|---|---|
-| `model/moe.py` | `Router` (top-k + both aux losses), `MoEFeedForward` (sorted dispatch), `upcycle_state_dict`, `moe_stats` |
-| `config.py` | `n_experts`, `moe_top_k`, `moe_expert_d_ff`, `moe_aux_alpha`, `moe_z_alpha`, `moe_every` |
-| `model/transformer.py` | one line in `Block.__init__`, plus `num_active_params()` and the training-only aux term |
-| `train/pretrain.py` | the `experts` field on the step line and `moe` in the jsonl |
-| `configs/tiny-moe.yaml` | the matched-active-parameter experiment |
-| `scripts/experiment.sh` | the launcher for Phase-1-scale experiments, same contract as `phase2.sh` |
-| `tests/test_moe.py` | 25 tests, including the exact-identity upcycling one and a check of the sorted dispatch against a naive masked implementation |
+One new file, and five places that had to notice it. [doc 3](03-model.md) first — this
+replaces exactly one component of it.
+
+| # | file | what to look for |
+|---|---|---|
+| 1 | [`configs/tiny-moe.yaml`](../configs/tiny-moe.yaml) | six lines different from `configs/tiny.yaml`. Diff them — that is the whole experiment |
+| 2 | [`model/moe.py`](../aksharallm/model/moe.py) → `Router.forward` | logits → softmax → top-k → renormalise, and the counts it returns. Then `_balance_loss` (`f_i · P_i`, and why neither term works alone) and `_z_loss` |
+| 3 | same file → `MoEFeedForward.forward` | the sort: flatten to `N*k` pairs, `argsort` by expert id, one matmul per **contiguous** slice, scatter-add back. The loop is over 8 experts, not over tokens |
+| 4 | same file | `upcycle_state_dict` — copy the trained FFN N times, zero the gate; identity at init, exactly like LoRA's `B = 0`. Then `moe_stats` and `MoEStats.shares` |
+| 5 | [`aksharallm/config.py`](../aksharallm/config.py) | `n_experts`, `moe_top_k`, `moe_expert_d_ff`, `moe_aux_alpha`, `moe_z_alpha`, `moe_every`, plus `is_moe()` / `moe_layer()` |
+| 6 | [`model/transformer.py`](../aksharallm/model/transformer.py) | the one line in `Block.__init__`, then `moe_aux_loss` and where `forward` adds it **only while `self.training`** — which is why val loss stays comparable with the dense baseline. Also `num_active_params` |
+| 7 | [`train/pretrain.py`](../aksharallm/train/pretrain.py) | the `experts` field on the step line and `moe` in the jsonl — the chart's data source |
+| 8 | [`scripts/experiment.sh`](../scripts/experiment.sh) | the launcher for Phase-1-scale runs, same contract as `phase2.sh` |
+| 9 | [`quant/convert.py`](../aksharallm/quant/convert.py) · [`lora/inject.py`](../aksharallm/lora/inject.py) | `_refuse_moe`, and the skipped-layer reporting — the "what MoE breaks" table above, in code |
+
+What pins it: `tests/test_moe.py` — 25 tests, including the upcycling one that asserts
+`torch.equal` rather than `allclose`, and the sorted dispatch checked against a naive masked
+implementation. Break identity-at-init on purpose in [lesson 13](lessons/13-moe.md).

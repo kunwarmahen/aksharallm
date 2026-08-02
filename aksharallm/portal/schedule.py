@@ -29,6 +29,9 @@ Two properties worth stating, because they are what make an unattended schedule 
 * **A missed fire stays missed.** If the machine was asleep at 22:00, the 22:00 start does
   not go off at 07:00 when you open the lid — only within a short grace window. Waking to
   find a run that started nine hours late, mid-workday, is worse than not starting.
+
+Read with: docs/09-running-and-watching.md -- the chapter this implements; it ends with the
+order to read these files in. See also docs/07-scaling.md.
 """
 
 from __future__ import annotations

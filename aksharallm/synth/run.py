@@ -27,6 +27,9 @@ retry until it works, and it is wrong twice over: a model that ignored the outpu
 temperature 0.9 usually ignores it again, and — more importantly — retrying the *same seed*
 until it succeeds biases the dataset towards the cells the teacher finds easy. Abandoning it
 and moving to the next cell spends the same budget on coverage instead.
+
+Read with: docs/13-synthetic-data.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

@@ -11,6 +11,9 @@ Architecture choices and why they differ from the original GPT-2:
 
 Shapes convention used throughout:
   B = batch, T = time/sequence, C = d_model, H = n_heads, Hk = n_kv_heads, D = head_dim
+
+Read with: docs/03-model.md -- the chapter this implements; it ends with the order to read these
+files in. See also docs/06-inference.md.
 """
 
 from __future__ import annotations

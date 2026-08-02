@@ -18,6 +18,9 @@ still *trains* perfectly while generating garbage. Nobody would invent that.
 
 `python -m aksharallm.learn` drives all of it from a terminal; the portal's **Learn** tab is
 a view over the same three modules.
+
+Read with: docs/15-learning-path.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from .check import CheckError, CheckResult, run as run_check

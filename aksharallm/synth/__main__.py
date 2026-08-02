@@ -13,6 +13,9 @@ or `--stop-in 30m` — leaving a complete dataset with its provenance written. S
 with the same name carries on from where it stopped, walking new cells of the seed grid.
 
 Everything the portal's Synth tab does, it does by running these commands.
+
+Read with: docs/13-synthetic-data.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

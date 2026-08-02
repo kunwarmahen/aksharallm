@@ -12,6 +12,9 @@ everything you do to one afterwards.
 what full fine-tuning, LoRA and QLoRA would each cost in memory on a given checkpoint,
 without training anything, so "will this run on the 3090 while nothing else is on it" is
 a question with an answer before you start rather than after an OOM.
+
+Read with: docs/11-lora.md -- the chapter this implements; it ends with the order to read these
+files in.
 """
 
 from __future__ import annotations

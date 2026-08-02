@@ -53,6 +53,9 @@ expert id, and does **one matmul per expert over a contiguous slice** of the tok
 chose it. No token is dropped (there is no capacity factor), and the cost is k/N of the
 masked version. Expect MFU to fall against the dense model anyway — a sort and N smaller
 matmuls use the card less well than one big one, which is the honest cost of the trade.
+
+Read with: docs/14-moe.md -- the chapter this implements; it ends with the order to read these
+files in.
 """
 
 from __future__ import annotations

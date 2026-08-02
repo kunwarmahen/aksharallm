@@ -31,6 +31,9 @@ The honest framing, which the docs repeat: weight-only quantization is a *memory
 first. It becomes a *speed* win only once the dequantization is fused into the matmul,
 because single-token decoding is bandwidth-bound -- the GPU spends its time reading
 weights, so quartering the bytes read is the whole game.
+
+Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

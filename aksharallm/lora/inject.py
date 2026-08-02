@@ -16,6 +16,9 @@ Our transformer's linear layers, by dotted name:
 `tie_embeddings` it *is* the embedding table, so adapting it silently adapts the input
 lookup too. That is a different and much less predictable intervention than adapting a
 projection, and it is not what anyone means by "LoRA on the head".
+
+Read with: docs/11-lora.md -- the chapter this implements; it ends with the order to read these
+files in.
 """
 
 from __future__ import annotations

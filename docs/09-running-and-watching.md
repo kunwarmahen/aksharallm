@@ -514,6 +514,35 @@ python -m aksharallm.portal.runs delete  tiny-moe  # prompts for the name before
 
 ---
 
+## The code, in reading order
+
+Start with the shell — it is the contract everything else obeys — then the server, then the
+page.
+
+| # | file | what to look for |
+|---|---|---|
+| 1 | [`scripts/phase2.sh`](../scripts/phase2.sh) | pre-flight → data → smoke → `nohup`, and the files it publishes (`launch.pid`, `launch.meta`) so a launch with no trainer yet is still visible |
+| 2 | [`scripts/stop.sh`](../scripts/stop.sh) | every way to stop, all of them ending in one STOP file |
+| 3 | [`scripts/stage.sh`](../scripts/stage.sh) | the post-training gate — the prerequisite check is *here*, not in the UI, which is why it holds from both sides |
+| 4 | [`aksharallm/portal/runs.py`](../aksharallm/portal/runs.py) | `RunStore` — what a run is: config, checkpoints, pid, phase, sessions. Then `launcher_for` (which runs can be started at all), `archive` and `delete` |
+| 5 | [`aksharallm/portal/server.py`](../aksharallm/portal/server.py) | `Handler` — the routes, one per panel, and `serve`. Stdlib `http.server`, no framework; `index.html` is assembled per request from `parts/` |
+| 6 | [`aksharallm/train/runlog.py`](../aksharallm/train/runlog.py) | `series` and `summarise_sessions` — every chart on the dashboard is this file reading `train_log.jsonl` |
+| 7 | [`aksharallm/portal/gpu.py`](../aksharallm/portal/gpu.py) | `Sampler` → `snapshot` — the 5-second `nvidia-smi` sample, tagged with whether a trainer was alive |
+| 8 | [`aksharallm/portal/cost.py`](../aksharallm/portal/cost.py) | `integrate` (power curve → watt-hours), `Ledger` (the append-only ten-minute buckets), `report` (coverage, and why "whole run (est.)" is its own column) |
+| 9 | [`aksharallm/portal/schedule.py`](../aksharallm/portal/schedule.py) | `Rule.due` (the 15-minute grace window — a missed fire stays missed) → `Scheduler.check` → `Scheduler.fire`, which is idempotent, and the one-per-machine `lock` |
+| 10 | [`aksharallm/portal/pipeline.py`](../aksharallm/portal/pipeline.py) | `Pipeline` — the post-training panel. A small parallel reader to `RunStore`, because SFT/DPO/GRPO have no `configs/<run>.yaml` and do have prerequisites |
+| 11 | [`evals.py`](../aksharallm/portal/evals.py) · [`quantize.py`](../aksharallm/portal/quantize.py) · [`finetune.py`](../aksharallm/portal/finetune.py) · [`synth.py`](../aksharallm/portal/synth.py) | one job runner per tab. Read any *one* of them — they are the same shape: start a subprocess of the CLI, stream its output, write a JSON result. [`learn.py`](../aksharallm/portal/learn.py) is the exception, and says why |
+| 12 | [`aksharallm/portal/static/js/router.js`](../aksharallm/portal/static/js/router.js) | `registerTab` — the router knows nothing about any tab; each module registers itself with `open` / `leave`. This is why a tab is inert until you open it |
+| 13 | `static/js/core.js` → `state.js` → `charts.js` → `dashboard.js` → one tab file | the DAG in the diagram above, bottom to top. `main.js` last: it only wires and boots |
+
+What pins it: `tests/test_portal.py` and its siblings (`test_portal_cost.py`,
+`test_portal_eval.py`, `test_portal_finetune.py`, `test_portal_quantize.py`,
+`test_portal_synth.py`, `test_portal_pipeline.py`) —
+`test_a_second_portal_does_not_steal_the_pid_file` is the one whose absence caused real
+confusion.
+
+---
+
 You now have the whole arc: [data](01-data.md) →
 [tokenizer](02-tokenizer.md) → [model](03-model.md) → [pretraining](04-pretraining.md) →
 [post-training](05-posttraining.md) → [inference](06-inference.md) →

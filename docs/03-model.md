@@ -317,4 +317,30 @@ idea which of the two is broken.
 
 ---
 
+## The code, in reading order
+
+Almost all of it is one file. Read it in **this** order rather than top to bottom — it is
+laid out for the machine (leaves before the things that use them), and this order is the
+data flow:
+
+| # | file | what to look for |
+|---|---|---|
+| 1 | [`aksharallm/config.py`](../aksharallm/config.py) | `ModelConfig` — every dimension in the table above, plus `__post_init__`, where `d_ff` gets rounded and `head_dim` is derived |
+| 2 | [`transformer.py`](../aksharallm/model/transformer.py) → `Transformer.forward` | **start here.** Embedding → blocks → final norm → `lm_head`, and the `if targets is None` branch that projects only the last position. Fifteen lines that name everything below |
+| 3 | `Block.forward` | the residual stream in two lines: `x = x + attn(norm(x))`, `x = x + ffn(norm(x))`. Pre-norm — the belt itself is never normalised |
+| 4 | `Attention.forward` | q/k/v projections, `apply_rope`, the cache update, then `F.scaled_dot_product_attention`. The line to read twice is `is_causal = cache is None or T > 1` |
+| 5 | `build_rope_cache` + `apply_rope` + `_rotate_half` | the geometric frequencies, and the rotation whose dot product depends only on the *distance* |
+| 6 | `RMSNorm.forward` · `SwiGLU.forward` | four lines each. Note the fp32 upcast for the mean-of-squares, and the gate `silu(w1 x) * (w3 x)` |
+| 7 | `KVCache` | preallocated, `update` appends and returns the live prefix. Read it again with [doc 6](06-inference.md) |
+| 8 | `Transformer._init_weights` · `configure_optimizers` · `num_params` · `estimate_mfu` | the `0.02/√(2·n_layers)` scaling for residual writers, the decay/no-decay split, and where the MFU number in the logs comes from |
+| 9 | [`aksharallm/model/moe.py`](../aksharallm/model/moe.py) | optional — the one component that replaces step 6's FFN. [doc 14](14-moe.md) |
+
+What pins it: `tests/test_model.py` is the shortest honest summary of this chapter —
+`test_causality`, `test_rope_preserves_norm_and_relative_position`, `test_weight_tying`,
+`test_init_loss_is_uniform`, and above all `test_kv_cache_matches_full_forward`. Break the
+mask on purpose in [lesson 3](lessons/03-attention.md), the cache in
+[lesson 4](lessons/04-kv-cache.md).
+
+---
+
 Next: [4. Pretraining →](04-pretraining.md)

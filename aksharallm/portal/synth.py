@@ -23,6 +23,9 @@ stopped halfway is worse than nothing. A generation run stopped halfway is a sma
 dataset, complete, with its provenance written and its funnel counted — so this panel, alone
 among the three, offers the same bounded stops the trainer does: now, at N samples, or in
 twenty minutes.
+
+Read with: docs/13-synthetic-data.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

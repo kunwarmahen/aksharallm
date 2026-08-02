@@ -24,6 +24,9 @@ rather than ignoring it.
 
 The trainers' half of the contract is `reached()`: give it the current step and it returns
 the reason string to print, or None to keep going.
+
+Read with: docs/04-pretraining.md -- the chapter this implements; it ends with the order to read
+these files in. See also docs/09-running-and-watching.md.
 """
 
 from __future__ import annotations

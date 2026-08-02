@@ -50,6 +50,9 @@ The error we minimise is `sum over channels of E[x_j^2] * (W - Wq)_ij^2` -- the 
 weight error, weighted by how much energy that input channel actually carries. That is
 the diagonal of the same Hessian GPTQ uses, which is why AWQ is so much cheaper: it needs
 one number per channel, not an in_features x in_features matrix.
+
+Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

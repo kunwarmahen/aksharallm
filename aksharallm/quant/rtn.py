@@ -13,6 +13,9 @@ saying that it doesn't.
 
 So the RTN-vs-GPTQ gap at int4 is the single most informative number this package
 produces, and it is why RTN is built first rather than skipped.
+
+Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

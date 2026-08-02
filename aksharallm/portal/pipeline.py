@@ -12,6 +12,9 @@ prerequisite whether it's launched from here or a terminal.
         └─ SFT  (checkpoints/<base>-sft/sft_best.pt)
               ├─ DPO   (checkpoints/<base>-dpo/dpo_best.pt)
               └─ GRPO  (checkpoints/<base>-grpo/grpo_best.pt)
+
+Read with: docs/09-running-and-watching.md -- the chapter this implements; it ends with the
+order to read these files in.
 """
 
 from __future__ import annotations

@@ -22,6 +22,9 @@ the model -- so it is not a rounding error either way.
 
 Hence: **skip lm_head when embeddings are tied**, by default, and report it as skipped
 rather than silently omitting it. `--quantize-head` overrides for the curious.
+
+Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

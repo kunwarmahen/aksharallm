@@ -19,6 +19,9 @@ Three kinds:
 The code tasks are deliberately easier than HumanEval's. `aksharallm.eval.evaluate` has the
 real benchmark; these exist so that a model 15% of the way through pretraining shows a
 signal other than zero, which is what makes them useful for watching a run.
+
+Read with: docs/06-inference.md -- the chapter this implements; it ends with the order to read
+these files in.
 """
 
 from __future__ import annotations

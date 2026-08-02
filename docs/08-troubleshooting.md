@@ -330,4 +330,27 @@ Five minutes here saves six days.
 
 ---
 
+## The code, in reading order
+
+This chapter has no order of its own — a symptom sends you straight to one place. So this
+table is by symptom, and each row is the first file to open:
+
+| symptom | open | what to look at |
+|---|---|---|
+| step-0 loss is wrong | [`aksharallm/data/loader.py`](../aksharallm/data/loader.py) → [`model/transformer.py`](../aksharallm/model/transformer.py) | `get_batch`'s one-position shift; then `_init_weights` and the `0.02/√(2·n_layers)` scaling |
+| NaN, spikes, or a flat loss | [`aksharallm/train/pretrain.py`](../aksharallm/train/pretrain.py) · [`train/schedule.py`](../aksharallm/train/schedule.py) | the `ctx` autocast (bf16, no scaler), `clip_grad_norm_`, and `get_lr` — check the warmup is not longer than the run |
+| OOM, or MFU below 20% | [`aksharallm/config.py`](../aksharallm/config.py) · `pretrain.py` | `TrainConfig.batch_size` / `grad_accum` / `seq_len` / `compile`, and `estimate_mfu` in `transformer.py` for what the number means |
+| MFU above 100% after a resume | `pretrain.py`, the logging block | `step - prev_log_step` — the window is measured, not assumed. Instrumentation, not hardware |
+| trains fine, generates garbage | [`aksharallm/model/transformer.py`](../aksharallm/model/transformer.py) | `is_causal = cache is None or T > 1` in `Attention.forward`. Second suspect: the tokenizer path in the checkpoint |
+| it repeats, or stops immediately | [`aksharallm/infer/generate.py`](../aksharallm/infer/generate.py) | `_filter_logits` and the repetition-penalty sign handling; then whether EOS is being encoded into the prompt |
+| `train.bin` is empty or short | [`aksharallm/data/prepare.py`](../aksharallm/data/prepare.py) | `tokenize_to_bin` — the `apply_async` loop and the zero-token hard check |
+| a run vanished, or stopped at step 0 | [`aksharallm/train/stopfile.py`](../aksharallm/train/stopfile.py) · [`scripts/stop.sh`](../scripts/stop.sh) | `parse` / `reached` / `describe` — a leftover STOP file, or a deadline you forgot you queued |
+| the portal disagrees with `nvidia-smi` | [`aksharallm/portal/runs.py`](../aksharallm/portal/runs.py) | `_alive` / `_cmdline` — the pid file first, the anchored command line as fallback, and why it refuses to signal anything else |
+
+And the check that comes before all of them: `python -m pytest tests/ -q`, about five
+seconds. `tests/test_model.py::test_kv_cache_matches_full_forward` alone rules out the
+single most confusing failure on this page.
+
+---
+
 Next: [9. Running and watching it →](09-running-and-watching.md)

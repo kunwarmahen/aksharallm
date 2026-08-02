@@ -378,15 +378,24 @@ around 205 MB, on the same harness. Either answer is interesting.
 
 ---
 
-## Where the code is
+## The code, in reading order
 
-| file | what it holds |
-|---|---|
-| `synth/teacher.py` | the Ollama client (shared with docs/07's Code tab and docs/12's judge), per-recipe model choice, contention reporting |
-| `synth/prompts.py` | the seed grid, and `TEMPLATE_VERSION` |
-| `synth/recipes.py` | the three recipes: prompt, parser, dedup key, export |
-| `synth/filters.py` | validity checks, the shingle deduper, `REJECT_REASONS` |
-| `synth/verify.py` | run the tests, stub the entry point, run them again |
-| `synth/dataset.py` | `data/synth/<name>/`, provenance, the exports |
-| `synth/run.py` | the loop, its budgets and the STOP file |
-| `portal/synth.py` | the Synth tab's job runner — starts the CLI above, never generates itself |
+Follow one sample through the pipeline — that is the order below, and it is the order of the
+diagram at the top of this chapter.
+
+| # | file | what to look for |
+|---|---|---|
+| 1 | [`synth/prompts.py`](../aksharallm/synth/prompts.py) | `Seed`, the grids themselves, `seeds()` and `grid_size()` — diversity as a walk over 480 (or 1,296) cells rather than a temperature. `TEMPLATE_VERSION` is recorded in every dataset that used it |
+| 2 | [`synth/teacher.py`](../aksharallm/synth/teacher.py) | `Teacher.ask` and `Reply` — the Ollama client, shared with the Code tab ([doc 9](09-running-and-watching.md)) and the judge ([doc 12](12-eval.md)); `SynthConfig` for per-recipe models; `contention()` for the VRAM warning |
+| 3 | [`synth/recipes.py`](../aksharallm/synth/recipes.py) | `Recipe`, then `PythonRecipe` — prompt, `sections()` parser, dedup key, export. Then `ChatRecipe` and `PreferenceRecipe`, which is the one that asks for a deliberately flawed answer |
+| 4 | [`synth/verify.py`](../aksharallm/synth/verify.py) | `verify` — run the tests, then `stub()` the solution through the **AST** and run them again. `Verdict` carries which of the two failed |
+| 5 | [`synth/filters.py`](../aksharallm/synth/filters.py) | `check_text` / `check_code`, then `Deduper` — five-word shingles, Jaccard, and the inverted index that keeps it linear. `REJECT_REASONS` is the tally's vocabulary |
+| 6 | [`synth/dataset.py`](../aksharallm/synth/dataset.py) | `Dataset` — `data/synth/<name>/`, `meta.json` written after *every* sample, `teachers` and `template_versions` as lists, and the exports |
+| 7 | [`synth/run.py`](../aksharallm/synth/run.py) | `preflight` → `generate` → `_handle` — the loop, the budgets, the STOP file, and `Stats`, which is the funnel |
+| 8 | [`synth/__main__.py`](../aksharallm/synth/__main__.py) | `cmd_gen` / `cmd_show` / `cmd_export` — the commands above |
+| 9 | [`aksharallm/data/prepare_sft.py`](../aksharallm/data/prepare_sft.py) · [`prepare_dpo.py`](../aksharallm/data/prepare_dpo.py) | the `jsonl` recipe in each — one function apiece, and the entire integration with training |
+| 10 | [`aksharallm/portal/synth.py`](../aksharallm/portal/synth.py) | `SynthJobs` — starts the CLI above, never generates anything itself |
+
+What pins it: `tests/test_synth.py` — the stub-and-rerun check, the shingle deduper, and the
+grid coverage. Accept a vacuous test on purpose in
+[lesson 12](lessons/12-synthetic-data.md).

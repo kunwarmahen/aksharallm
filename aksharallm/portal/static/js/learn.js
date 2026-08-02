@@ -102,6 +102,20 @@ function renderLesson(l, keepResult) {
     : l.minutes ? `about ${l.minutes} minutes` : '';
 
   $('#ln-body').innerHTML = renderMarkdown(l.body || '');
+  /* A lesson body names files, and a repo-relative link would navigate the portal to a dead
+   * URL like /aksharallm/data/loader.py. Send those to the Code tab instead — the same
+   * bargain the Docs reader strikes, and the same place the file chips below go. */
+  for (const a of $('#ln-body').querySelectorAll('a[href]')) {
+    const href = a.getAttribute('href');
+    if (/^(https?:|#)/i.test(href)) {
+      if (href[0] !== '#') { a.target = '_blank'; a.rel = 'noopener noreferrer'; }
+      continue;
+    }
+    const target = href.split('#')[0];
+    if (/\.md$/i.test(target)) a.dataset.doc = target;
+    else a.dataset.file = target;
+    a.setAttribute('href', '#');
+  }
 
   /* Phase C: the hand-offs. The Code tab opens the exact file the exercise edits, and the
    * Playground opens the probe the lesson talks about — so "read it, look at it, run it"
@@ -199,6 +213,23 @@ export function wireLearnTab() {
      * explain the lines before you break them. */
     showView('code');
     openFile(btn.dataset.file);
+  });
+
+  /* The same two hand-offs, for links written inside the lesson's own prose. */
+  $('#ln-body').addEventListener('click', (e) => {
+    const file = e.target.closest('a[data-file]');
+    if (file) {
+      e.preventDefault();
+      showView('code');
+      openFile(file.dataset.file);
+      return;
+    }
+    const doc = e.target.closest('a[data-doc]');
+    if (doc) {
+      e.preventDefault();
+      location.hash = 'docs';
+      setTimeout(() => window.dispatchEvent(new CustomEvent('open-doc', { detail: doc.dataset.doc })), 50);
+    }
   });
 
   $('#ln-open-play').addEventListener('click', () => {

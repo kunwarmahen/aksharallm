@@ -14,6 +14,9 @@ Why uint16: our vocab is <= 65536, so 2 bytes/token. A 10B-token corpus is 20 GB
 np.memmap can serve straight from the OS page cache with no dataloader workers.
 
 Everything streams: we never hold the raw text and the tokens in memory at once.
+
+Read with: docs/01-data.md -- the chapter this implements; it ends with the order to read these
+files in.
 """
 
 from __future__ import annotations

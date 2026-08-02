@@ -26,6 +26,9 @@ There is **no bounded stop** here, unlike the run panel and QAT. An evaluation i
 training loop: stopping it halfway leaves a partial score, and a partial score is worse
 than no score because it looks like a real one in a table. Stop means stop, and it writes
 nothing. Bound the *work* instead, with a smaller `--limit`.
+
+Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read these
+files in.
 """
 
 from __future__ import annotations

@@ -86,6 +86,12 @@ numbers.
 
 Read these in order. They assume no prior knowledge of machine learning.
 
+Every chapter ends with **"The code, in reading order"** — the `.py` files it explains,
+listed in the order that makes them make sense, with what to look at inside each and the
+test that pins it. It points the other way too: every module's docstring names the chapter
+it belongs to (`Read with: docs/03-model.md`), so a file you land in from a traceback or a
+grep is one line away from the prose. `tests/test_docs.py` fails if either pointer rots.
+
 | # | Doc | What you'll learn |
 |---|-----|-------------------|
 | 0 | [What we're building](docs/00-overview.md) | What an LLM is, the four training stages, why each exists |

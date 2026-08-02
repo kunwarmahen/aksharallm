@@ -16,6 +16,9 @@ the button just presses it once more.
 State lives in `learning/progress.json` — outside `docs/`, because it is personal and
 changes constantly, and gitignored for the same reason a shell history is. Losing it costs
 some ticks in a list, so it is written whole and atomically rather than carefully.
+
+Read with: docs/15-learning-path.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

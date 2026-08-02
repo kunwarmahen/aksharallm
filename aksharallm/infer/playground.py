@@ -12,6 +12,9 @@ The order matters and is always this:
 The tests run *before* the record is written, because a record of a code generation without
 its verdict is the least useful kind: "the model wrote this" is worth much less than "the
 model wrote this and it passed".
+
+Read with: docs/06-inference.md -- the chapter this implements; it ends with the order to read
+these files in.
 """
 
 from __future__ import annotations

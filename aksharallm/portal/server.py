@@ -20,6 +20,9 @@ Design notes worth knowing before changing anything here:
   events, and deliberately the same event shape — one is a local Ollama model reading your
   code, the other is your own checkpoint generating, and the page consumes them with the
   same few lines of JavaScript.
+
+Read with: docs/09-running-and-watching.md -- the chapter this implements; it ends with the
+order to read these files in.
 """
 
 from __future__ import annotations

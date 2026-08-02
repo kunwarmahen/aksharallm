@@ -22,6 +22,9 @@ Reading a checkpoint the trainer is actively writing is safe, and deliberately s
 `save_checkpoint` writes `ckpt_last.tmp` and then `Path.replace()`s it, which is atomic.
 You either see the whole previous checkpoint or the whole new one, never a half-written
 file — so the playground can watch a live run improve simply by re-reading `ckpt_last.pt`.
+
+Read with: docs/06-inference.md -- the chapter this implements; it ends with the order to read
+these files in.
 """
 
 from __future__ import annotations

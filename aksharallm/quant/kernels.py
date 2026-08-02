@@ -72,6 +72,9 @@ Weights are packed two per byte, low nibble first, so byte i holds k = 2i and k 
 Recovering that ordering inside the kernel would normally need an interleave; `tl.join`
 does it for free by stacking lo and hi along a new trailing axis and reshaping, which
 lands element (n, 2i) = lo and (n, 2i+1) = hi -- exactly the packing order.
+
+Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

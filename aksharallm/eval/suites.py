@@ -27,6 +27,9 @@ prints it beside the score. A 300M model scoring 25.4% on MMLU has not failed â€
 four-way multiple choice, so 25% is the coin flip, and everything below ~1B parameter
 scale sits on it. Knowing that in advance is the difference between reading a result and
 being demoralised by one.
+
+Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read these
+files in.
 """
 
 from __future__ import annotations

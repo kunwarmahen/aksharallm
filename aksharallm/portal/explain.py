@@ -19,6 +19,9 @@ Three separable pieces, in the order a request touches them:
 Nothing here writes anything, and nothing here touches the GPU directly — but note that the
 model Ollama loads *does* sit in the same VRAM the trainer is using. `configs/portal.yaml`
 keeps the context window and `keep_alive` deliberately small for that reason.
+
+Read with: docs/07-scaling.md -- the chapter this implements; it ends with the order to read
+these files in.
 """
 
 from __future__ import annotations
@@ -66,17 +69,38 @@ LANGS = {".py": "python", ".sh": "bash", ".yaml": "yaml", ".yml": "yaml", ".toml
 #: Where the human-written explanation of an area lives. The model is *told* the path so it
 #: can point the reader at it; the doc's text is not sent (the file plus the primer is
 #: already the context that matters, and this keeps the prompt small enough to stay fast).
+#:
+#: Longest prefix wins, so the specific entries have to come before the general ones -- the
+#: two `train/` post-training files before `train/` itself. Each chapter named here ends
+#: with a "The code, in reading order" section covering the files it is mapped from, and
+#: every module carries the reverse pointer in its docstring; keep the three in step.
 DOC_HINTS = (
+    ("aksharallm/data/prepare_sft", "docs/05-posttraining.md"),
+    ("aksharallm/data/prepare_dpo", "docs/05-posttraining.md"),
     ("aksharallm/data", "docs/01-data.md"),
     ("aksharallm/tokenizer", "docs/02-tokenizer.md"),
+    ("aksharallm/model/moe", "docs/14-moe.md"),
     ("aksharallm/model", "docs/03-model.md"),
     ("aksharallm/train/sft", "docs/05-posttraining.md"),
     ("aksharallm/train/dpo", "docs/05-posttraining.md"),
+    ("aksharallm/train/grpo", "docs/05-posttraining.md"),
+    ("aksharallm/train/runlog", "docs/09-running-and-watching.md"),
     ("aksharallm/train", "docs/04-pretraining.md"),
-    ("aksharallm/eval", "docs/04-pretraining.md"),
+    ("aksharallm/eval", "docs/12-eval.md"),
+    ("aksharallm/quant", "docs/10-quantization.md"),
+    ("aksharallm/lora", "docs/11-lora.md"),
+    ("aksharallm/synth", "docs/13-synthetic-data.md"),
+    ("aksharallm/learn", "docs/15-learning-path.md"),
     ("aksharallm/infer", "docs/06-inference.md"),
-    ("aksharallm/portal", "docs/07-scaling.md"),
-    ("scripts", "docs/07-scaling.md"),
+    ("aksharallm/portal/explain", "docs/07-scaling.md"),
+    ("aksharallm/portal/evals", "docs/12-eval.md"),
+    ("aksharallm/portal/quantize", "docs/10-quantization.md"),
+    ("aksharallm/portal/finetune", "docs/11-lora.md"),
+    ("aksharallm/portal/synth", "docs/13-synthetic-data.md"),
+    ("aksharallm/portal/learn", "docs/15-learning-path.md"),
+    ("aksharallm/portal", "docs/09-running-and-watching.md"),
+    ("docs/lessons", "docs/15-learning-path.md"),
+    ("scripts", "docs/09-running-and-watching.md"),
     ("configs", "docs/04-pretraining.md"),
     ("tests", "docs/08-troubleshooting.md"),
 )
@@ -94,13 +118,20 @@ Layout:
   aksharallm/tokenizer/  byte-level BPE (trainer + encoder); it fixes the embedding index
   aksharallm/data/       corpus download, tokenisation to flat uint16 .bin files, blending
   aksharallm/model/      the transformer: RoPE, RMSNorm, grouped-query attention, SwiGLU
-  aksharallm/train/      the pretraining loop, LR schedule, checkpointing, run logging
-  aksharallm/eval/       perplexity, HellaSwag, HumanEval
+  aksharallm/train/      the pretraining loop, LR schedule, checkpointing, run logging,
+                         and post-training: SFT, DPO, GRPO
+  aksharallm/eval/       the benchmark harness: MMLU, ARC, HellaSwag, PIQA, GSM8K,
+                         HumanEval, an LLM-judge, perplexity
   aksharallm/infer/      KV-cache generation and sampling
+  aksharallm/quant/      int8/int4/NF4 from scratch: RTN, GPTQ, AWQ, QAT, a Triton kernel
+  aksharallm/lora/       LoRA and QLoRA adapters from scratch
+  aksharallm/synth/      generating training data with a local teacher, and checking it
+  aksharallm/learn/      the learning path: thirteen lessons over this repo
   aksharallm/portal/     this local web portal (stdlib HTTP server, no dependencies)
   configs/*.yaml         one YAML per run; a run = that file plus `-o key=value` overrides
   scripts/*.sh           the launchers a human would type
-  docs/00-08             the human-written deep dives
+  docs/00-15             the human-written deep dives; each ends with the order to read
+                         the files it covers, and each module names its chapter
 
 Conventions that explain a lot of the code:
   * Everything is config-driven. Nothing about a run is hardcoded.

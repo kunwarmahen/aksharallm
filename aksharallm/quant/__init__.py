@@ -20,6 +20,9 @@ Modules:
     rtn       round-to-nearest, the baseline
     convert   swap a model's Linear layers for QuantLinear, save/load quantized checkpoints
     bench     measure what it actually bought: bytes, perplexity, tokens/sec
+
+Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from .qtensor import (

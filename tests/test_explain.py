@@ -20,11 +20,13 @@ import threading
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
 from aksharallm.portal.explain import (
     DEFAULT_ASK,
+    DOC_HINTS,
     ExplainConfig,
     Ollama,
     SourceTree,
@@ -155,7 +157,18 @@ def test_read_returns_text_and_the_matching_doc(repo):
 def test_doc_hints_prefer_the_longest_prefix():
     assert doc_for("aksharallm/train/sft.py") == "docs/05-posttraining.md"
     assert doc_for("aksharallm/train/pretrain.py") == "docs/04-pretraining.md"
-    assert doc_for("aksharallm/portal/server.py") == "docs/07-scaling.md"
+    assert doc_for("aksharallm/portal/server.py") == "docs/09-running-and-watching.md"
+    # a portal tab belongs to the chapter about what it does, not to the portal chapter
+    assert doc_for("aksharallm/portal/quantize.py") == "docs/10-quantization.md"
+    assert doc_for("aksharallm/model/moe.py") == "docs/14-moe.md"
+
+
+def test_every_hinted_doc_exists():
+    """A hint pointing at a chapter that has been renamed sends the reader nowhere, and the
+    model repeats the dead path back as if it were real."""
+    root = Path(__file__).resolve().parents[1]
+    for _, doc in DOC_HINTS:
+        assert (root / doc).is_file(), doc
 
 
 def test_portal_yaml_is_not_mistaken_for_a_run(repo):

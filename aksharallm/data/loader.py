@@ -4,6 +4,9 @@ There is no PyTorch Dataset/DataLoader here on purpose. Our data is a single con
 array of tokens on disk; the "dataset" is just `np.memmap`. Sampling a batch is B random
 offsets and a slice. No workers, no collate, no queue -- and it's faster than a DataLoader
 because the OS page cache is already doing the readahead for us.
+
+Read with: docs/01-data.md -- the chapter this implements; it ends with the order to read these
+files in.
 """
 
 from __future__ import annotations

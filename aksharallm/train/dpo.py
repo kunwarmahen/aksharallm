@@ -28,6 +28,9 @@ nothing: the policy *is* the base plus an adapter, so switching the adapter off 
 model you are already holding into the model you started from. One boolean instead of a
 second model. `disable_adapters` in `lora/layer.py` is the whole mechanism, and it is the
 neatest thing LoRA does for this file.
+
+Read with: docs/05-posttraining.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

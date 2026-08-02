@@ -32,6 +32,9 @@ A warning worth stating plainly: calibrate on data that resembles what the model
 *do*. Calibrating a code model purely on prose measures the wrong activations, and the
 damage shows up exactly where you care. Our blended run has both in `val.bin`, so the
 default draws from there.
+
+Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

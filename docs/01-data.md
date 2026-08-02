@@ -245,4 +245,21 @@ files are the size you expect before starting a multi-day run.**
 
 ---
 
+## The code, in reading order
+
+| # | file | what to look for |
+|---|---|---|
+| 1 | [`aksharallm/data/prepare.py`](../aksharallm/data/prepare.py) | `RECIPES` (which datasets exist), then `stream_texts` → `tokenize_to_bin`. The nested `drain_one` is the `apply_async` fix described above — read it beside the `imap` version it replaced |
+| 2 | [`aksharallm/data/loader.py`](../aksharallm/data/loader.py) | `TokenDataset.get_batch` — six lines, and the one-position shift between `x` and `y` is the entire pretraining objective. `_data` is the `np.memmap` that makes a 20 GB corpus free to open |
+| 3 | [`aksharallm/data/prepare_blend.py`](../aksharallm/data/prepare_blend.py) | `blended_corpus` — one tokenizer fitted on the *mix*, then one `.bin` per source |
+| 4 | [`aksharallm/data/loader.py`](../aksharallm/data/loader.py) again | `MixedTokenDataset._counts` — where the 85/15 becomes an exact per-batch split rather than an average (largest-remainder, so the counts always sum to `batch_size`) |
+| 5 | [`aksharallm/config.py`](../aksharallm/config.py) | `DataConfig` — `train_bin`, `train_sources`, `tokenizer`. The ratio lives here, which is why retuning it costs nothing |
+| 6 | [`aksharallm/data/prepare_sft.py`](../aksharallm/data/prepare_sft.py) · [`prepare_dpo.py`](../aksharallm/data/prepare_dpo.py) | the post-training side of the same machinery — read after [doc 5](05-posttraining.md). The `jsonl` recipe in each is how generated data ([doc 13](13-synthetic-data.md)) gets in |
+
+What pins it: `tests/test_pipeline.py::test_loader_shift_and_bounds` (the shift) and
+`::test_mixed_respects_weights_every_batch` (the exact blend). Break the first one on
+purpose in [lesson 1](lessons/01-data.md).
+
+---
+
 Next: [2. Tokenizer →](02-tokenizer.md)

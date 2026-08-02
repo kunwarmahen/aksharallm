@@ -13,6 +13,9 @@ short. A checkpoint reference is a run name (`small-code` → its best checkpoin
 
 Everything writes to `logs/eval/<timestamp>-<run>-<label>.json`, which the portal's Eval tab
 reads. A run started here appears there, and the other way round.
+
+Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read these
+files in.
 """
 
 from __future__ import annotations

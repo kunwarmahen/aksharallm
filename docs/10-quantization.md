@@ -597,6 +597,32 @@ has been trained to do.
 7. **Triton `BLOCK_M=16` costs ~100 seconds to compile** with the 3D broadcast reduce, on
    schemes that have nothing else in common. Capped at 4; decode is one row anyway.
 
+## The code, in reading order
+
+`aksharallm/quant/` is eleven files and they stack: the grid, then the layer, then four ways
+to choose codes, then the kernel that makes it fast.
+
+| # | file | what to look for |
+|---|---|---|
+| 1 | [`quant/qtensor.py`](../aksharallm/quant/qtensor.py) | **the foundation.** `QuantScheme` (and `bits_per_weight()`, the honest number), `resolve_group_size`, then `quantize_group` / `dequantize` — the `w ≈ s·(q−z)` from the top of this chapter, including the `clamp(max=0.)` / `clamp(min=0.)` that keeps zero representable |
+| 2 | same file | `_derive_nf4_levels` (erfinv, not a pasted table), `compress_scales` / `decompress_scales` (double quantization), `pack4` / `unpack4` (two codes per byte) |
+| 3 | [`quant/qlinear.py`](../aksharallm/quant/qlinear.py) | `QuantLinear` — packed weights as **buffers**, not Parameters, and the `backend` switch between torch and Triton |
+| 4 | [`quant/rtn.py`](../aksharallm/quant/rtn.py) | 43 lines. The baseline: divide, round, clamp |
+| 5 | [`quant/convert.py`](../aksharallm/quant/convert.py) | `linear_layers` → `quantize_model` → `save_quantized` / `apply_quant_metadata`. The tied-`lm_head` skip and `_refuse_moe` live here, and `QuantReport` is what the tables in this chapter are printed from |
+| 6 | [`quant/calib.py`](../aksharallm/quant/calib.py) | `collect` — Hessian for GPTQ, channel energy for AWQ, from 128 real sequences; `damped_hessian` is the 1% ridge |
+| 7 | [`quant/gptq.py`](../aksharallm/quant/gptq.py) | `gptq_quantize_weight` — quantize column *j*, push its error into the columns not done yet. The Cholesky-of-the-inverse trick is the loop's whole shape |
+| 8 | [`quant/awq.py`](../aksharallm/quant/awq.py) | `search_scale` (α grid including 0, so it may decide to do nothing), then `apply_awq` and `_gqa_share` — the fold that is silently wrong if GQA is ignored |
+| 9 | [`quant/qat.py`](../aksharallm/quant/qat.py) | `QATLinear.forward` — the straight-through estimator in one line — then `prepare_qat` / `convert_qat` / `train_qat` |
+| 10 | [`quant/kernels.py`](../aksharallm/quant/kernels.py) | the Triton kernel and `qlinear_forward`. Read the `BLOCK_N` / `BLOCK_K` comments beside the occupancy and scale-traffic findings above |
+| 11 | [`quant/bench.py`](../aksharallm/quant/bench.py) · [`cli.py`](../aksharallm/quant/cli.py) | `measure` (fixed eval batches, so a 0.01 difference is signal) and `_compare`, which is the command that produced every table here |
+| 12 | [`aksharallm/portal/quantize.py`](../aksharallm/portal/quantize.py) | the tab's job runner — it only ever shells out to 11 |
+
+What pins it: `tests/test_quant.py` (round trips, packing), `test_quant_methods.py`
+(GPTQ/AWQ, and the fold-is-bit-identical assertion), `test_quant_nf4.py` (the derivation to
+1.2e-7), `test_quant_qat.py`, `test_quant_kernel.py`. The zero-point invariant has its own
+test — `test_the_zero_point_is_always_a_representable_code` — which exists *because*
+[lesson 9](lessons/09-quantization.md) found that breaking it broke nothing.
+
 ## Where this sits
 
 Quantization is the second item in the from-scratch backend sequence: GRPO ✅ →

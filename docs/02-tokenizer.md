@@ -192,4 +192,22 @@ sequence.
 
 ---
 
+## The code, in reading order
+
+One file, and it is 142 lines — read it top to bottom in this order:
+
+| # | file | what to look for |
+|---|---|---|
+| 1 | [`aksharallm/tokenizer/tokenizer.py`](../aksharallm/tokenizer/tokenizer.py) | `SPLIT_PATTERN` and `SPECIAL_TOKENS` at the top — the regex above and the four fixed ids |
+| 2 | same file | `train_bpe` — merges learned from a corpus, and the byte-level alphabet that makes `<UNK>` impossible |
+| 3 | same file | `Tokenizer.encode` / `decode` / `encode_batch` — the replay of those merges, and the batch path the data prep uses across processes |
+| 4 | same file | `render_chat` — ChatML built **token by token**, returning `(ids, mask)`. The mask is what [doc 5](05-posttraining.md) trains on; nothing downstream searches for delimiters in a string |
+| 5 | [`aksharallm/data/prepare.py`](../aksharallm/data/prepare.py) | `main` — where the tokenizer is fitted before anything is tokenized, and `_init_worker`, which loads one per process |
+
+What pins it: `tests/test_pipeline.py::test_roundtrip_including_unicode`,
+`::test_special_token_ids_are_stable` and `::test_chat_mask_covers_only_assistant_content`.
+Break the round trip on purpose in [lesson 2](lessons/02-tokenizer.md).
+
+---
+
 Next: [3. The model →](03-model.md)

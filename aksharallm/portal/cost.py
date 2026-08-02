@@ -30,6 +30,9 @@ the report says *card only* rather than pretending otherwise.
 **Attribution** is whatever the sampler tagged: a training run (pretrain, SFT, DPO, GRPO), a
 portal job (eval, quantize, fine-tune), or idle. An interval takes the label of the sample
 that *starts* it, so a transition can misplace at most one interval — five seconds.
+
+Read with: docs/09-running-and-watching.md -- the chapter this implements; it ends with the
+order to read these files in.
 """
 
 from __future__ import annotations

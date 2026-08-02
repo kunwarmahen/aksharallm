@@ -18,6 +18,9 @@ browser. It is the same arrangement the quantization panel uses, for the same re
 Ordering inside a run is deliberate: the cheap deterministic suites first, generation last.
 An evaluation that is going to fail on a missing dataset or a bad checkpoint should fail in
 the first ten seconds, not after twenty minutes of HumanEval.
+
+Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read these
+files in.
 """
 
 from __future__ import annotations

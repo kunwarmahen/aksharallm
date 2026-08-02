@@ -15,6 +15,9 @@ Everything here is a thin front end over `aksharallm.infer.playground`, which th
 Playground tab uses too. Same device policy (the GPU, unless a run is training), same
 history file, same graded tasks — so a number you get here and a number you get in the
 browser mean the same thing.
+
+Read with: docs/06-inference.md -- the chapter this implements; it ends with the order to read
+these files in.
 """
 
 from __future__ import annotations

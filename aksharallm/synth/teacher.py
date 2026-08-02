@@ -22,6 +22,9 @@ single most likely answer is a dataset with 5,000 rows and almost no information
 real diversity comes from the seed grid in :mod:`~aksharallm.synth.prompts` — temperature
 alone mostly produces the same answer with different adjectives — but a low temperature
 would undo the grid's work.
+
+Read with: docs/13-synthetic-data.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

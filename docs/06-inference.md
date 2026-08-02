@@ -395,4 +395,28 @@ this size, and why a 0% on GSM8K is still worth measuring.
 
 ---
 
+## The code, in reading order
+
+The first three are the generation loop itself; everything after is the machinery that makes
+it usable on a machine that is also training.
+
+| # | file | what to look for |
+|---|---|---|
+| 1 | [`aksharallm/model/transformer.py`](../aksharallm/model/transformer.py) | `KVCache.update` and the `is_causal = cache is None or T > 1` line in `Attention.forward`, plus `init_caches`. Read [doc 3](03-model.md) first if you have not |
+| 2 | [`aksharallm/infer/generate.py`](../aksharallm/infer/generate.py) | `stream_generate` — prefill, then the one-token loop. Then `_filter_logits` (top-k and top-p in one pass, positions preserved), `fit_prompt`, and `IncrementalDecoder`, which is the decode-cumulatively-and-diff trick that stops `�` appearing mid-word |
+| 3 | [`aksharallm/infer/tasks.py`](../aksharallm/infer/tasks.py) | `Probe` — the fixed prompts and, on each, what *good* looks like at 300M. Then `CodeTask`, `extract_code` and `assemble` |
+| 4 | [`aksharallm/infer/sandbox.py`](../aksharallm/infer/sandbox.py) | `run_program` — `-I` isolated subprocess, `RLIMIT_CPU`, throwaway cwd. The docstring is honest about it not being a container; read that before pointing it anywhere else |
+| 5 | [`aksharallm/infer/checkpoints.py`](../aksharallm/infer/checkpoints.py) | `Checkpoint` and `CheckpointStore` — describing a 1.2 GB file in milliseconds with `mmap=True`, and `stage_for`, where the `ckpt_`/`sft_`/`dpo_` prefix becomes the chat gate |
+| 6 | [`aksharallm/infer/engine.py`](../aksharallm/infer/engine.py) | `plan_device` — the "a run is training, so use the CPU and say so" policy, all in one function — then `Engine`, which holds one model warm and unloads it when idle |
+| 7 | [`aksharallm/infer/playground.py`](../aksharallm/infer/playground.py) | `Playground` — the one object the CLI, the portal tab and the eval harness all drive |
+| 8 | [`aksharallm/infer/history.py`](../aksharallm/infer/history.py) | `record_from` — the kilobyte that outlives the checkpoint, and what `--compare` reads back |
+| 9 | [`aksharallm/infer/cli.py`](../aksharallm/infer/cli.py) | last, because by now it is only argument parsing: `stream_to_stdout`, `interactive`, `run_probes`, `show_compare` |
+
+What pins it: `tests/test_generate.py` — `test_top_p_keeps_the_nucleus`,
+`test_repetition_penalty_handles_negative_logits`, `test_temperature_zero_matches_argmax_of_the_model` —
+and `tests/test_model.py::test_kv_cache_matches_full_forward`, which is the one that would
+catch a silent decode bug. Break the nucleus on purpose in [lesson 7](lessons/07-sampling.md).
+
+---
+
 Next: [7. Scaling up →](07-scaling.md)

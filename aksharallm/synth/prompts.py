@@ -16,6 +16,9 @@ corner twice. That is a coverage guarantee, which a temperature is not.
 `TEMPLATE_VERSION` is recorded in every dataset's `meta.json`. When a prompt is edited, bump
 it: two batches generated from different wordings are two datasets that happen to share a
 directory, and six weeks later nothing else will tell them apart.
+
+Read with: docs/13-synthetic-data.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

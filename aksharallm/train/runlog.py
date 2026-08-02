@@ -16,6 +16,9 @@ Three record kinds are written:
 Everything here tolerates damage. A `kill -9` can cut a line mid-write, and a log that is
 one byte short must still be readable — losing the last line is fine, refusing to open the
 file is not.
+
+Read with: docs/09-running-and-watching.md -- the chapter this implements; it ends with the
+order to read these files in.
 """
 
 from __future__ import annotations

@@ -34,6 +34,9 @@ The irony is worth stating in the UI and does get stated: QLoRA is precisely the
 technique that makes fine-tuning fit alongside something else, and this panel still
 refuses to do it by default. That is a policy about *this* machine having one card and one
 irreplaceable 40,000-step run on it, not a claim about the technique.
+
+Read with: docs/11-lora.md -- the chapter this implements; it ends with the order to read these
+files in.
 """
 
 from __future__ import annotations

@@ -778,4 +778,27 @@ to make the extra parameters pay. Do Phase 2 properly first.
 
 ---
 
+## The code, in reading order
+
+Nothing here is a new algorithm — it is [doc 4](04-pretraining.md)'s trainer, run bigger and
+for longer. What is new is the machinery around it, and it is mostly shell:
+
+| # | file | what to look for |
+|---|---|---|
+| 1 | [`configs/small-code.yaml`](../configs/small-code.yaml) | the Phase 2 run itself. Diff it against `configs/tiny.yaml` — the differences *are* this chapter |
+| 2 | [`aksharallm/data/prepare_blend.py`](../aksharallm/data/prepare_blend.py) | `blended_corpus` and `parse_source` (`name:weight`), then the `train_sources:` block it prints for you to paste |
+| 3 | [`aksharallm/data/loader.py`](../aksharallm/data/loader.py) | `MixedTokenDataset` — the 85/15 applied to *every* batch, so the ratio stays a config knob |
+| 4 | [`scripts/phase2.sh`](../scripts/phase2.sh) | the six manual steps above, automated: pre-flight, data, bin-size check, isolated smoke test, `nohup` launch, `launch.pid` / `train.pid` / `run.meta`, one log per session |
+| 5 | [`scripts/stop.sh`](../scripts/stop.sh) | `--at` / `--after` / `--in` / `--by` / `--cancel` / `--status`, all of which write one STOP file for the trainer to honour |
+| 6 | [`aksharallm/train/runlog.py`](../aksharallm/train/runlog.py) · [`scripts/sessions.py`](../scripts/sessions.py) | `split_sessions` → `summarise_sessions` → the table. The *same* reader the portal charts from, which is why they cannot disagree |
+| 7 | [`aksharallm/portal/runs.py`](../aksharallm/portal/runs.py) | `RunStore` and `launcher_for` — what a run *is* to the portal, and why it can only ever shell out to 4 and 5 |
+| 8 | [`aksharallm/portal/gpu.py`](../aksharallm/portal/gpu.py) | `Sampler` and `summarise` — `nvidia-smi` every 5s, each sample tagged with whether a trainer was alive |
+| 9 | [`aksharallm/portal/schedule.py`](../aksharallm/portal/schedule.py) | `Rule` → `Schedule` → `Scheduler` — windows stored as the two rules they really are, the midnight-crossing day shift, and the 15-minute grace window |
+| 10 | [`aksharallm/portal/explain.py`](../aksharallm/portal/explain.py) | `SourceTree.resolve` (the reading boundary), `PRIMER` and `build_messages` — what the Code tab actually sends a local model |
+
+The portal itself is [doc 9](09-running-and-watching.md); the Python-specialist stage (Stage C)
+reuses 2 and 3 with the weights flipped toward code.
+
+---
+
 Next: [8. Troubleshooting →](08-troubleshooting.md)

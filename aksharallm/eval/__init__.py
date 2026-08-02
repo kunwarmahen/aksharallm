@@ -28,6 +28,9 @@ take:
 The submodules are imported lazily, through `__getattr__`: `aksharallm.eval.sources` must
 be importable to *list* the benchmarks without pulling in torch, which the portal does on
 every page load.
+
+Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read these
+files in.
 """
 
 from __future__ import annotations

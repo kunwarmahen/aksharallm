@@ -8,6 +8,9 @@
 almost nothing: "perplexity 4.43" is meaningless without the bf16 number beside it, and
 "int4 works fine" is a claim about a particular group size and a particular method. The
 table puts all of them next to each other on the same evaluation batches.
+
+Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

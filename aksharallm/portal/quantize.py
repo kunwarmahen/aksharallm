@@ -27,6 +27,9 @@ is small and the fallback is a slow tab — a quantization job can allocate a lo
 downside of getting it wrong is the *training run* dying at 3am. So when a run is live the
 default device becomes the CPU and the panel says why. `device: cuda` overrides it, which
 is the right choice when nothing is training (and the panel says that too).
+
+Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

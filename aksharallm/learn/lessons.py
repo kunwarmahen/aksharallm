@@ -40,6 +40,9 @@ minutes: 25
 summary: One sentence for the list.
 ---
 ```
+
+Read with: docs/15-learning-path.md -- the chapter this implements; it ends with the order to
+read these files in.
 """
 
 from __future__ import annotations

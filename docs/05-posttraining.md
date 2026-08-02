@@ -414,4 +414,40 @@ the tests.
 
 ---
 
+## The code, in reading order
+
+Three stages, three trainers, and they share the pretraining loop's shape — read
+[doc 4](04-pretraining.md)'s files first and only the differences below will be new.
+
+**Part 1 — SFT**
+
+| # | file | what to look for |
+|---|---|---|
+| 1 | [`aksharallm/tokenizer/tokenizer.py`](../aksharallm/tokenizer/tokenizer.py) | `render_chat` — where the mask is *born*, one token at a time |
+| 2 | [`aksharallm/data/prepare_sft.py`](../aksharallm/data/prepare_sft.py) | the dataset adapters (`_smoltalk`, `_openhermes`, `jsonl_rows`), `is_valid`, then `main` — packing into fixed blocks, dropping over-long conversations, and the "% trainable tokens" number it prints |
+| 3 | [`aksharallm/train/sft.py`](../aksharallm/train/sft.py) | `SFTDataset.batch` — `m = msk[:, 1:]`, `y[m == 0] = -100`. That is the whole chapter. Then `main` for the different LR/epochs/dropout defaults and the LoRA branch |
+
+**Part 2 — DPO**
+
+| # | file | what to look for |
+|---|---|---|
+| 4 | [`aksharallm/data/prepare_dpo.py`](../aksharallm/data/prepare_dpo.py) | `encode_pair` — a prompt and two responses become the chosen/rejected triples on disk |
+| 5 | [`aksharallm/train/dpo.py`](../aksharallm/train/dpo.py) | `dpo_loss` (six lines, exactly the maths above), then `sequence_logprob`, then `as_reference` — the context manager that makes the frozen reference free under LoRA |
+
+**Part 3 — GRPO**
+
+| # | file | what to look for |
+|---|---|---|
+| 6 | [`aksharallm/train/grpo.py`](../aksharallm/train/grpo.py) | `group_advantages` first (the group is its own baseline), then `grpo_loss` — the PPO clip and the k3 KL estimator |
+| 7 | same file | `CodeReward` / `SubstringReward` behind the `RewardFn` protocol, then `sample_group` → `build_batch` → `main` |
+| 8 | [`aksharallm/infer/sandbox.py`](../aksharallm/infer/sandbox.py) | `run_program` — the reward itself. Read its docstring on what the isolation is and is not |
+| 9 | [`scripts/stage.sh`](../scripts/stage.sh) | the gate: which checkpoint each stage requires before it will start ([doc 9](09-running-and-watching.md)) |
+
+What pins it: `tests/test_pipeline.py::test_sft_mask_alignment_matches_targets` and the
+`test_dpo_*` group (`test_dpo_loss_is_ln2_when_policy_equals_reference` is the one to read
+first); `tests/test_grpo.py` for the advantages and the loss. Break the mask on purpose in
+[lesson 8](lessons/08-sft-mask.md).
+
+---
+
 Next: [6. Inference →](06-inference.md)

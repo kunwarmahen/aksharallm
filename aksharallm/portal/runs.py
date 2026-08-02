@@ -8,6 +8,9 @@ what keeps the button and the terminal honest about each other.
 
 State lives on disk, never in this process, so the portal can be restarted, or run twice,
 or not run at all, without a training run noticing.
+
+Read with: docs/09-running-and-watching.md -- the chapter this implements; it ends with the
+order to read these files in.
 """
 
 from __future__ import annotations

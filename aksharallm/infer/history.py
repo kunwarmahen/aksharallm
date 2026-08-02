@@ -20,6 +20,9 @@ oldest step first. Two lines of a table and you can see grammar arrive.
 Format and conventions follow `checkpoints/<run>/train_log.jsonl` — one JSON object per
 line, appended, never rewritten in place, unparseable lines skipped on read — so the same
 habits (and `tail -f`) work on both.
+
+Read with: docs/06-inference.md -- the chapter this implements; it ends with the order to read
+these files in.
 """
 
 from __future__ import annotations
