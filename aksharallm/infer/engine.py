@@ -55,6 +55,7 @@ from .checkpoints import (
     repo_root,
 )
 from .generate import IncrementalDecoder, stream_generate
+from .speculative import NgramDrafter, SpecStats, speculative_generate
 
 #: Free VRAM (bytes) below which `auto` will not use the card even when nothing is
 #: training. The model plus its cache is ~0.7 GB; the rest is the CUDA context and enough
@@ -81,6 +82,11 @@ class SamplingParams:
     top_p: float = 0.95
     repetition_penalty: float = 1.0
     seed: int | None = None
+    #: Speculative decoding by lookup: 0 is off, N drafts from the last N tokens. It cannot
+    #: change what the model says — see `infer/speculative.py` — so it is a speed control
+    #: rather than a sampling one, and it sits here because this is the bag of knobs the
+    #: request already carries.
+    ngram: int = 0
 
     #: Hard ceilings, so a browser cannot ask for a million tokens and hold the lock for an
     #: hour. Clamping (rather than rejecting) keeps the UI simple; the response says what
@@ -93,6 +99,9 @@ class SamplingParams:
             top_p=max(0.0, min(float(self.top_p), 1.0)),
             repetition_penalty=max(0.5, min(float(self.repetition_penalty), 3.0)),
             seed=self.seed,
+            # A lookup longer than a few tokens matches nothing, and one of zero length
+            # matches everything; both are wasted work rather than wrong answers.
+            ngram=max(0, min(int(self.ngram), 8)),
         )
 
     def as_dict(self) -> dict:
@@ -712,11 +721,22 @@ class Engine:
                                          skip_ids={stop_id} if stop_id is not None else set())
             n, t0, first_at = 0, time.monotonic(), None
             finish = "length"
-            for token in stream_generate(
-                    loaded.model, ids, max_new_tokens=sp.max_new_tokens,
-                    temperature=sp.temperature, top_k=sp.top_k or None, top_p=sp.top_p,
-                    repetition_penalty=sp.repetition_penalty, eos_id=stop_id,
-                    device=loaded.device):
+            # One loop, two ways of filling it. Speculative decoding yields the *same* tokens
+            # this model would have produced on its own, so nothing below here changes: the
+            # decoder, the stop handling and the timings are shared, and `spec` is reported
+            # beside them so the acceptance rate is visible rather than assumed.
+            spec = SpecStats() if sp.ngram else None
+            common = dict(max_new_tokens=sp.max_new_tokens, temperature=sp.temperature,
+                          top_k=sp.top_k or None, top_p=sp.top_p,
+                          repetition_penalty=sp.repetition_penalty, eos_id=stop_id,
+                          device=loaded.device)
+            tokens = (speculative_generate(
+                          loaded.model,
+                          NgramDrafter(loaded.model.cfg.vocab_size, n=sp.ngram,
+                                       device=loaded.device),
+                          ids, gamma=4, stats=spec, **common)
+                      if sp.ngram else stream_generate(loaded.model, ids, **common))
+            for token in tokens:
                 if token == stop_id:
                     finish = "stop"
                     break
@@ -737,6 +757,7 @@ class Engine:
                 "first_token_s": first_at, "finish": finish,
                 "prompt_tokens": len(ids), "truncated_tokens": truncated,
                 "device": loaded.device, "params": sp.as_dict(),
+                "speculative": spec.as_dict() if spec else None,
                 "adapter": loaded.adapter.as_dict() if loaded.adapter else None,
                 "provenance": {**loaded.info.provenance(),
                                "adapter": loaded.adapter.rel if loaded.adapter else None,

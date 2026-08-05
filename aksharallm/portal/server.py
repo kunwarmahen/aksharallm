@@ -532,6 +532,7 @@ class Handler(BaseHTTPRequestHandler):
             repetition_penalty=float(sent.get("repetition_penalty",
                                               cfg.sampling.repetition_penalty)),
             seed=self._int(sent, "seed"),
+            ngram=int(sent.get("ngram", 0) or 0),
         )
         messages = [m for m in (data.get("messages") or [])
                     if isinstance(m, dict) and m.get("role") in ("user", "assistant")

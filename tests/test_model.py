@@ -95,6 +95,62 @@ def test_kv_cache_matches_full_forward(n_kv_heads):
     assert torch.allclose(full[:, 8:16], inc, atol=1e-4), (full[:, 8:16] - inc).abs().max()
 
 
+@pytest.mark.parametrize("n_kv_heads", [4, 2])
+def test_several_tokens_against_a_warm_cache_match_one_at_a_time(n_kv_heads):
+    """Feeding a *block* of tokens to a cache that already holds a prompt must give the same
+    logits as feeding them one by one.
+
+    This is the pass speculative decoding lives on: the target model verifies a whole draft
+    in one forward. It was wrong for as long as this file existed and nothing noticed,
+    because every other caller either prefills into an empty cache or decodes one token at a
+    time. `is_causal=True` aligns its triangle to the top-left when the query and key lengths
+    differ, so query j saw keys 0..j instead of 0..(start+j) — it read the first few tokens
+    of the prompt and none of the rest, which produces fluent, plausible, wrong output.
+    """
+    torch.manual_seed(0)
+    cfg = tiny_cfg(n_kv_heads=n_kv_heads)
+    m = Transformer(cfg).eval()
+    idx = torch.randint(0, cfg.vocab_size, (2, 16))
+
+    with torch.no_grad():
+        one_at_a_time = m.init_caches(2, cfg.max_seq_len, dtype=torch.float32, device="cpu")
+        m(idx[:, :8], caches=one_at_a_time)
+        stepwise = [m(idx[:, t : t + 1], caches=one_at_a_time)[0][:, -1] for t in range(8, 16)]
+        stepwise = torch.stack(stepwise, dim=1)
+
+        block = m.init_caches(2, cfg.max_seq_len, dtype=torch.float32, device="cpu")
+        m(idx[:, :8], caches=block)
+        at_once, _ = m(idx[:, 8:16], caches=block, full_logits=True)
+
+    assert torch.allclose(stepwise, at_once, atol=1e-4), (stepwise - at_once).abs().max()
+    assert block[0].pos == 16
+
+
+def test_a_rewound_cache_forgets_exactly_what_it_was_asked_to():
+    """Rejecting a drafted token has to leave the cache as if that token was never seen —
+    otherwise every token after it attends to a position the model did not choose."""
+    torch.manual_seed(0)
+    cfg = tiny_cfg()
+    m = Transformer(cfg).eval()
+    idx = torch.randint(0, cfg.vocab_size, (1, 12))
+
+    with torch.no_grad():
+        caches = m.init_caches(1, cfg.max_seq_len, dtype=torch.float32, device="cpu")
+        m(idx[:, :8], caches=caches)
+        wanted, _ = m(idx[:, 8:9], caches=caches)
+
+        # Now do it again after a wrong guess that gets rewound away.
+        caches = m.init_caches(1, cfg.max_seq_len, dtype=torch.float32, device="cpu")
+        m(idx[:, :8], caches=caches)
+        m(idx[:, 9:12], caches=caches)          # three tokens the model will "reject"
+        for c in caches:
+            c.rewind(8)
+        after, _ = m(idx[:, 8:9], caches=caches)
+
+    assert torch.allclose(wanted, after, atol=1e-5)
+    assert all(c.pos == 9 for c in caches)
+
+
 def test_gqa_reduces_kv_cache():
     cfg = tiny_cfg(n_heads=8, n_kv_heads=2, d_model=64)
     m = Transformer(cfg)

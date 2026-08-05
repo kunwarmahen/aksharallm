@@ -104,6 +104,19 @@ class KVCache:
     def reset(self):
         self.pos = 0
 
+    def rewind(self, to: int) -> None:
+        """Forget everything cached after position `to`.
+
+        Nothing is erased: the entries beyond `to` are simply out of scope and the next
+        `update` overwrites them. That is the whole trick — a rollback costs one integer.
+
+        This exists for **speculative decoding**, which is a loop of "guess several tokens,
+        then throw away the ones the big model disagrees with". Without a rewind, a rejected
+        guess would leave its keys and values in the cache and every token after it would
+        attend to a position the model never actually chose.
+        """
+        self.pos = max(0, min(int(to), self.pos))
+
 
 class Attention(nn.Module):
     def __init__(self, cfg: ModelConfig):
@@ -121,7 +134,7 @@ class Attention(nn.Module):
         self.wo = nn.Linear(self.n_heads * self.head_dim, cfg.d_model, bias=False)
         self.dropout = cfg.dropout
 
-    def forward(self, x, cos, sin, cache: KVCache | None = None):
+    def forward(self, x, cos, sin, cache: KVCache | None = None, attn_mask=None):
         B, T, _ = x.shape
 
         q = self.wq(x).view(B, T, self.n_heads, self.head_dim).transpose(1, 2)  # (B,H,T,D)
@@ -134,15 +147,28 @@ class Attention(nn.Module):
         if cache is not None:
             k, v = cache.update(k, v)
 
-        # Causal masking: during prefill (T > 1) we need the triangular mask. During
-        # incremental decode (T == 1) every cached position is legal, so no mask at all —
-        # and passing is_causal=True there would be *wrong*, since the single query is at
-        # the end of the sequence, not the start.
-        is_causal = cache is None or T > 1
+        # Causal masking, and there are three cases rather than the two it looked like:
+        #
+        #   no cache, T > 1      prefill / training  -> the ordinary triangular mask
+        #   cache,    T == 1     one decode step     -> NO mask; every cached position is
+        #                        legal, and is_causal=True here would be wrong because the
+        #                        single query sits at the *end* of the sequence, not the start
+        #   cache,    T > 1      several tokens against a warm cache -> `attn_mask`, built by
+        #                        `Transformer.forward`, because `is_causal=True` aligns its
+        #                        triangle to the TOP-LEFT when the query and key lengths
+        #                        differ: query i would see keys 0..i instead of 0..(start+i),
+        #                        hiding most of the prompt from every one of them. Nothing
+        #                        exercised that path until speculative decoding, which
+        #                        verifies a whole draft in one pass, needed it.
+        #
+        # A prefill into an *empty* cache gets no mask and `is_causal=True`: query and key
+        # lengths are equal there, so the triangle is aligned and the fast kernel is kept.
+        is_causal = attn_mask is None and T > 1
 
         if _SDPA_HAS_GQA:
             out = F.scaled_dot_product_attention(
                 q, k, v,
+                attn_mask=attn_mask,
                 dropout_p=self.dropout if self.training else 0.0,
                 is_causal=is_causal,
                 enable_gqa=self.n_rep > 1,
@@ -153,6 +179,7 @@ class Attention(nn.Module):
                 v = v.repeat_interleave(self.n_rep, dim=1)
             out = F.scaled_dot_product_attention(
                 q, k, v,
+                attn_mask=attn_mask,
                 dropout_p=self.dropout if self.training else 0.0,
                 is_causal=is_causal,
             )
@@ -195,8 +222,8 @@ class Block(nn.Module):
         # checkpoint can be upcycled from a dense one (see `model/moe.py`).
         self.ffn = MoEFeedForward(cfg) if cfg.moe_layer(layer_idx) else SwiGLU(cfg)
 
-    def forward(self, x, cos, sin, cache=None):
-        x = x + self.attn(self.attn_norm(x), cos, sin, cache)
+    def forward(self, x, cos, sin, cache=None, attn_mask=None):
+        x = x + self.attn(self.attn_norm(x), cos, sin, cache, attn_mask)
         x = x + self.ffn(self.ffn_norm(x))
         return x
 
@@ -297,9 +324,20 @@ class Transformer(nn.Module):
         cos = self.rope_cos[start : start + T]
         sin = self.rope_sin[start : start + T]
 
+        # Several tokens against a WARM cache: build the mask once here rather than in each
+        # of the 24 attention layers. Query j is at absolute position start+j and may see
+        # every key up to and including it — the whole cached prefix, plus the part of this
+        # block that precedes it. `start > 0` is the point: a prefill into an empty cache is
+        # already aligned, needs no mask, and keeps the faster kernel.
+        attn_mask = None
+        if caches is not None and T > 1 and start > 0:
+            q_pos = torch.arange(start, start + T, device=idx.device)[:, None]
+            k_pos = torch.arange(start + T, device=idx.device)[None, :]
+            attn_mask = k_pos <= q_pos
+
         x = self.drop(self.tok_emb(idx))
         for i, block in enumerate(self.blocks):
-            x = block(x, cos, sin, caches[i] if caches is not None else None)
+            x = block(x, cos, sin, caches[i] if caches is not None else None, attn_mask)
         x = self.norm(x)
 
         if targets is None:

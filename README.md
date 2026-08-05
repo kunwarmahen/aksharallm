@@ -191,6 +191,8 @@ aksharallm/
 │   │   └── report.py         every result ever, and the trend across training steps
 │   └── infer/            talking to a checkpoint, and judging what comes back
 │       ├── generate.py       KV-cache sampling loop (streaming + one-shot)
+│       ├── speculative.py    guess several tokens, check them in one pass; same text,
+│       │                     ~1.5-2x faster, and the draft need not be a model at all
 │       ├── checkpoints.py    what has been trained: step, loss, stage, tokens seen
 │       ├── engine.py         one model kept warm; CPU while a run has the GPU
 │       ├── tasks.py          the fixed probes and the graded Python tasks
@@ -506,6 +508,42 @@ in `configs/portal.yaml` — `cost.per_kwh`, plus `host_watts`/`psu_efficiency` 
 number to match a plug meter rather than the card alone — and every run gains a price, a cost
 per million tokens, and a **coverage** figure saying how much of the run was actually
 recorded. With no rate set it shows kilowatt-hours and says so. Portal: the **Cost** panel.
+
+### Making it faster: speculative decoding
+
+```bash
+python -m aksharallm.infer.speculative small-code --ngram 3 --compare \
+    --prompt "def quicksort(arr):" --temperature 0
+```
+
+Generating a token reads all 300M parameters out of memory and does almost nothing with
+them — the card spends its time waiting, not computing. Reading those weights once and
+checking *several* candidate tokens costs barely more. So something cheap guesses the next
+few tokens, the real model checks them all in one pass, and each guess is accepted with
+probability `min(1, p/q)` — target over draft — with a rejection replaced by a draw from
+`norm(max(p - q, 0))`. Those two paths sum to exactly the target's distribution, so **the
+text is the text the model would have produced anyway**: greedy decoding matches token for
+token, which `--compare` checks rather than claims. A bad draft costs time, never accuracy.
+
+The draft does not have to be a model. This repo's plan assumed the trained 13.8M model
+could draft for the 300M; it cannot, because they have different tokenizers and a token id
+means different strings to each of them — a hard refusal, for the same reason cross-tokenizer
+distillation is not a build. So the drafter that ships needs no weights at all: it looks up
+where the last three tokens occurred earlier in the text and guesses what followed them then.
+Code repeats itself, and where the text is novel the lookup finds nothing and the round costs
+exactly one ordinary forward pass.
+
+Measured on the 300M at step 36,000, greedy, output verified identical every time: **1.4x at
+gamma 2, 1.6x at gamma 4, 2.0x at gamma 8** on a Python prompt (57-79% of guesses accepted),
+and 1.8x on a prose one. In the portal it is the Playground's **draft** control, with the
+acceptance rate in the status line.
+
+Building it turned up a real bug that nothing else could have: feeding a *block* of tokens to
+a warm KV cache — which is exactly how a draft is verified — was masked wrongly, because
+`is_causal=True` aligns its triangle to the top-left when the query and key lengths differ.
+Every other caller either prefills into an empty cache or decodes one token at a time, so it
+had never been exercised. It trains fine and generates fluent nonsense; there is now a test
+that feeds a block and the same tokens one at a time and demands identical logits.
 
 ### The report a run leaves behind
 

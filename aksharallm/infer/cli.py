@@ -167,8 +167,14 @@ def stream_to_stdout(pg: Playground, **kw) -> dict:
     if stats:
         # "GPU"/"CPU", not torch's "cuda": the reader owns a graphics card, not a runtime.
         where = "GPU" if stats.get("device") == "cuda" else "CPU"
+        spec = stats.get("speculative")
+        # Drafting cannot change the text, so it is reported as a *speed* line rather than
+        # mixed in with the model's own numbers: accepted guesses, and tokens per pass of
+        # the real model (1.0 is what plain decoding gets).
+        drafted = (f"  ·  drafted {spec['accept_rate'] * 100:.0f}% accepted, "
+                   f"{spec['tokens_per_forward']:.2f} tokens per model pass" if spec else "")
         print(f"  {stats.get('tokens', 0)} tokens in {stats.get('elapsed_s', 0):.1f}s "
-              f"({(stats.get('tok_per_s') or 0):.1f} tok/s on the {where})",
+              f"({(stats.get('tok_per_s') or 0):.1f} tok/s on the {where}){drafted}",
               file=sys.stderr)
     return stats
 
@@ -251,7 +257,8 @@ def interactive(pg: Playground, ckpt_id: str, mode: str, args,
 def sampling(args) -> SamplingParams:
     return SamplingParams(max_new_tokens=args.max_new_tokens, temperature=args.temperature,
                           top_k=args.top_k, top_p=args.top_p,
-                          repetition_penalty=args.repetition_penalty, seed=args.seed)
+                          repetition_penalty=args.repetition_penalty, seed=args.seed,
+                          ngram=getattr(args, "ngram", 0) or 0)
 
 
 # --------------------------------------------------------------------------------------
@@ -385,6 +392,10 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--repetition-penalty", type=float, default=1.0)
     gen.add_argument("--seed", type=int, default=None,
                      help="fixes sampling, so two checkpoints can be compared on one prompt")
+    gen.add_argument("--ngram", type=int, default=0, metavar="N",
+                     help="speculative decoding by lookup: draft the next tokens from the "
+                          "last N of the text so far (3 is a good start, 0 is off). The "
+                          "output is unchanged; only the speed differs")
     gen.add_argument("--system", default=None, help="system prompt for chat mode")
 
     env = ap.add_argument_group("where it runs")

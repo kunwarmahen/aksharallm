@@ -207,6 +207,10 @@ function sampling() {
   };
   const seed = $('#k-seed').value.trim();
   if (seed !== '') out.seed = Number(seed);
+  /* A speed control, not a sampling one: the tokens are identical either way, so it is sent
+   * with the rest of the knobs and reported separately in the status line. */
+  const ngram = Number($('#k-ngram').value || 0);
+  if (ngram) out.ngram = ngram;
   return out;
 }
 
@@ -297,8 +301,13 @@ async function generate({ prompt, probe, task, quiet }) {
     }
     if (stats) {
       const rate = stats.tok_per_s ? `${stats.tok_per_s.toFixed(1)} tok/s` : '';
+      /* Drafting cannot change the text — it is a speed control — so it reads as one extra
+       * clause here rather than as anything about the model's answer. */
+      const sp = stats.speculative;
+      const drafted = sp ? ` · drafted ${(sp.accept_rate * 100).toFixed(0)}% accepted,`
+        + ` ${sp.tokens_per_forward.toFixed(2)} tokens per model pass` : '';
       playStatus(`${stats.tokens} tokens · ${rate} · `
-        + `${stats.finish === 'stop' ? 'stopped on its own' : 'hit the token limit'}`);
+        + `${stats.finish === 'stop' ? 'stopped on its own' : 'hit the token limit'}${drafted}`);
     } else {
       playStatus(`done in ${fmt.dur((Date.now() - started) / 1000)}`);
     }

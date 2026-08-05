@@ -60,7 +60,7 @@ optimisation, and it's why GQA (fewer KV heads → smaller cache) matters.
 ### The bug to know about
 
 ```python
-is_causal = cache is None or T > 1
+is_causal = attn_mask is None and T > 1
 ```
 
 During decode we feed exactly one token. That query sits at the **end** of the sequence and
@@ -71,6 +71,13 @@ The model still trains perfectly. It just generates garbage, and you have no ide
 the problem is training or inference. This is why
 `tests/test_model.py::test_kv_cache_matches_full_forward` asserts that cached decoding
 reproduces a full forward pass exactly.
+
+The same trap has a **third** case, found later while building
+[speculative decoding](#speculative-decoding-the-same-text-faster): several tokens against a
+cache that is already warm. There the query and key lengths differ, so `is_causal=True`
+aligns its triangle to the top-left and each query sees the *first* few keys rather than
+everything up to itself. That case now gets an explicit `attn_mask`, built once per forward
+in `Transformer.forward` — which is why the rule above reads the way it does.
 
 ### One more efficiency detail
 
@@ -146,6 +153,98 @@ Use sparingly (1.0–1.15). Aggressive values stop the model from using necessar
 "the".
 
 ---
+
+## Speculative decoding: the same text, faster
+
+Generating one token reads all 300M parameters out of VRAM and does almost no arithmetic
+with them. The card is not computing, it is *waiting on memory* — which is why a 3090 that
+can do 71 TFLOPs manages about 50 tokens a second. But reading those weights once and
+scoring **five candidate tokens** costs barely more than scoring one.
+
+So: let something cheap guess the next few tokens, and let the real model check them all in
+a single pass.
+
+```mermaid
+flowchart LR
+    D["a draft: a small model,<br/>or a lookup in the text"] -->|"gamma guesses"| V["the real model,<br/>ONE forward over all of them"]
+    V --> A{"accept each guess?"}
+    A -->|yes| K["keep it"]
+    A -->|no| C["replace it from<br/>norm(max(p - q, 0))<br/>and rewind the KV cache"]
+    K --> N["all accepted?<br/>one free bonus token"]
+```
+
+**The output does not change.** This is the part worth being precise about, because it is
+what separates this from "let a small model answer the easy bits". A guessed token `x` is
+accepted with probability `min(1, p(x)/q(x))` — target over draft — and a rejection emits a
+sample from `norm(max(p - q, 0))`. The two paths add up to exactly `p`:
+
+    P(emit x) = min(q(x), p(x)) + max(p(x) - q(x), 0) = p(x)
+
+With greedy decoding both distributions are one-hot and the rule degenerates to "accept
+while the draft agrees with the argmax", so the text is identical token for token — which is
+what `--compare` checks, and what `tests/test_speculative.py` asserts on every run. **A bad
+draft cannot produce a wrong answer; it can only waste time.**
+
+### The draft does not have to be a model
+
+The obvious draft is a small model of the same family, and this repo's plan said the trained
+13.8M `tiny` could draft for the 300M `small-code`. **It cannot**, and finding out is worth
+more than the feature: `tiny` has an 8,192-token TinyStories vocabulary and `small-code` a
+32,768-token blend vocabulary. Token id 8,412 means different strings to them, so the
+acceptance rule — which only ever compares the probability of an *id* — would be comparing
+noise while everything continued to run. It is a hard refusal for the same reason
+cross-tokenizer distillation is not a build.
+
+The other kind of draft needs no model at all. **Look the continuation up in the text so
+far**: find where the last three tokens occurred before and guess whatever followed them
+then. Code repeats itself constantly, a chat model quotes its question back, and an
+undertrained model repeats *everything* — so the hit rate is high, and where the text is
+genuinely novel the lookup finds nothing, proposes nothing, and the round costs exactly one
+forward pass. Plain decoding, with no penalty.
+
+Measured on `small-code` (300M, step 36,000) on an idle 3090, greedy, output verified
+identical each time:
+
+| prompt | gamma | accepted | tokens per model pass | speed |
+|---|---|---|---|---|
+| `def quicksort(arr):` | 2 | 79% | 1.97 | 1.43x |
+| `def quicksort(arr):` | 4 | 65% | 2.37 | 1.56x |
+| `def quicksort(arr):` | 8 | 57% | 2.84 | 2.01x |
+| `The history of the Roman Empire began` | 4 | 69% | 2.84 | 1.83x |
+
+A larger `gamma` guesses further ahead: a lower share of guesses survive, but more tokens
+land per pass, and the pass is the expensive thing. Read the acceptance rate before the
+speedup — it is the number that says whether the draft is earning its keep.
+
+Two honest caveats on those numbers. This model is only 90% through its budget and repeats
+itself more than a finished one will, which flatters a lookup-based draft. And with sampling
+(rather than greedy) a one-hot guess is accepted only with probability `p(x)`, so acceptance
+falls as temperature rises — this is at its best at temperature 0, which is also when you
+most want it.
+
+```bash
+python -m aksharallm.infer.speculative small-code --ngram 3 --compare \
+    --prompt "def quicksort(arr):" --temperature 0     # prints the speedup, checks the text
+python -m aksharallm.infer.cli small-code --ngram 3    # the playground path, drafting on
+```
+
+In the portal: the Playground's **draft (n-gram)** control, with what it accepted in the
+status line.
+
+### The bug it uncovered
+
+Verifying a draft means feeding several tokens to a cache that already holds the prompt —
+and that path had never been exercised. `is_causal=True` aligns its triangle to the
+**top-left** when the query and key lengths differ, so query *j* saw keys `0..j` instead of
+`0..start+j`: it read the first few tokens of the prompt and none of the rest. Every other
+caller either prefills into an empty cache (aligned, correct) or decodes one token at a time
+(no mask needed), so nothing had noticed. `Transformer.forward` now builds an explicit mask
+for exactly that case, and
+`tests/test_model.py::test_several_tokens_against_a_warm_cache_match_one_at_a_time` pins it
+by feeding a block and the same tokens one at a time and demanding the same logits.
+
+This is the failure mode [doc 8](08-troubleshooting.md) keeps warning about: it trains fine,
+it generates fluent text, and it is wrong.
 
 ## Using the CLI
 
@@ -402,15 +501,16 @@ it usable on a machine that is also training.
 
 | # | file | what to look for |
 |---|---|---|
-| 1 | [`aksharallm/model/transformer.py`](../aksharallm/model/transformer.py) | `KVCache.update` and the `is_causal = cache is None or T > 1` line in `Attention.forward`, plus `init_caches`. Read [doc 3](03-model.md) first if you have not |
+| 1 | [`aksharallm/model/transformer.py`](../aksharallm/model/transformer.py) | `KVCache.update` and `KVCache.rewind`, then the three masking cases in `Attention.forward` (no cache, one token, a block against a warm cache) and `init_caches`. Read [doc 3](03-model.md) first if you have not |
 | 2 | [`aksharallm/infer/generate.py`](../aksharallm/infer/generate.py) | `stream_generate` — prefill, then the one-token loop. Then `_filter_logits` (top-k and top-p in one pass, positions preserved), `fit_prompt`, and `IncrementalDecoder`, which is the decode-cumulatively-and-diff trick that stops `�` appearing mid-word |
-| 3 | [`aksharallm/infer/tasks.py`](../aksharallm/infer/tasks.py) | `Probe` — the fixed prompts and, on each, what *good* looks like at 300M. Then `CodeTask`, `extract_code` and `assemble` |
-| 4 | [`aksharallm/infer/sandbox.py`](../aksharallm/infer/sandbox.py) | `run_program` — `-I` isolated subprocess, `RLIMIT_CPU`, throwaway cwd. The docstring is honest about it not being a container; read that before pointing it anywhere else |
-| 5 | [`aksharallm/infer/checkpoints.py`](../aksharallm/infer/checkpoints.py) | `Checkpoint` and `CheckpointStore` — describing a 1.2 GB file in milliseconds with `mmap=True`, and `stage_for`, where the `ckpt_`/`sft_`/`dpo_` prefix becomes the chat gate |
-| 6 | [`aksharallm/infer/engine.py`](../aksharallm/infer/engine.py) | `plan_device` — the "a run is training, so use the CPU and say so" policy, all in one function — then `Engine`, which holds one model warm and unloads it when idle |
-| 7 | [`aksharallm/infer/playground.py`](../aksharallm/infer/playground.py) | `Playground` — the one object the CLI, the portal tab and the eval harness all drive |
-| 8 | [`aksharallm/infer/history.py`](../aksharallm/infer/history.py) | `record_from` — the kilobyte that outlives the checkpoint, and what `--compare` reads back |
-| 9 | [`aksharallm/infer/cli.py`](../aksharallm/infer/cli.py) | last, because by now it is only argument parsing: `stream_to_stdout`, `interactive`, `run_probes`, `show_compare` |
+| 3 | [`aksharallm/infer/speculative.py`](../aksharallm/infer/speculative.py) | `accept_or_correct` and `residual_distribution` first — the rule is four lines and the whole guarantee. Then `NgramDrafter` (a draft with no model in it) and the round loop in `speculative_generate` |
+| 4 | [`aksharallm/infer/tasks.py`](../aksharallm/infer/tasks.py) | `Probe` — the fixed prompts and, on each, what *good* looks like at 300M. Then `CodeTask`, `extract_code` and `assemble` |
+| 5 | [`aksharallm/infer/sandbox.py`](../aksharallm/infer/sandbox.py) | `run_program` — `-I` isolated subprocess, `RLIMIT_CPU`, throwaway cwd. The docstring is honest about it not being a container; read that before pointing it anywhere else |
+| 6 | [`aksharallm/infer/checkpoints.py`](../aksharallm/infer/checkpoints.py) | `Checkpoint` and `CheckpointStore` — describing a 1.2 GB file in milliseconds with `mmap=True`, and `stage_for`, where the `ckpt_`/`sft_`/`dpo_` prefix becomes the chat gate |
+| 7 | [`aksharallm/infer/engine.py`](../aksharallm/infer/engine.py) | `plan_device` — the "a run is training, so use the CPU and say so" policy, all in one function — then `Engine`, which holds one model warm and unloads it when idle |
+| 8 | [`aksharallm/infer/playground.py`](../aksharallm/infer/playground.py) | `Playground` — the one object the CLI, the portal tab and the eval harness all drive |
+| 9 | [`aksharallm/infer/history.py`](../aksharallm/infer/history.py) | `record_from` — the kilobyte that outlives the checkpoint, and what `--compare` reads back |
+| 10 | [`aksharallm/infer/cli.py`](../aksharallm/infer/cli.py) | last, because by now it is only argument parsing: `stream_to_stdout`, `interactive`, `run_probes`, `show_compare` |
 
 What pins it: `tests/test_generate.py` — `test_top_p_keeps_the_nucleus`,
 `test_repetition_penalty_handles_negative_logits`, `test_temperature_zero_matches_argmax_of_the_model` —
