@@ -203,6 +203,10 @@ class Handler(BaseHTTPRequestHandler):
                         stop_after_s=self._int(data, "stop_after_s"),
                         skip_smoke=bool(data.get("skip_smoke")),
                         fresh=bool(data.get("fresh"))))
+                if action == "report":
+                    # The GET renders it; this writes it to checkpoints/<run>/report.md,
+                    # which is the same file the trainer leaves behind on exit.
+                    return self._json(self.store.report(run, save=True))
                 if action == "archive":
                     return self._json(self.store.archive(run))
                 if action == "delete":
@@ -285,6 +289,10 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) == 2 and parts[0] == "run":
             points = int((query.get("max_points") or [2000])[0])
             return self._json(self.store.status(parts[1], max_points=max(0, points)))
+        if len(parts) == 3 and parts[0] == "run" and parts[2] == "report":
+            # Built on demand: a run being watched has no report on disk yet, and the one
+            # from its last exit is out of date by exactly the session in progress.
+            return self._json(self.store.report(parts[1]))
         if len(parts) == 3 and parts[0] == "run" and parts[2] == "log":
             name = (query.get("file") or [None])[0]
             lines = int((query.get("lines") or [300])[0])

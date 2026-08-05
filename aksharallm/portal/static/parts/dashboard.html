@@ -141,6 +141,21 @@ before the real run. Skipping is only sane when resuming a config that has alrea
     <div class="scroll-x scroll-y" id="sessions"></div>
   </section>
 
+  <section class="panel" aria-label="report">
+    <div class="panel-head">
+      <h2>Report</h2>
+      <span class="panel-note">how the run went, in prose — budget, loss, speed, cost, benchmarks, and what to look at</span>
+      <span class="panel-note" id="report-note"></span>
+      <div class="control-group">
+        <button class="ghost" id="btn-report" type="button">Build report</button>
+        <button class="ghost" id="btn-report-save" type="button" disabled title="write it to checkpoints/&lt;run&gt;/report.md — the same file a finished run leaves behind">Save to disk</button>
+      </div>
+    </div>
+    <div class="docs-reader report-body" id="report-body">
+      <p class="docs-hint">The trainers write this file when they exit. Build it here to read one for a run that is still going.</p>
+    </div>
+  </section>
+
   <section class="panel" aria-label="post-training">
     <div class="panel-head">
       <h2>Post-training</h2>

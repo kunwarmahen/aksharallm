@@ -152,8 +152,10 @@ aksharallm/
 │   │   ├── schedule.py       learning-rate schedules
 │   │   ├── stopfile.py       the STOP contract: stop now / at step N / at a wall-clock time
 │   │   │                     — shared by pretraining, SFT and QAT
-│   │   └── runlog.py         reads train_log.jsonl back (sessions, series) — shared by
-│   │                         scripts/sessions.py and the portal
+│   │   ├── runlog.py         reads train_log.jsonl back (sessions, series) — shared by
+│   │   │                     scripts/sessions.py and the portal
+│   │   └── report.py         the report every trainer writes when it exits: how the run
+│   │                         went, and what is worth knowing about how it went
 │   ├── portal/           local web portal: start/stop a run, watch it, test it, read it
 │   │   ├── runs.py           run state on disk; drives phase2.sh / stop.sh
 │   │   ├── schedule.py       recurring start/stop windows + the clock loop
@@ -320,8 +322,9 @@ In order, all written from scratch: **GRPO** ✅ (RL on a reward the code sandbo
 verifies) → **quantization** ✅ → **LoRA/QLoRA** ✅ → a **real eval harness** ✅ (MMLU, ARC,
 HellaSwag, PIQA, GSM8K, HumanEval and a model-judged suite — [docs/12](docs/12-eval.md)) →
 **synthetic data** ✅ ([docs/13](docs/13-synthetic-data.md)) → **mixture of experts** ✅
-([docs/14](docs/14-moe.md)) → **distillation** → **diffusion training** → export and
-serving.
+([docs/14](docs/14-moe.md)) → **distillation** → **diffusion training** → **audio** → export
+and serving, with **speculative decoding**, **long context**, an **interpretability tab** and
+**FlashAttention written in Triton** after that.
 
 The mixture of experts is the first of those with a measured answer. Run at Phase 1 scale
 against the dense baseline — same data, seed, batch, steps, and **the same FLOPs per token**,
@@ -353,7 +356,7 @@ itself immediately: reading the rejects showed a teacher writing correct solutio
 wrong expected values in the tests, one rule in the template fixed it, and the pass rate
 went 25% → 58%.
 
-Two of the others are worth explaining, because they are not the usual list.
+Three of the others are worth explaining, because they are not the usual list.
 
 **Diffusion training.** Everything above is autoregressive: predict the next token from the
 ones before it. A masked diffusion language model throws that away — it corrupts a sequence
@@ -368,6 +371,22 @@ masked diffusion needs several times the compute of autoregression to reach the 
 quality. It is there because it can do two things autoregression structurally cannot —
 **infilling** (given a prefix *and* a suffix, write the middle) and **parallel generation**
 (watch a whole sequence resolve from all-masked to text in about 32 steps).
+
+**Audio.** The transformer does not care what its tokens mean, and audio is the cheapest
+honest way to prove it: no new architecture, just a new tokenizer. A small autoencoder learns
+to squeeze a waveform down to 50 frames a second and quantize each frame against a learned
+codebook — and once sound is a sequence of integers, the *existing* model, training loop, KV
+cache, sampler, quantizer and LoRA work on it unchanged. Then it can be taught to speak (text
+in, audio tokens out, reusing the same loss mask that makes SFT train on the assistant's turn
+only) and to listen (audio in, text out), where word error rate on LibriSpeech gives a number
+anyone can check.
+
+The failure to watch for is one this repo has already met: **a few codebook entries win, the
+rest are never used, and the reconstruction loss looks completely normal while it happens** —
+which is [mixture of experts](docs/14-moe.md)' router collapse wearing a different hat, down
+to reusing the same chart. The reward is something you can hear rather than read: the same
+clip rebuilt from 1, 2, 4 and 8 codebooks, played side by side. That is the same trade
+[quantization](docs/10-quantization.md) makes silently inside the weights, made audible.
 
 **A learning path.** This repo is meant to be learned from, and right now the docs are a
 reading order with nothing to do. The plan is a set of lessons that each pair a doc section
@@ -487,6 +506,36 @@ in `configs/portal.yaml` — `cost.per_kwh`, plus `host_watts`/`psu_efficiency` 
 number to match a plug meter rather than the card alone — and every run gains a price, a cost
 per million tokens, and a **coverage** figure saying how much of the run was actually
 recorded. With no rate set it shows kilowatt-hours and says so. Portal: the **Cost** panel.
+
+### The report a run leaves behind
+
+```bash
+python -m aksharallm.train.report small-code            # write checkpoints/<run>/report.md
+python -m aksharallm.train.report small-code --stdout   # or just print it
+```
+
+Every trainer writes this when it exits — not only when the budget is spent, because a run
+trained over evenings is not finished until it is, and the report says which of the two this
+was. It is one page: steps and tokens against the budget, best validation loss and its
+perplexity, a sparkline of the whole curve, every session with the reason it ended,
+throughput, energy, benchmark scores, and the checkpoints on disk. Nothing in it is stored
+anywhere else — it is recomputed from the log each time, which is why the portal's **Report**
+panel builds it live rather than serving the file, and why deleting it loses nothing.
+
+The section worth the module is *things worth knowing*: the reading you would otherwise have
+to do yourself. A session with no end record (killed, or crashed — the loss curve just has a
+step in it where work was retrained). Loss spikes, measured against the running average
+rather than a constant, because at step 0 a loss of 10 is where a run *starts*. A gradient
+norm that spent most of the run above the clip, so the effective learning rate was set by the
+clip and not by the schedule. A best validation loss that landed a third of the way in, which
+means the rest of the budget bought nothing and `ckpt_best.pt` is not the last checkpoint. A
+dead expert. An energy figure covering only part of the run. Findings come as ⚠️ *look at
+this*, • *worth knowing* and ✅ *checked, and fine* — the last one because a section that only
+ever prints warnings gets skipped when it is empty, which is exactly when it should be
+believed.
+
+Run against this repo's own Phase-2 log, it found a session that had been killed with `-9`
+eleven days earlier and never noticed.
 
 ### Training on a schedule
 

@@ -489,6 +489,65 @@ python -m aksharallm.portal.runs archive tiny-moe  # set it aside, keep everythi
 python -m aksharallm.portal.runs delete  tiny-moe  # prompts for the name before removing
 ```
 
+## The report a run leaves behind
+
+A finished run has told you a great deal and summarised none of it: forty thousand step
+lines, a dozen session markers, an energy ledger and a folder of benchmark JSON. Reading
+that is a skill, and a run should not require one. So **every trainer writes
+`checkpoints/<run>/report.md` when it exits** — not only when the budget is spent, because a
+run trained over evenings is not finished until it is, and the report says which of the two
+this was.
+
+```mermaid
+flowchart LR
+    L["train_log.jsonl<br/>steps · evals · sessions"] --> R["train/report.py"]
+    C["configs/&lt;run&gt;.yaml"] --> R
+    E["logs/energy.jsonl<br/>the cost ledger"] --> R
+    V["logs/eval/*.json<br/>benchmark results"] --> R
+    R --> M["report.md<br/>+ report.json"]
+    R --> P["portal → Report panel"]
+```
+
+Nothing in it is stored anywhere else: it is **derived, and regenerated on demand**, which is
+why overwriting the previous one is safe and why the portal builds it live rather than
+serving the file — that panel is usually opened *during* a run, and a snapshot from the last
+exit would be the most confidently wrong thing on the page.
+
+```bash
+python -m aksharallm.train.report small-code            # write checkpoints/small-code/report.md
+python -m aksharallm.train.report small-code --stdout   # print it instead (ssh)
+python -m aksharallm.train.report tiny-moe --json       # the same numbers, unrendered
+```
+
+Six sections, in the order a person asks for them: **at a glance** (steps, tokens,
+parameters, best val, wall clock, throughput, energy), **what it learned** (a sparkline plus
+the loss at six points along the run), **sessions**, **expert routing** if it is a mixture of
+experts, **benchmarks** if any were run, and **files**.
+
+### The section that is worth the module: *things worth knowing*
+
+The rest of the report is arithmetic over a log. This part is the reading you would have had
+to do yourself, and every check in it is something this project has actually been bitten by:
+
+| finding | why it is invisible otherwise |
+|---|---|
+| a session with no `session_end` record | a `kill -9` leaves no trace in the *numbers* — the loss curve just has a step in it where work was retrained |
+| loss spikes, measured against the EMA | a constant threshold cries wolf at step 0, where a loss of 10 is where a run starts, and misses a real spike at step 30,000 |
+| the gradient norm sitting above the clip | the effective learning rate was then set by the clip, not by the schedule you are reading off the LR chart |
+| the best validation loss landing early | the remaining budget bought nothing, and `ckpt_best.pt` is *not* the last checkpoint — the two are different models |
+| a session slower than the best one | something else had the card; the loss curve cannot show you that |
+| a dead expert | [router collapse](14-moe.md), which looks exactly like a healthy loss curve |
+| energy coverage below 80% | the sampler only runs while the portal is up, so a cost figure can be real and cover a third of the run |
+
+Findings come at three levels: ⚠️ *look at this*, • *worth knowing*, ✅ *checked, and fine*.
+The last one is not decoration — a section that only ever prints warnings teaches the reader
+to skip it when it is empty, which is precisely when it should be trusted.
+
+Two rules the module is built on. **A gap is a gap**: anything unknowable prints `–`, never
+zero, the same reason the cost panel shows `coverage`. And **it can never take a run down** —
+the trainers call `write_quietly`, which swallows everything, because summarising a six-day
+run is not worth risking its clean exit.
+
 ## What runs where — a cheat sheet
 
 | you want to… | command | portal |
@@ -509,6 +568,7 @@ python -m aksharallm.portal.runs delete  tiny-moe  # prompts for the name before
 | make it 4-bit and measure it | `python -m aksharallm.quant small-code/ckpt_best.pt --compare` | Quantize → Compare all |
 | is it any good yet? | `python -m aksharallm.eval small-code --suite fast` | Eval → Evaluate |
 | has it improved since last week? | `python -m aksharallm.eval report --suite arc-easy` | Eval → the trend chart |
+| read how a run went | `python -m aksharallm.train.report small-code` | Dashboard → Report |
 | what has this cost me? | `python -m aksharallm.portal.cost` | Dashboard → Cost |
 | …including telemetry from before | `python -m aksharallm.portal.cost backfill` | (one-off, from the shell) |
 
@@ -527,15 +587,17 @@ page.
 | 4 | [`aksharallm/portal/runs.py`](../aksharallm/portal/runs.py) | `RunStore` — what a run is: config, checkpoints, pid, phase, sessions. Then `launcher_for` (which runs can be started at all), `archive` and `delete` |
 | 5 | [`aksharallm/portal/server.py`](../aksharallm/portal/server.py) | `Handler` — the routes, one per panel, and `serve`. Stdlib `http.server`, no framework; `index.html` is assembled per request from `parts/` |
 | 6 | [`aksharallm/train/runlog.py`](../aksharallm/train/runlog.py) | `series` and `summarise_sessions` — every chart on the dashboard is this file reading `train_log.jsonl` |
-| 7 | [`aksharallm/portal/gpu.py`](../aksharallm/portal/gpu.py) | `Sampler` → `snapshot` — the 5-second `nvidia-smi` sample, tagged with whether a trainer was alive |
-| 8 | [`aksharallm/portal/cost.py`](../aksharallm/portal/cost.py) | `integrate` (power curve → watt-hours), `Ledger` (the append-only ten-minute buckets), `report` (coverage, and why "whole run (est.)" is its own column) |
-| 9 | [`aksharallm/portal/schedule.py`](../aksharallm/portal/schedule.py) | `Rule.due` (the 15-minute grace window — a missed fire stays missed) → `Scheduler.check` → `Scheduler.fire`, which is idempotent, and the one-per-machine `lock` |
-| 10 | [`aksharallm/portal/pipeline.py`](../aksharallm/portal/pipeline.py) | `Pipeline` — the post-training panel. A small parallel reader to `RunStore`, because SFT/DPO/GRPO have no `configs/<run>.yaml` and do have prerequisites |
-| 11 | [`evals.py`](../aksharallm/portal/evals.py) · [`quantize.py`](../aksharallm/portal/quantize.py) · [`finetune.py`](../aksharallm/portal/finetune.py) · [`synth.py`](../aksharallm/portal/synth.py) | one job runner per tab. Read any *one* of them — they are the same shape: start a subprocess of the CLI, stream its output, write a JSON result. [`learn.py`](../aksharallm/portal/learn.py) is the exception, and says why |
-| 12 | [`aksharallm/portal/static/js/router.js`](../aksharallm/portal/static/js/router.js) | `registerTab` — the router knows nothing about any tab; each module registers itself with `open` / `leave`. This is why a tab is inert until you open it |
-| 13 | `static/js/core.js` → `state.js` → `charts.js` → `dashboard.js` → one tab file | the DAG in the diagram above, bottom to top. `main.js` last: it only wires and boots |
+| 7 | [`aksharallm/train/report.py`](../aksharallm/train/report.py) | `checks` first — the findings are the module; then `build` (where each number comes from) and `render`. `write_quietly` is the last line of every trainer |
+| 8 | [`aksharallm/portal/gpu.py`](../aksharallm/portal/gpu.py) | `Sampler` → `snapshot` — the 5-second `nvidia-smi` sample, tagged with whether a trainer was alive |
+| 9 | [`aksharallm/portal/cost.py`](../aksharallm/portal/cost.py) | `integrate` (power curve → watt-hours), `Ledger` (the append-only ten-minute buckets), `report` (coverage, and why "whole run (est.)" is its own column) |
+| 10 | [`aksharallm/portal/schedule.py`](../aksharallm/portal/schedule.py) | `Rule.due` (the 15-minute grace window — a missed fire stays missed) → `Scheduler.check` → `Scheduler.fire`, which is idempotent, and the one-per-machine `lock` |
+| 11 | [`aksharallm/portal/pipeline.py`](../aksharallm/portal/pipeline.py) | `Pipeline` — the post-training panel. A small parallel reader to `RunStore`, because SFT/DPO/GRPO have no `configs/<run>.yaml` and do have prerequisites |
+| 12 | [`evals.py`](../aksharallm/portal/evals.py) · [`quantize.py`](../aksharallm/portal/quantize.py) · [`finetune.py`](../aksharallm/portal/finetune.py) · [`synth.py`](../aksharallm/portal/synth.py) | one job runner per tab. Read any *one* of them — they are the same shape: start a subprocess of the CLI, stream its output, write a JSON result. [`learn.py`](../aksharallm/portal/learn.py) is the exception, and says why |
+| 13 | [`aksharallm/portal/static/js/router.js`](../aksharallm/portal/static/js/router.js) | `registerTab` — the router knows nothing about any tab; each module registers itself with `open` / `leave`. This is why a tab is inert until you open it |
+| 14 | `static/js/core.js` → `state.js` → `charts.js` → `dashboard.js` → one tab file | the DAG in the diagram above, bottom to top. `main.js` last: it only wires and boots |
 
-What pins it: `tests/test_portal.py` and its siblings (`test_portal_cost.py`,
+What pins it: `tests/test_report.py` (the findings, and the two ways a report could quietly
+lie), `tests/test_portal.py` and its siblings (`test_portal_cost.py`,
 `test_portal_eval.py`, `test_portal_finetune.py`, `test_portal_quantize.py`,
 `test_portal_synth.py`, `test_portal_pipeline.py`) —
 `test_a_second_portal_does_not_steal_the_pid_file` is the one whose absence caused real

@@ -50,6 +50,7 @@ from ..config import ModelConfig
 from ..infer.generate import generate
 from ..model.transformer import Transformer
 from ..tokenizer.tokenizer import Tokenizer
+from . import report
 from .pretrain import human, save_checkpoint
 from .sft import _rebuild_cfg
 
@@ -315,6 +316,7 @@ def main():
                     _rebuild_cfg(ckpt, mcfg, args), args.steps - 1, best_reward)
     print(f"\ndone. best mean reward {best_reward:.3f}. checkpoints in {out_dir}")
     logf.close()
+    report.write_quietly(out_dir, log="grpo_log.jsonl")
 
 
 if __name__ == "__main__":

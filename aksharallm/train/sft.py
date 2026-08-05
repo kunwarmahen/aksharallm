@@ -39,7 +39,7 @@ from ..config import ModelConfig, config_to_dict, load_config
 from ..lora import setup as lora_setup
 from ..model.transformer import Transformer
 from ..tokenizer.tokenizer import Tokenizer
-from . import stopfile
+from . import report, stopfile
 from .pretrain import fmt_dur, human, save_checkpoint, stamp
 from .schedule import get_lr
 
@@ -330,6 +330,7 @@ def main():
     else:
         print(f"\ntry it:  python -m aksharallm.infer.cli {out_dir}/sft_best.pt --mode chat")
     logf.close()
+    report.write_quietly(out_dir, log="sft_log.jsonl")
 
 
 def _save(out_dir: Path, which: str, model, optimizer, ckpt, mcfg, args, step, val,

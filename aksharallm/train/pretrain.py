@@ -34,7 +34,7 @@ from ..config import Config, config_to_dict, load_config
 from ..data.loader import MixedTokenDataset, TokenDataset
 from ..model.transformer import Transformer
 from ..tokenizer.tokenizer import Tokenizer
-from . import stopfile
+from . import report, stopfile
 from .schedule import get_lr
 
 
@@ -236,6 +236,12 @@ def main():
         print(f"resumed from {resume} at step {start_step}")
 
     tokens_per_step = cfg.train.batch_size * cfg.train.grad_accum * cfg.train.seq_len
+    # Counted here, while the model is still the plain module, and written into the log's
+    # session_start record: the end-of-run report should not have to load a 1.2 GB checkpoint
+    # (or reimplement "how big is this model") to say how big the model was. Both numbers,
+    # because for a mixture of experts they differ and quoting one of them is misleading.
+    n_params, n_params_active = model.num_params(), model.num_active_params()
+    n_params_nonemb = model.num_params(non_embedding=True)
 
     print("=" * 78)
     print(f"run          {cfg.name}")
@@ -325,7 +331,8 @@ def main():
 
     log_session("session_start", pid=os.getpid(), start_step=start_step,
                 max_steps=cfg.train.max_steps, stop_at=stop_at, stop_by=stop_by,
-                tokens_per_step=tokens_per_step)
+                tokens_per_step=tokens_per_step, params=n_params,
+                params_active=n_params_active, params_nonemb=n_params_nonemb)
 
     if start_step >= cfg.train.max_steps:
         # Resuming a finished run. It is not an error -- the checkpoint is intact and this
@@ -340,6 +347,7 @@ def main():
                     last_step=cfg.train.max_steps - 1, steps=0,
                     elapsed=time.time() - run_t0, final_val_loss=best_val)
         logf.close()
+        report.write_quietly(out_dir, run=cfg.name)
         return
 
     for step in range(start_step, cfg.train.max_steps):
@@ -502,6 +510,10 @@ def main():
                   f"{fmt_dur(time.time() - run_t0)}, finished {datetime.now():%Y-%m-%d %H:%M:%S}")
             print(f"[stop] resume with the same command "
                   f"(resume:auto picks up step {step + 1}).")
+            # Written on every clean exit, not only on the last one: a run trained over
+            # evenings is never "finished" until it is, and the report says which of the two
+            # this is. It is derived from the log, so rewriting it costs a file read.
+            report.write_quietly(out_dir, run=cfg.name)
             return
 
     # final
@@ -519,6 +531,7 @@ def main():
     print(f"ran {cfg.train.max_steps - start_step} steps in {fmt_dur(time.time() - run_t0)}, "
           f"finished {datetime.now():%Y-%m-%d %H:%M:%S}")
     print(f"checkpoints in {out_dir}")
+    report.write_quietly(out_dir, run=cfg.name)
 
 
 if __name__ == "__main__":

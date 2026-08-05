@@ -385,6 +385,32 @@ class RunStore:
             "server_time": time.time(),
         }
 
+    def report(self, run: str, save: bool = False) -> dict:
+        """The run report: the same markdown a trainer writes to `report.md` when it exits.
+
+        Built fresh on every request rather than served from the file, because the file is a
+        snapshot from the last exit and this panel is often opened *during* a run — a report
+        that silently showed last Tuesday's numbers would be the most confidently wrong thing
+        on the page. `save=True` writes it to disk, which is the button beside it.
+        """
+        self.check(run)
+        from ..train import report as run_report
+        out_dir = self.run_dir(run)
+        data = run_report.build(out_dir, run=run, root=self.root)
+        saved = run_report.write(out_dir, run=run, root=self.root) if save else None
+        on_disk = out_dir / "report.md"
+        return {
+            "run": run,
+            "markdown": run_report.render(data),
+            "generated": data.get("generated"),
+            "complete": data.get("complete"),
+            "checks": data.get("checks"),
+            "saved": str(saved.relative_to(self.root)) if saved else None,
+            # What is on disk, and when — so "Save" can say whether it changed anything.
+            "file": str(on_disk.relative_to(self.root)) if on_disk.exists() else None,
+            "file_mtime": on_disk.stat().st_mtime if on_disk.exists() else None,
+        }
+
     def summary(self, run: str) -> dict:
         """The short form for the run switcher: no series, no sessions."""
         full = self.status(run, max_points=0)

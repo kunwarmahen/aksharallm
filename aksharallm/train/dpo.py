@@ -51,6 +51,7 @@ from ..config import ModelConfig
 from ..lora import setup as lora_setup
 from ..lora.layer import disable_adapters
 from ..model.transformer import Transformer
+from . import report
 from .pretrain import fmt_dur, human, save_checkpoint, stamp
 from .schedule import get_lr
 from .sft import _rebuild_cfg
@@ -313,6 +314,7 @@ def main():
           f"finished {datetime.now():%Y-%m-%d %H:%M:%S}")
     print(f"output in {out_dir}")
     logf.close()
+    report.write_quietly(out_dir, log="dpo_log.jsonl")
 
 
 def _save(out_dir: Path, which: str, policy, optimizer, ckpt, mcfg, args, step, val, acc,

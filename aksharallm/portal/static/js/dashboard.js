@@ -5,6 +5,7 @@
 import { $, $$, api, escHtml, flash, fmt, live, post } from './core.js';
 import { state } from './state.js';
 import { chartTable, lineChart, table } from './charts.js';
+import { renderMarkdown } from './markdown.js';
 import { registerTab } from './router.js';
 
 /** What a queued stop says on the badge: a step, or a clock time with how long is left. */
@@ -1038,12 +1039,61 @@ export const UNIT_MORE_STEPS = {
   fmt: (v) => fmt.int(v),
 };
 
+/* ---- the run report ------------------------------------------------------------------
+ * Built on demand, never on the poll: one build re-reads the entire training log, the energy
+ * ledger and every benchmark result this run ever produced. That is a fine thing to do when
+ * a person asks for it and a terrible thing to do every three seconds.
+ *
+ * The panel shows the *live* report rather than whatever is in checkpoints/<run>/report.md,
+ * because it is usually opened mid-run and a snapshot from Tuesday's exit would be the most
+ * confidently wrong thing on the page. Saving is a separate button, and it writes the same
+ * file a finished trainer leaves behind. */
+export async function buildReport(save = false) {
+  const run = state.run;
+  if (!run) return;
+  const body = $('#report-body');
+  const note = $('#report-note');
+  note.textContent = save ? 'saving…' : 'building…';
+  try {
+    const path = `/api/run/${encodeURIComponent(run)}/report`;
+    const res = save ? await post(path, {}) : await api(path);
+    body.innerHTML = renderMarkdown(res.markdown || '');
+    body.dataset.run = run;
+    body.scrollTop = 0;
+    $('#btn-report-save').disabled = false;
+    note.textContent = (res.saved ? `saved to ${res.saved} · ` : '')
+      + `built ${new Date().toLocaleTimeString()}`;
+    if (save) flash(`Report written to ${res.saved}`, 'ok');
+  } catch (err) {
+    note.textContent = '';
+    body.innerHTML = `<p class="docs-hint">could not build the report — ${escHtml(err.message)}</p>`;
+  }
+}
+
+export function wireReport() {
+  $('#btn-report').addEventListener('click', () => buildReport(false));
+  $('#btn-report-save').addEventListener('click', () => buildReport(true));
+}
+
+/** Another run's report must not sit under this run's heading, so it is cleared rather than
+ *  left to be replaced on the next click. */
+function clearReport() {
+  const body = $('#report-body');
+  if (!body || !body.dataset.run) return;
+  body.dataset.run = '';
+  body.innerHTML = '<p class="docs-hint">The trainers write this file when they exit. '
+    + 'Build it here to read one for a run that is still going.</p>';
+  $('#report-note').textContent = '';
+  $('#btn-report-save').disabled = true;
+}
+
 export function selectRun(run) {
   state.run = run;
   state.logFile = null;
   state.status = null;
   state.zoom = {};        /* another run's step range means nothing here */
   flash('');
+  clearReport();
   $('#log-select').dataset.run = '';
   schedule(0);
 }

@@ -144,3 +144,16 @@
 .cost-days > summary { cursor: pointer; font-size: .85rem; opacity: .8; margin-bottom: .4rem; }
 .cost-days[open] > summary { margin-bottom: .6rem; }
 .cost-basis { font-size: .8rem; opacity: .7; margin: .7rem 0 0; max-width: 70ch; }
+
+/* Report panel. It renders the same markdown the Docs tab does, so it borrows `.docs-reader`
+   wholesale and only adds a ceiling: a six-day run's report is longer than a screen, and a
+   panel that pushes the log and the config off the bottom of the page is a worse dashboard
+   than one that scrolls inside itself. */
+.report-body { max-height: 60vh; overflow-y: auto; }
+.report-body p:first-child { margin-top: 0; }
+/* The renderer demotes headings by two levels (a document's `#` inside a panel is not an h1),
+   so the report's title arrives as h3 and its sections as h4. Styling h1/h2 here matches
+   nothing at all — which is exactly how the first version of this rule looked correct. */
+.report-body h3 { font-size: 1.15rem; margin: 0 0 .4rem; }
+.report-body h4 { margin-top: 1.4rem; font-size: 1rem; }
+.report-body code { font-size: .85em; }
