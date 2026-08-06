@@ -135,7 +135,8 @@ aksharallm/
 │   │   └── loader.py         memmap batch sampling (TokenDataset, MixedTokenDataset)
 │   ├── model/
 │   │   ├── transformer.py    the whole architecture, ~300 lines
-│   │   └── moe.py            mixture of experts: router, sorted dispatch, upcycling — docs/14
+│   │   ├── moe.py            mixture of experts: router, sorted dispatch, upcycling — docs/14
+│   │   └── flash.py          FlashAttention in Triton, fwd + bwd (model.attn_impl) — docs/03
 │   ├── quant/            int8/int4/NF4 from scratch — see docs/10
 │   ├── lora/             LoRA + QLoRA adapters from scratch — see docs/11
 │   │   ├── qtensor.py        group scales, zero-points, 4-bit packing
@@ -336,8 +337,18 @@ verifies) → **quantization** ✅ → **LoRA/QLoRA** ✅ → a **real eval harn
 HellaSwag, PIQA, GSM8K, HumanEval and a model-judged suite — [docs/12](docs/12-eval.md)) →
 **synthetic data** ✅ ([docs/13](docs/13-synthetic-data.md)) → **mixture of experts** ✅
 ([docs/14](docs/14-moe.md)) → **distillation** → **diffusion training** → **audio** → export
-and serving, with **speculative decoding**, **long context**, an **interpretability tab** and
-**FlashAttention written in Triton** after that.
+and serving ✅, with **speculative decoding** ✅, an **interpretability tab** ✅ and
+**FlashAttention written in Triton** ✅ ([docs/03](docs/03-model.md)), and **long context**
+still to come.
+
+The FlashAttention kernel is the one with the most surprising answer. Forward and backward,
+in Triton, from the online-softmax rescale up — and it reaches **parity with PyTorch's SDPA
+on the forward from T=2048** (1.02×) while staying ~20% behind on the backward, which is
+what you should expect when the thing you are racing is FlashAttention-2 in hand-written
+PTX. End to end on the 300M it costs 1.1 points of MFU, so the default stays `sdpa` and the
+file exists to be read. The number worth keeping is the other column: at T=8192 it runs in
+**422 MB where the naive `(T,S)`-matrix version cannot run at all**. That is the whole
+point of the algorithm, and it survives being written by hand.
 
 The mixture of experts is the first of those with a measured answer. Run at Phase 1 scale
 against the dense baseline — same data, seed, batch, steps, and **the same FLOPs per token**,

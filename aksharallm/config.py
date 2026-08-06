@@ -28,6 +28,15 @@ class ModelConfig:
     tie_embeddings: bool = True
     dropout: float = 0.0
 
+    #: Which attention kernel runs the softmax-weighted sum.
+    #:   "sdpa"  — `F.scaled_dot_product_attention`, i.e. someone else's FlashAttention-2.
+    #:   "flash" — ours, `model/flash.py`, written in Triton.
+    #: The default is "sdpa" and should stay that way for a real run: our kernel matches it
+    #: on the forward and is ~20% behind on the backward, so choosing it costs real hours
+    #: over a six-day run. It is here to be *read*, benchmarked and mutated, and it silently
+    #: falls back to SDPA for any shape it does not handle (see `flash.usable`).
+    attn_impl: str = "sdpa"
+
     # ---- mixture of experts (0 = dense; everything below is ignored) -------------------
     #: How many experts replace the single SwiGLU in each MoE block.
     n_experts: int = 0
@@ -53,6 +62,8 @@ class ModelConfig:
             self.n_kv_heads = self.n_heads
         assert self.d_model % self.n_heads == 0, "d_model must divide evenly by n_heads"
         assert self.n_heads % self.n_kv_heads == 0, "n_heads must be a multiple of n_kv_heads"
+        if self.attn_impl not in ("sdpa", "flash"):
+            raise ValueError(f"attn_impl must be 'sdpa' or 'flash', got {self.attn_impl!r}")
         if self.d_ff is None:
             hidden = int(8 * self.d_model / 3)
             self.d_ff = self.multiple_of * ((hidden + self.multiple_of - 1) // self.multiple_of)

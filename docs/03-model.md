@@ -114,13 +114,149 @@ implementations run out of memory. Same math, dramatically less memory traffic.
 One subtlety in the code worth reading twice:
 
 ```python
-is_causal = cache is None or T > 1
+is_causal = attn_mask is None and T > 1
 ```
 
 During incremental generation we feed exactly one token with a warm KV cache. That single
 query sits at the *end* of the sequence and legitimately attends to everything cached.
 Passing `is_causal=True` there would mask almost all of it — a classic bug that produces
 a model that trains fine and generates garbage.
+
+---
+
+## FlashAttention, written from scratch
+
+Calling somebody else's kernel is the right thing for a run and the wrong thing for a repo
+whose claim is that every core piece is hand-written. So there is a second implementation,
+ours, in [`model/flash.py`](../aksharallm/model/flash.py) — the same algorithm in Triton,
+forward *and* backward. Turn it on with one config line:
+
+```yaml
+model:
+  attn_impl: flash      # default is "sdpa"
+```
+
+### The one idea: online softmax
+
+Naive attention computes the whole `(T, S)` score matrix, softmaxes it, then multiplies by
+`V`. The matrix is the problem: it is written to memory and read back twice, and it grows
+as `T²`.
+
+FlashAttention never builds it. It walks the keys in **blocks**, keeping three small
+running values per query row — and the accumulated output is *rescaled* whenever a block
+turns out to contain a bigger score than anything seen so far:
+
+```mermaid
+flowchart LR
+    subgraph SRAM["one program, entirely in on-chip SRAM"]
+        direction TB
+        ST["m — biggest score so far<br/>l — running sum of exp(s−m)<br/>o — running weighted sum of V"]
+    end
+    K1["K,V block 1"] --> ST
+    K2["K,V block 2"] --> ST
+    K3["K,V block 3"] --> ST
+    KD["…until the diagonal"] --> ST
+    ST --> OUT["out = o / l<br/>L = m + log(l) → saved"]
+```
+
+The rescale is one line of algebra:
+
+```
+exp(s − m_new) = exp(s − m_old) · exp(m_old − m_new)
+```
+
+which makes softmax **associative** — and therefore computable in a single streaming pass.
+The result is not an approximation and not a windowed attention. It is the same number, on
+a different memory schedule.
+
+### The backward pass, and the one float that makes it possible
+
+The gradient needs `P = softmax(S)` — precisely the matrix the forward pass refused to
+keep. The way out is to *recompute* it, and to recompute a softmax you only need its
+denominator. So the forward saves **one float per query row**, the log-sum-exp
+`L = m + log(l)`, and the backward rebuilds `P = exp(S − L)` block by block:
+
+| what is stored for the backward | shape | at our 300M's training shape |
+|---|---|---|
+| the score matrix (naive) | `(B, H, T, T)` | **3.0 GB** |
+| the log-sum-exp (flash) | `(B, H, T)` | **0.8 MB** |
+
+Then the chain rule, with one term that is not obvious:
+
+```
+dV = Pᵀ dO
+dP = dO Vᵀ
+dS = P ⊙ (dP − rowsum(dO ⊙ O))     ← the softmax Jacobian, collapsed to one number per row
+dQ = dS K · scale        dK = dSᵀ Q · scale
+```
+
+`rowsum(dO ⊙ O)` is what is left of the Jacobian `diag(p) − p pᵀ` once you notice that
+`pᵀ dP` equals `dO · O` for that row.
+
+### The trap: the diagonal is bottom-right
+
+Query `m` of `T` may see key `n` of `S` iff **`n ≤ m + (S − T)`**. That offset is the same
+bug already documented above for `is_causal`, and it is why one integer `DIAG = S - T`
+covers all three cases the model actually produces:
+
+| case | T | S | DIAG | what falls out |
+|---|---|---|---|---|
+| training / prefill | 1024 | 1024 | 0 | the ordinary triangle |
+| one decode step | 1 | 512 | 511 | every cached key is visible |
+| a speculative draft block | 4 | 512 | 508 | each guess sees the prefix plus the guesses before it |
+
+Aligned top-left instead, a draft block sees keys `0..j` — most of the prompt vanishes, the
+model trains fine, and it generates fluent nonsense.
+`tests/test_flash.py::test_causal_is_bottom_right_aligned` is the whole defence.
+
+### What it is worth (measured, RTX 3090, B=4 H=16 Hk=4 D=64 bf16 causal)
+
+| T | ours fwd | SDPA fwd | | ours fwd+bwd | SDPA fwd+bwd | | peak MB: ours | SDPA | naive `(T,S)` |
+|---|---|---|---|---|---|---|---|---|---|
+| 512 | 0.119 ms | 0.087 | 0.73× | 0.517 ms | 0.376 | 0.73× | 263 | 263 | 418 |
+| 1024 | 0.225 | 0.206 | 0.91× | 0.994 | 0.816 | 0.82× | 273 | 273 | 852 |
+| 2048 | 0.614 | 0.624 | **1.02×** | 2.908 | 2.408 | 0.83× | 294 | 294 | 2,525 |
+| 4096 | 2.094 | 2.128 | **1.02×** | 9.625 | 7.827 | 0.81× | 337 | 337 | 9,094 |
+| 8192 | 7.950 | 7.925 | 1.00× | 35.673 | 28.818 | 0.81× | **422** | 422 | **OOM** |
+
+Read that honestly. SDPA *is* FlashAttention-2, hand-written in PTX with years of tuning
+behind it, so the ambition was parity and not victory. The forward reaches it from T=2048
+up. The backward stays ~20% behind, and the reason is structural rather than a missing
+trick: ours recomputes the scores **twice** (once in the dK/dV kernel, once in the dQ
+kernel) because that is what keeps each program the sole writer of its output and avoids
+atomics.
+
+End to end on the real 300M config, one training step at B=4 × 1024:
+
+| | ms/step | tok/s | MFU |
+|---|---|---|---|
+| `attn_impl: sdpa` | 212.0 | 19,318 | **51.6%** |
+| `attn_impl: flash` | 216.9 | 18,888 | 50.5% |
+
+**2.3%**, which also tells you something useful about the model: at `T=1024` attention is
+only about a tenth of a step, and the other nine tenths are the FFN and the vocabulary
+projection. Attention's share grows as `T²`, so the same 20% would cost ~6% at 4k and the
+kernel is worth returning to when [long context](../PLAN.md) lands.
+
+So the default stays `sdpa`. This file exists to be read, benchmarked and broken —
+`python -m aksharallm.model.flash` reproduces every number above on your own card — and it
+falls back to SDPA for any shape it does not handle (a mask, dropout, a single decode row,
+an unsupported head dimension), so `attn_impl: flash` is never a correctness risk.
+
+Two things the sweep taught that were not obvious:
+
+- **`num_warps` mattered 1.7×, block size barely mattered at all.** Eight warps on a 64×64
+  backward tile took 4.85 ms where four warps took 2.90. More warps than a tile has work
+  for is not free parallelism — it slices the tile thinner and spends the difference on
+  cross-warp reduction.
+- **The budget is SRAM, and fp32 is two bytes more of it.** The block sizes that fit in bf16
+  do not fit in fp32, and the failure is a hard `OutOfResources` at launch rather than
+  anything subtle — which is the one nice thing about it. `_blocks()` takes `itemsize` for
+  exactly that reason.
+
+There is deliberately **no portal tab** for this, on the same argument as
+[serving](16-serving.md): the portal watches a training run, and this is a kernel with a
+benchmark, not something with state to watch.
 
 ---
 
@@ -328,18 +464,22 @@ data flow:
 | 1 | [`aksharallm/config.py`](../aksharallm/config.py) | `ModelConfig` — every dimension in the table above, plus `__post_init__`, where `d_ff` gets rounded and `head_dim` is derived |
 | 2 | [`transformer.py`](../aksharallm/model/transformer.py) → `Transformer.forward` | **start here.** Embedding → blocks → final norm → `lm_head`, and the `if targets is None` branch that projects only the last position. Fifteen lines that name everything below |
 | 3 | `Block.forward` | the residual stream in two lines: `x = x + attn(norm(x))`, `x = x + ffn(norm(x))`. Pre-norm — the belt itself is never normalised |
-| 4 | `Attention.forward` | q/k/v projections, `apply_rope`, the cache update, then `F.scaled_dot_product_attention`. The line to read twice is `is_causal = cache is None or T > 1` |
+| 4 | `Attention.forward` | q/k/v projections, `apply_rope`, the cache update, then `F.scaled_dot_product_attention` — or our own kernel, if `attn_impl` says so. The line to read twice is `is_causal = attn_mask is None and T > 1` |
 | 5 | `build_rope_cache` + `apply_rope` + `_rotate_half` | the geometric frequencies, and the rotation whose dot product depends only on the *distance* |
 | 6 | `RMSNorm.forward` · `SwiGLU.forward` | four lines each. Note the fp32 upcast for the mean-of-squares, and the gate `silu(w1 x) * (w3 x)` |
 | 7 | `KVCache` | preallocated, `update` appends and returns the live prefix. Read it again with [doc 6](06-inference.md) |
 | 8 | `Transformer._init_weights` · `configure_optimizers` · `num_params` · `estimate_mfu` | the `0.02/√(2·n_layers)` scaling for residual writers, the decay/no-decay split, and where the MFU number in the logs comes from |
 | 9 | [`aksharallm/model/moe.py`](../aksharallm/model/moe.py) | optional — the one component that replaces step 6's FFN. [doc 14](14-moe.md) |
+| 10 | [`aksharallm/model/flash.py`](../aksharallm/model/flash.py) | optional — step 4's attention, written out in Triton instead of called. Read the module docstring first (it is the derivation), then `_fwd_kernel`'s four-line online-softmax rescale, then `_bwd_kv_kernel` / `_bwd_q_kernel` and why there are two of them |
 
 What pins it: `tests/test_model.py` is the shortest honest summary of this chapter —
 `test_causality`, `test_rope_preserves_norm_and_relative_position`, `test_weight_tying`,
 `test_init_loss_is_uniform`, and above all `test_kv_cache_matches_full_forward`. Break the
 mask on purpose in [lesson 3](lessons/03-attention.md), the cache in
-[lesson 4](lessons/04-kv-cache.md).
+[lesson 4](lessons/04-kv-cache.md). `tests/test_flash.py` does the same job for the kernel,
+against the `(T, S)`-matrix definition written out in fp32 — nine of ten deliberate mutants
+were caught, and the tenth (deleting the diagonal block-skip) turned out not to be a
+correctness mutant at all, only a slower kernel.
 
 ---
 

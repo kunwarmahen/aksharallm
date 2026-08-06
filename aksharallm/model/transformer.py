@@ -25,6 +25,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..config import ModelConfig
+from . import flash
 from .moe import MoEFeedForward, moe_stats
 
 # torch >= 2.5 can do grouped-query attention inside SDPA without materialising repeated KV.
@@ -144,6 +145,7 @@ class Attention(nn.Module):
         self.wv = nn.Linear(cfg.d_model, self.n_kv_heads * self.head_dim, bias=False)
         self.wo = nn.Linear(self.n_heads * self.head_dim, cfg.d_model, bias=False)
         self.dropout = cfg.dropout
+        self.attn_impl = cfg.attn_impl
 
     def forward(self, x, cos, sin, cache: KVCache | None = None, attn_mask=None):
         B, T, _ = x.shape
@@ -175,12 +177,26 @@ class Attention(nn.Module):
         # A prefill into an *empty* cache gets no mask and `is_causal=True`: query and key
         # lengths are equal there, so the triangle is aligned and the fast kernel is kept.
         is_causal = attn_mask is None and T > 1
+        dropout_p = self.dropout if self.training else 0.0
+
+        # Our own kernel, when the config asks for it and the shape is one it handles.
+        # `flash.usable` is the whole routing decision and it never raises: a mask, dropout,
+        # an odd head dimension or a single decode row all fall through to SDPA below, which
+        # computes the same thing. See `model/flash.py` and doc 3.
+        #
+        # `causal=True` covers all three cases above, including the T == 1 decode that
+        # `is_causal` has to say False to, because the kernel aligns its diagonal to the
+        # BOTTOM-RIGHT: query j sees keys up to `j + (S - T)`, which for a single query
+        # against a warm cache is every key there is.
+        if self.attn_impl == "flash" and flash.usable(q, k, dropout_p, attn_mask):
+            out = flash.flash_attention(q, k, v, causal=True)
+            return self.wo(out.transpose(1, 2).contiguous().view(B, T, -1))
 
         if _SDPA_HAS_GQA:
             out = F.scaled_dot_product_attention(
                 q, k, v,
                 attn_mask=attn_mask,
-                dropout_p=self.dropout if self.training else 0.0,
+                dropout_p=dropout_p,
                 is_causal=is_causal,
                 enable_gqa=self.n_rep > 1,
             )
@@ -191,7 +207,7 @@ class Attention(nn.Module):
             out = F.scaled_dot_product_attention(
                 q, k, v,
                 attn_mask=attn_mask,
-                dropout_p=self.dropout if self.training else 0.0,
+                dropout_p=dropout_p,
                 is_causal=is_causal,
             )
 
