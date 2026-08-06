@@ -140,7 +140,7 @@ Layout:
   aksharallm/quant/      int8/int4/NF4 from scratch: RTN, GPTQ, AWQ, QAT, a Triton kernel
   aksharallm/lora/       LoRA and QLoRA adapters from scratch
   aksharallm/synth/      generating training data with a local teacher, and checking it
-  aksharallm/learn/      the learning path: thirteen lessons over this repo
+  aksharallm/learn/      the learning path: nineteen lessons over this repo
   aksharallm/portal/     this local web portal (stdlib HTTP server, no dependencies)
   configs/*.yaml         one YAML per run; a run = that file plus `-o key=value` overrides
   scripts/*.sh           the launchers a human would type

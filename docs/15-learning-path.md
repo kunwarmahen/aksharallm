@@ -42,7 +42,7 @@ It fails in the safe direction: someone who did the work and reverted before pre
 button simply presses it once more. And red is deliberately *not* styled as an error — it is
 the middle of the exercise, and the panel says so.
 
-## The thirteen lessons
+## The nineteen lessons
 
 Filename order is the curriculum; the prereq graph is the constraint.
 
@@ -61,6 +61,12 @@ Filename order is the curriculum; the prereq graph is the constraint.
 | 11 | **eval** | scoring by log-likelihood, chance lines, error bars | tokenize the continuation with the context |
 | 12 | **synthetic-data** | generating data, and checking it twice | accept a vacuous test |
 | 13 | **moe** | routers, collapse, and upcycling as an identity | break identity-at-init |
+| 14 | **flash-attention** | the online softmax, and why the routing decision matters more than the kernel | take the `usable()` guard off |
+| 15 | **long-context** | position is an *angle*; RoPE scaling is training-free | turn NTK back into linear |
+| 16 | **speculative** | guessing ahead, and the acceptance rule that keeps it exact | accept every draft token |
+| 17 | **serving** | paged KV blocks and continuous batching | write the keys one slot along |
+| 18 | **interp** | the logit lens, patching, and pinning a picture to an identity | drop RoPE from the recomputed map |
+| 19 | **diffusion** | the other paradigm: fill in blanks, unmask by confidence | drop the `1/t` weight |
 
 Most of the exercises are **real bugs from this repo** — they are in `PLAN.md`'s "Bugs found
 and fixed" list. `is_causal` during single-token decode masks away the entire KV cache: the
@@ -75,8 +81,8 @@ they have misunderstood.
 1. **Lessons reference files, never line numbers.** A renamed file fails loudly; line 47
    silently becomes something else. There is a test that greps the lesson bodies for "line
    N" and fails.
-2. **Every `verify` is a real pytest node id**, and `tests/test_lessons.py` collects all
-   thirteen. Rename a test out from under a lesson and the *suite* goes red — which is the
+2. **Every `verify` is a real pytest node id**, and `tests/test_lessons.py` collects every
+   one of them. Rename a test out from under a lesson and the *suite* goes red — which is the
    earliest anyone could find out.
 
 Plus `validate()`, which checks that every referenced doc and file exists, ids are unique,
@@ -89,8 +95,8 @@ the list, because a drifted lesson is the one failure that tab must never hide.
 
 Both worth recording, because they are the argument for this whole approach.
 
-**Two of the thirteen exercises did not work.** Every lesson promises a red check, so every
-break was actually performed against the suite. Eleven went red. Two did not:
+**Two of the first thirteen exercises did not work.** Every lesson promises a red check, so
+every break was actually performed against the suite. Eleven went red. Two did not:
 
 * **eval** — the existing test asserts the right property, but against a `FakeTokenizer` that
   is one byte per token. It has no merges, so both the correct and the buggy implementation
@@ -119,7 +125,7 @@ python -m aksharallm.learn reset [id]       # do one properly again
 same `learning/progress.json`, so the terminal and the browser never disagree about what you
 have done.
 
-The tab opens on the first unfinished unlocked lesson rather than a list of thirteen, locked
+The tab opens on the first unfinished unlocked lesson rather than a list of nineteen, locked
 lessons say what is missing rather than being merely greyed out, and three buttons hand off to
 the rest of the portal: **read the doc** (Docs tab), **open the file** (Code tab, where a
 local model will explain the lines before you break them), and **try it** (Playground, on the
@@ -129,7 +135,7 @@ probe the lesson is about).
 
 | # | file | what to look for |
 |---|---|---|
-| 1 | [`docs/lessons/01-data.md`](lessons/01-data.md) | one lesson, and the shape of all thirteen: frontmatter (`doc`, `files`, `verify`, `prereqs`, `minutes`), explanation, exercise. The `files:` list is this chapter's version of every other chapter's reading order |
+| 1 | [`docs/lessons/01-data.md`](lessons/01-data.md) | one lesson, and the shape of all nineteen: frontmatter (`doc`, `files`, `verify`, `prereqs`, `minutes`), explanation, exercise. The `files:` list is this chapter's version of every other chapter's reading order |
 | 2 | [`learn/lessons.py`](../aksharallm/learn/lessons.py) | `Lesson`, the frontmatter parser, the prereq graph, and `validate()` — every referenced doc and file exists, ids unique, no cycle |
 | 3 | [`learn/progress.py`](../aksharallm/learn/progress.py) | `learning/progress.json`, and the red-then-green state machine: a lesson completes only after its check has been seen failing *and* then passing |
 | 4 | [`learn/check.py`](../aksharallm/learn/check.py) | running one pytest node id and turning its output into something worth reading |

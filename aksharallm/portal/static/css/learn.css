@@ -16,7 +16,16 @@
   height: calc(100vh - 150px); min-height: 420px;
   display: flex; flex-direction: column; overflow: hidden; min-width: 0;
 }
-.ln-list { overflow-y: auto; }
+/* Both columns are fixed-height flex panels, and in BOTH of them exactly one child scrolls.
+   The left one used to say `.ln-list { overflow-y: auto }` and it never worked: two classes
+   beat one, so `.ln-layout > .panel { overflow: hidden }` won the cascade and the list was
+   simply clipped. Nobody noticed while the curriculum was short enough to fit — it broke the
+   moment there were nineteen lessons instead of thirteen. Scroll the LIST, not the panel,
+   so the progress bar stays at the top and the "red and then green" note stays at the
+   bottom where they can both be read. */
+.ln-list { overflow: hidden; }
+.ln-list > .panel-head, .ln-progress, .ln-problems, .ln-fine { flex: none; }
+.ln-lessons { flex: 1 1 auto; overflow-y: auto; min-height: 0; }
 
 /* Only ONE thing in this panel scrolls: the lesson. The action row is pinned to the bottom,
    because a button you have to scroll a 400-line lesson to reach is a button people miss —
@@ -39,7 +48,8 @@
 }
 
 /* ---- the curriculum ------------------------------------------------------------------- */
-.ln-lessons { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
+.ln-lessons { list-style: none; margin: 0; padding: 0 4px 0 0; display: flex;
+  flex-direction: column; gap: 1px; }
 .ln-lesson {
   display: grid; grid-template-columns: 24px 1fr; gap: 2px 8px; align-items: start;
   padding: 7px 6px; border-radius: var(--radius); cursor: pointer; border: 1px solid transparent;

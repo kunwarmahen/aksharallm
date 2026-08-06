@@ -36,7 +36,7 @@ async function refreshList(openNext) {
     renderList();
     if (openNext && !learn.current) {
       /* Open on the first unfinished lesson that is unlocked. Arriving at a course and
-       * being asked to choose from thirteen items is a worse start than being put back
+       * being asked to choose from a list of nineteen is a worse start than being put back
        * where you were. */
       const want = d.next || (d.lessons[0] && d.lessons[0].id);
       if (want) selectLesson(want);
@@ -112,7 +112,15 @@ function renderLesson(l, keepResult) {
       continue;
     }
     const target = href.split('#')[0];
-    if (/\.md$/i.test(target)) a.dataset.doc = target;
+    /* A link to another *lesson* stays in this tab. Lessons refer back to each other a lot
+     * ("the real is_causal bug from lesson 4"), and sending those to the Docs reader would
+     * be a dead end — that tab lists the chapters, not the course. Matched by path against
+     * the loaded list rather than by parsing the filename, so a renamed lesson file cannot
+     * silently become an unclickable link. */
+    const sibling = (learn.data && learn.data.lessons || [])
+      .find((cand) => cand.path && cand.path.endsWith(`/${target}`));
+    if (sibling) a.dataset.lesson = sibling.id;
+    else if (/\.md$/i.test(target)) a.dataset.doc = target;
     else a.dataset.file = target;
     a.setAttribute('href', '#');
   }
@@ -217,6 +225,12 @@ export function wireLearnTab() {
 
   /* The same two hand-offs, for links written inside the lesson's own prose. */
   $('#ln-body').addEventListener('click', (e) => {
+    const sibling = e.target.closest('a[data-lesson]');
+    if (sibling) {
+      e.preventDefault();
+      selectLesson(sibling.dataset.lesson);
+      return;
+    }
     const file = e.target.closest('a[data-file]');
     if (file) {
       e.preventDefault();

@@ -47,7 +47,7 @@ class Learn:
             "total": len(rows),
             "complete": done,
             # Where to go next: the first open, unfinished lesson. The tab opens on it, so
-            # arriving at the Learn tab never means choosing from a list of thirteen.
+            # arriving at the Learn tab never means choosing from a long list.
             "next": next((r["id"] for r in rows
                           if r["open"] and not r["progress"]["complete"]), None),
             "problems": lessons_mod.validate(self.root),
