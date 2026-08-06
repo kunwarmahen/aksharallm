@@ -1,0 +1,53 @@
+# The audio language model over the codec's tokens — the point of the whole phase.
+#
+# Nothing below describes sound. It is a transformer over integers, and the integers happen
+# to be what `configs/codec-synth.yaml` produced. Prerequisites:
+#
+#     scripts/audio.sh codec-synth                              # train the codec first
+#     .venv/bin/python -m aksharallm.audio encode \
+#         checkpoints/codec-synth/ckpt_best.pt \
+#         --corpus data/audio/synth --out data/audio/synth-codes
+#     scripts/audio.sh audiolm-synth
+#
+# Watch for `<- uniform` on the step-0 line: ln(512) = 6.238 is what a model that knows
+# nothing scores, and seeing it is the cheapest check that the delay pattern, the target
+# masking and the eight heads are all wired correctly. See docs/20-audio.md.
+name: audiolm-synth
+
+audiolm:
+  codebook_size: 512        # must match the codec exactly — checked on launch
+  n_codebooks: 8
+  max_frames: 80            # 1.6 s at 50 frames/s — the synth clips are 2 s
+  model:
+    d_model: 384
+    n_layers: 8
+    n_heads: 6
+    n_kv_heads: 2           # GQA, as everywhere else in this repo
+    max_seq_len: 128        # >= max_frames + n_codebooks - 1 = 87
+    rope_theta: 10000.0
+    dropout: 0.0
+
+data:
+  codes: data/audio/synth-codes
+  codec: checkpoints/codec-synth/ckpt_best.pt
+  window_frames: 80
+  val_clips: 20
+
+optim:
+  lr: 6.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 300
+  weight_decay: 0.1
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/audiolm-synth
+  batch_size: 16
+  max_steps: 6000
+  eval_every: 500
+  eval_batches: 20
+  sample_every: 1000        # generates 3 s and decodes it — listen, do not read the loss
+  ckpt_every: 1000
+  log_every: 25

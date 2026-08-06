@@ -1,0 +1,48 @@
+# The codec smoke config: synthetic vowel babble, no download, minutes not days.
+#
+# Build the corpus first (about 20 seconds, ~13 MB on disk):
+#     .venv/bin/python -m aksharallm.audio corpus --out data/audio/synth --clips 400
+# Then:
+#     scripts/audio.sh codec-synth
+#
+# It is deliberately the same shape as codec-lj.yaml with smaller numbers, so diffing the
+# two shows exactly what scaling to real speech costs. See docs/20-audio.md.
+name: codec-synth
+
+codec:
+  sample_rate: 16000
+  channels: 24              # narrower than the LJSpeech run: this corpus is easy
+  strides: [2, 4, 5, 8]     # product 320 -> 50 frames/s. Changing this changes everything.
+  dim: 96
+  n_codebooks: 8
+  codebook_size: 512        # 9 bits x 8 x 50 = 3.6 kbps
+  n_residual: 2
+  restart_after: 100        # short run, so a dead code has to be noticed sooner
+
+data:
+  corpus: data/audio/synth
+  window_seconds: 0.5
+  val_clips: 20
+
+optim:
+  lr: 3.0e-4                # convolutions and an EMA codebook are less forgiving than a
+  warmup_steps: 200         # transformer; 1e-3 makes the codebook chase its own tail
+  weight_decay: 0.0
+  beta2: 0.99
+  grad_clip: 1.0
+  schedule: cosine
+
+loss:
+  scales: [2048, 1024, 512, 256, 128]
+  wave_weight: 0.1
+
+train:
+  out_dir: checkpoints/codec-synth
+  batch_size: 16
+  max_steps: 4000
+  eval_every: 250
+  eval_batches: 10
+  sample_every: 500
+  sample_seconds: 2.0
+  ckpt_every: 1000
+  log_every: 25

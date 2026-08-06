@@ -114,6 +114,7 @@ grep is one line away from the prose. `tests/test_docs.py` fails if either point
 | 13 | [Synthetic data](docs/13-synthetic-data.md) | Making the training set with a local teacher instead of downloading it: a seed grid instead of a temperature, tests that are **executed twice**, near-duplicate detection, and why the rejection tally is the quality signal |
 | 18 | [Long context](docs/18-long-context.md) | Reading further than the weights were trained for, without retraining anything: RoPE scaling (linear/NTK/YaRN), sliding windows and why they need attention sinks, and the two measurements — loss by position and needle-in-a-haystack — that disagree |
 | 19 | [Diffusion](docs/19-diffusion.md) | The *other* way to build a language model: fill in blanks with attention running both ways, and generate by unmasking what you are surest about. Infilling, a compute dial, no KV cache — and the ELBO you must never compare with a cross-entropy |
+| 20 | [Audio](docs/20-audio.md) | The same transformer, on sound: an RVQ-VAE codec that turns speech into fifty integers a second, the delay pattern that keeps eight codebooks honest in one stream, and TTS/ASR as one model with the sequence written in two orders — plus the bitrate ladder you judge with your ears |
 
 ---
 
@@ -125,7 +126,10 @@ aksharallm/
 │   ├── tiny.yaml         Phase 1: 13.8M params, TinyStories
 │   ├── small.yaml        Phase 2 (pure): 300M params, FineWeb-Edu only
 │   ├── small-code.yaml   Phase 2 (blended): 300M, 85% FineWeb-Edu + 15% Python
-│   └── tiny-moe.yaml     the MoE experiment: tiny.yaml + 8 experts, matched active params
+│   ├── tiny-moe.yaml     the MoE experiment: tiny.yaml + 8 experts, matched active params
+│   ├── codec-synth.yaml  the audio codec on synthetic babble — no download, ~4 minutes
+│   ├── codec-lj.yaml     the audio codec on LJSpeech: 24 h of one reader
+│   └── audiolm-synth.yaml  a language model over codec tokens
 ├── aksharallm/
 │   ├── config.py         dataclass config loading + CLI overrides
 │   ├── tokenizer/        byte-level BPE training and the chat template
@@ -146,6 +150,14 @@ aksharallm/
 │   │   ├── generate.py       iterative unmasking, infilling, the denoising trace
 │   │   ├── evaluate.py       the ELBO (an upper bound) and loss-by-mask-rate
 │   │   └── objective.py      a drop-in for pretrain.py's objective — no second trainer
+│   ├── audio/            a second MODALITY, on the same transformer — see docs/20
+│   │   ├── io.py             WAV in/out and a windowed-sinc resampler, from scratch
+│   │   ├── features.py       STFT, the mel filterbank, Griffin-Lim back to sound
+│   │   ├── vq.py             vector quantization: straight-through, EMA, dead-code restart
+│   │   ├── codec.py          the RVQ-VAE and its multi-scale spectral loss
+│   │   ├── delay.py          the shift that turns 8 codebooks into one stream
+│   │   ├── lm.py             the SAME Transformer, 8 embeddings in and 8 heads out
+│   │   └── speech.py         TTS and ASR: one model, one flag apart
 │   ├── quant/            int8/int4/NF4 from scratch — see docs/10
 │   ├── lora/             LoRA + QLoRA adapters from scratch — see docs/11
 │   │   ├── qtensor.py        group scales, zero-points, 4-bit packing
@@ -620,6 +632,57 @@ And a **sparse autoencoder** pulls apart superposition: 8,192 features over a 1,
 stream, trained in minutes on the card. The sparsity penalty is the whole game — at α 0.003 it
 explains 97.5% of the variance with 200 features firing per token (the soup you started with),
 at 0.02 half the dictionary is dead, and at **0.008 it explains 94% with fourteen**.
+
+### Hearing it: the same transformer, on sound
+
+```bash
+python -m aksharallm.audio corpus --out data/audio/synth --clips 400   # no download
+scripts/audio.sh codec-synth                                           # ~4 minutes
+python -m aksharallm.audio reconstruct checkpoints/codec-synth/ckpt_best.pt \
+    data/audio/synth/wavs/synth-0399.wav --codebooks 1,2,4,8
+```
+
+Or the portal's **Audio** tab, which plays all four against the original.
+
+Nothing in `model/transformer.py` knows about words. Open it: it knows about integers, their
+order, and a vocabulary size. So if something can turn a waveform into integers, the whole
+stack — pretraining, RoPE, the KV cache, the sampler, quantization, LoRA — works on sound
+without being told. That something is a **codec**, and it is the only new machinery here.
+
+```
+waveform  →  conv encoder  →  128 floats,  →  nearest codebook  →  8 integers,  →  the SAME
+16,000/s     320× down        50 times/s      entry, 8 times        50 times/s     transformer
+```
+
+The arithmetic decides everything. 16,000 samples a second downsampled by 320 is **50 frames
+a second**; eight codebooks of 1,024 entries is 80 bits a frame, so **4 kbps** against
+256 kbps of raw audio — a 64× compression. And 50 × 8 is the sequence length the transformer
+pays: ten seconds of speech is 4,000 tokens.
+
+Inside the codec is a gradient that does not exist. Replacing a vector with the nearest of
+1,024 learned ones is an `argmin`, and an `argmin` differentiates to zero almost everywhere —
+so the encoder would never learn. The **straight-through estimator** is a deliberate lie:
+`z + (q - z).detach()` is numerically the codebook entry, and differentiates as the identity.
+Forward, the quantizer; backward, as though it were not there.
+
+Because each codebook quantizes what the last one got *wrong*, the **prefix of a code is a
+valid code** — decode one codebook instead of eight and you get a coarser but listenable
+reconstruction. So bitrate is a dial you turn at decode time rather than a property of the
+checkpoint, and the trade becomes something you *hear*. It is the same trade quantization
+makes silently in the weights.
+
+Above the codec, the language model gets eight integers per position instead of one. Flatten
+them and the sequence is eight times longer; predict them in parallel and you have assumed
+they are independent, when each is defined as a correction to the last. The **delay pattern**
+shifts codebook *k* right by *k* frames, so a whole column can be predicted at once and each
+codebook still sees the one below it in its context — `T + 7` positions instead of `8T`.
+
+The transformer needed two optional arguments for all of this and nothing else.
+
+**What is honest about the numbers.** ASR has a real metric (word error rate). TTS does not —
+mean opinion score needs people. So what gets reported is mel-cepstral distortion plus *our
+own ASR model's error rate on our own TTS output*, labelled **intelligibility**, because that
+is what it measures. A synthesiser with a flat robotic monotone can score perfectly on it.
 
 ### Serving it: many conversations at once
 

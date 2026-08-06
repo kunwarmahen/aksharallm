@@ -434,6 +434,8 @@ class Transformer(nn.Module):
         full_logits: bool = False,
         positions: torch.Tensor | None = None,
         attn_mask: torch.Tensor | None = None,
+        inputs_embeds: torch.Tensor | None = None,
+        return_hidden: bool = False,
     ):
         """idx: (B, T) int64 token ids.
         targets: (B, T) int64, -100 to ignore. If given, returns (logits, loss).
@@ -447,8 +449,22 @@ class Transformer(nn.Module):
         cost of a second float32 copy of a (B, T, vocab) tensor. At batch 8 x 512 tokens
         that copy is a quarter of a gigabyte, on a device that is often the CPU because a
         training run owns the card.
+
+        `inputs_embeds` and `return_hidden` are the **audio** path (docs/20), and they are
+        one idea: the audio LM's "token" at each position is not one integer but eight — one
+        per codec codebook — so it sums eight embeddings on the way in and needs eight heads
+        on the way out. Neither of those fits a single `vocab_size`. So it supplies the
+        embeddings itself and takes the hidden states back, and the blocks in between do not
+        know that anything is different. Both default to the existing behaviour exactly;
+        `test_model.py` pins that `inputs_embeds=tok_emb(idx)` returns what `idx` returns.
         """
-        B, T = idx.shape
+        if inputs_embeds is not None:
+            if idx is not None:
+                raise ValueError("pass either idx or inputs_embeds, not both")
+            B, T = inputs_embeds.shape[:2]
+            idx = inputs_embeds  # only used below for `.device`; nothing indexes it
+        else:
+            B, T = idx.shape
         start = caches[0].pos if caches is not None else 0
 
         # `positions` and `attn_mask` are the serving path: a batch of unrelated sequences at
@@ -487,10 +503,15 @@ class Transformer(nn.Module):
             k_pos = torch.arange(start + T, device=idx.device)[None, :]
             attn_mask = k_pos <= q_pos
 
-        x = self.drop(self.tok_emb(idx))
+        x = self.drop(inputs_embeds if inputs_embeds is not None else self.tok_emb(idx))
         for i, block in enumerate(self.blocks):
             x = block(x, cos, sin, caches[i] if caches is not None else None, attn_mask)
         x = self.norm(x)
+
+        if return_hidden:
+            # The caller owns the head. Returned before `lm_head` rather than after, because
+            # the audio LM's head is eight of them and none is this one.
+            return x, None
 
         if targets is None:
             if full_logits:

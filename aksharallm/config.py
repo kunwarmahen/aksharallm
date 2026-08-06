@@ -273,8 +273,14 @@ def _build(cls, raw: dict[str, Any]):
     return cls(**kwargs)
 
 
-def load_config(path: str | Path, overrides: list[str] | None = None) -> Config:
-    """Load a YAML config. `overrides` are `dotted.key=value` strings from the CLI."""
+def load_into(cls, path: str | Path, overrides: list[str] | None = None):
+    """YAML plus `dotted.key=value` overrides, into any nested dataclass.
+
+    Split out from `load_config` when the audio phase arrived with a run config that is not
+    a language model — `audio/config.py`'s `CodecRunConfig` has no `model:` section at all.
+    The *file format* is the repo's one idea about how a run is described, so it is shared;
+    only the schema differs.
+    """
     raw = yaml.safe_load(Path(path).read_text()) or {}
     for ov in overrides or []:
         key, _, val = ov.partition("=")
@@ -283,7 +289,12 @@ def load_config(path: str | Path, overrides: list[str] | None = None) -> Config:
         for p in parts[:-1]:
             node = node.setdefault(p, {})
         node[parts[-1]] = yaml.safe_load(val)  # parses ints/floats/bools/null
-    cfg = _build(Config, raw)
+    return _build(cls, raw)
+
+
+def load_config(path: str | Path, overrides: list[str] | None = None) -> Config:
+    """Load a YAML config. `overrides` are `dotted.key=value` strings from the CLI."""
+    cfg = load_into(Config, path, overrides)
     assert cfg.train.seq_len <= cfg.model.max_seq_len, "train.seq_len exceeds model.max_seq_len"
     return cfg
 

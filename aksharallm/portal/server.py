@@ -54,6 +54,7 @@ from .gpu import Sampler, snapshot
 from .pipeline import Pipeline
 from .finetune import FinetuneJobs
 from .quantize import QuantJobs
+from .audio import Audio, AudioError
 from .diffusion import Diffusion
 from .interp import Interp
 from .longctx import LongContext
@@ -90,6 +91,7 @@ class Handler(BaseHTTPRequestHandler):
                  pipeline: Pipeline, quant: QuantJobs, finetune: FinetuneJobs,
                  evals: EvalJobs, synth: SynthJobs, learn: Learn, interp: Interp,
                  longctx: LongContext, diffusion: Diffusion, serving: ServeJobs,
+                 audio: Audio,
                  cost: CostConfig, quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
@@ -107,6 +109,7 @@ class Handler(BaseHTTPRequestHandler):
         self.longctx = longctx
         self.diffusion = diffusion
         self.serving = serving
+        self.audio = audio
         self.cost = cost
         self.quiet = quiet
         super().__init__(*args, **kw)
@@ -358,6 +361,29 @@ class Handler(BaseHTTPRequestHandler):
                         ckpt, kind=str(data.get("kind") or "elbo"),
                         batches=int(data.get("batches") or 4),
                         batch_size=int(data.get("batch_size") or 4)))
+            # audio: /api/audio/<ladder|tokens|usage>. Inline like interp and diffusion —
+            # reconstructing a few seconds through a codec is one forward pass over a few
+            # million parameters, so a job runner would be more machinery than the work.
+            if len(parts) == 3 and parts[:2] == ["api", "audio"]:
+                ckpt = str(data.get("checkpoint") or "")
+                corpus = str(data.get("corpus") or "")
+                try:
+                    if parts[2] == "ladder":
+                        return self._json(self.audio.ladder(
+                            ckpt, corpus, index=int(data.get("index") or 0),
+                            seconds=float(data.get("seconds") or 4.0)))
+                    if parts[2] == "tokens":
+                        return self._json(self.audio.tokens(
+                            ckpt, corpus, index=int(data.get("index") or 0),
+                            seconds=float(data.get("seconds") or 2.0),
+                            frames=int(data.get("frames") or 40)))
+                    if parts[2] == "usage":
+                        return self._json(self.audio.usage(
+                            ckpt, corpus, clips=int(data.get("clips") or 6)))
+                except AudioError as e:
+                    # A message, not a stack trace: every one of these is something the
+                    # reader can act on (wrong checkpoint family, mismatched sample rate).
+                    return self._json({"error": str(e)}, code=400)
             # the learning path: /api/learn/<check|reset>
             if len(parts) == 3 and parts[:2] == ["api", "learn"]:
                 if parts[2] == "check":
@@ -462,6 +488,11 @@ class Handler(BaseHTTPRequestHandler):
                 float((query.get("factor") or [4.0])[0])))
         if parts == ["longctx", "result"]:
             return self._json(self.longctx.result((query.get("name") or [""])[0]))
+        # audio: which codecs and corpora exist, and where a codec run has got to.
+        if parts == ["audio"]:
+            return self._json(self.audio.overview())
+        if parts == ["audio", "runs"]:
+            return self._json({"runs": self.audio.runs()})
         # masked diffusion: which checkpoints can be denoised, and what the current one is.
         if parts == ["diffusion"]:
             return self._json(self.diffusion.overview(
@@ -864,12 +895,16 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
     interp = Interp(playground, store.root)
     longctx = LongContext(playground.store, store, store.root)
     diffusion = Diffusion(playground, store.root)
+    # Shares the Playground's device plan rather than forming a second opinion about
+    # who owns the card: the CPU while a run is training, which is the standing policy.
+    audio = Audio(store.root,
+                  device_for=lambda: (lambda p: (p.device, p.reason))(playground.engine.plan()))
     serving = ServeJobs(store.root)
     handler = partial(Handler, store=store, scheduler=scheduler, sampler=sampler,
                       source=source, explain=explain, playground=playground,
                       pipeline=pipeline, quant=quant, finetune=finetune, evals=evals,
                       synth=synth, learn=learn, interp=interp, longctx=longctx,
-                      diffusion=diffusion, serving=serving,
+                      diffusion=diffusion, serving=serving, audio=audio,
                       cost=cost,
                       quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True

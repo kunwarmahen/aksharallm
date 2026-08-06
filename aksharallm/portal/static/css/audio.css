@@ -1,0 +1,95 @@
+/* The Audio tab.
+ *
+ * Two things here are not decoration:
+ *
+ * 1. `.au-ladder` is a grid whose items must be allowed to shrink. A grid item's automatic
+ *    minimum size is its contents' min-content width — the trap AGENTS.md gotcha #8 records
+ *    — so every child gets `min-width: 0` and the wide row scrolls inside `.scroll-x`
+ *    rather than pushing the page sideways on a phone.
+ * 2. `.au-spec` paints a spectrogram from integers with box-shadows on a single element,
+ *    so a 80x160 grid is one node instead of 12,800. Painting it as divs is what makes a
+ *    tab feel slow, and it is invisible until the corpus gets bigger.
+ */
+
+.au-flow {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  margin: 0.75rem 0 0.25rem;
+}
+.au-step {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  min-width: 0;
+}
+.au-step small { color: var(--dim); font-size: 0.75rem; }
+.au-step-key { border-color: var(--accent); }
+.au-arrow { color: var(--dim); }
+
+.au-cmd {
+  margin: 0.5rem 0 0;
+  padding: 0.5rem 0.6rem;
+  background: var(--bg-soft);
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 0.85rem;
+}
+
+/* ---- the ladder --------------------------------------------------------------------- */
+
+.au-ladder {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+.au-rung {
+  min-width: 0;                 /* see the file header: this is the load-bearing line */
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.au-rung.au-original { border-color: var(--accent); }
+.au-rung h4 { margin: 0; font-size: 0.95rem; }
+.au-rung audio { width: 100%; min-width: 0; }
+.au-rung .au-num {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--dim);
+}
+.au-rung .au-num b { color: var(--fg); font-weight: 600; }
+
+.au-spec {
+  width: 100%;
+  height: 84px;
+  border-radius: 4px;
+  background: var(--bg-soft);
+  image-rendering: pixelated;
+}
+
+/* ---- the code grid ------------------------------------------------------------------ */
+
+.au-codes { font-variant-numeric: tabular-nums; font-size: 0.75rem; }
+.au-codes td { padding: 0.1rem 0.3rem; text-align: right; }
+.au-codes th { text-align: left; white-space: nowrap; }
+
+/* A usage bar, drawn in the cell rather than as a chart: eight rows do not need axes. */
+.au-bar {
+  display: block;
+  height: 0.55rem;
+  border-radius: 3px;
+  background: var(--accent);
+  min-width: 2px;
+}
+.au-bar-low { background: var(--warn, #c86); }

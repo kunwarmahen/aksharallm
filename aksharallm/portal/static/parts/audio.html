@@ -1,0 +1,113 @@
+<!-- The Audio tab. Built around one panel — the bitrate ladder — because it is the only
+     thing in this repo you judge with your ears instead of your eyes. -->
+<section class="view" id="view-audio" hidden>
+  <div class="page">
+
+    <div class="panel">
+      <h2>Audio — the same transformer, on sound</h2>
+      <p class="panel-note">
+        Nothing in the transformer knows about words. It knows about integers and their
+        order. A <strong>codec</strong> turns a waveform into integers fifty times a second,
+        and then the whole stack — pretraining, the KV cache, the sampler, quantization,
+        LoRA — works on sound without being told.
+        <a href="#docs?doc=20-audio.md">Read chapter 20</a>.
+      </p>
+      <div class="au-flow" aria-hidden="true">
+        <span class="au-step">waveform<small>16,000/s</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">conv encoder<small>320× down</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">residual VQ<small>8 codebooks</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step au-step-key">8 integers<small>50 times a second</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">conv decoder<small>320× up</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">waveform</span>
+      </div>
+      <div id="au-empty" class="panel-note warn" hidden>
+        No codec checkpoint yet. Build a corpus and train one — about four minutes on the
+        card, and no download:
+        <pre class="au-cmd">.venv/bin/python -m aksharallm.audio corpus --out data/audio/synth --clips 400
+scripts/audio.sh codec-synth</pre>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <label class="field">Codec
+          <select id="au-ckpt"></select>
+        </label>
+        <label class="field">Corpus
+          <select id="au-corpus"></select>
+        </label>
+        <label class="field">Clip
+          <input id="au-index" type="number" min="0" value="0">
+        </label>
+        <label class="field">Seconds
+          <input id="au-seconds" type="number" min="0.5" max="8" step="0.5" value="4">
+        </label>
+        <button id="au-run" class="primary" type="button">Reconstruct</button>
+      </div>
+      <p id="au-status" class="panel-note"></p>
+    </div>
+
+    <!-- 1. the ladder — the reason this tab exists -->
+    <div class="panel">
+      <h3>The bitrate ladder</h3>
+      <p class="panel-note">
+        Residual VQ quantizes what the previous codebook got <em>wrong</em>, so the
+        <strong>prefix of a code is a valid code</strong>: decode fewer codebooks and stop.
+        Bitrate becomes a dial you turn at decode time rather than a property of the
+        checkpoint. Play these in order against the original — this is the same trade
+        <a href="#docs?doc=10-quantization.md">quantization</a> makes silently in the weights,
+        except here you can hear it.
+      </p>
+      <div class="scroll-x">
+        <div id="au-ladder" class="au-ladder"></div>
+      </div>
+      <p id="au-caveat" class="panel-note dim"></p>
+    </div>
+
+    <!-- 2. codebook usage — the collapse detector -->
+    <div class="panel">
+      <h3>Is the codebook actually being used?</h3>
+      <p class="panel-note">
+        Codebook collapse is <a href="#docs?doc=14-moe.md">router collapse</a> again: a
+        handful of entries win early, the rest never train, reconstruction plateaus —
+        <strong>and the loss curve looks fine</strong>. This is the panel that sees it.
+        Perplexity is the <em>effective</em> codebook size, so 40 out of 1,024 means 96% of
+        the capacity was thrown away.
+      </p>
+      <button id="au-usage" type="button">Measure usage</button>
+      <div class="scroll-x"><table id="au-usage-table" class="grid"></table></div>
+      <p id="au-usage-note" class="panel-note dim"></p>
+    </div>
+
+    <!-- 3. the tokens themselves -->
+    <div class="panel">
+      <h3>What a second of sound actually is</h3>
+      <p class="panel-note">
+        The claim of the phase, as a grid of integers. Every column is one frame; every row
+        is one codebook. A language model over this pays one position per column, and eight
+        heads per position.
+      </p>
+      <button id="au-tokens" type="button">Show the integers</button>
+      <p id="au-tokens-summary" class="panel-note"></p>
+      <div class="scroll-x"><table id="au-tokens-table" class="grid au-codes"></table></div>
+    </div>
+
+    <!-- 4. runs -->
+    <div class="panel">
+      <h3>Audio runs</h3>
+      <p class="panel-note">
+        Codec and audio-LM runs publish the same pid / STOP / log contract as every other
+        trainer here, so <code>scripts/stop.sh</code> and the dashboard drive them unchanged.
+        Each writes a reconstruction into <code>samples/</code> as it trains — a codec's loss
+        does not tell you whether it is intelligible, and a three-second file does.
+      </p>
+      <div class="scroll-x"><table id="au-runs" class="grid"></table></div>
+    </div>
+
+  </div>
+</section>
