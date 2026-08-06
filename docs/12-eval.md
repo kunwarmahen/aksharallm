@@ -394,6 +394,48 @@ same column, and the more alarming one was the useless one. The fix is to keep o
 n-grams that **reach into the answer**: the last 12 tokens of the question and everything
 after it. A test plants a question-only corpus and requires `answered` to stay at zero.
 
+### What our own blend actually contains
+
+A full pass over all 10B tokens, all five multiple-choice suites, every hit verified against
+the real token stream (**1457/1457 confirmed** — no collisions, as the arithmetic above
+predicts):
+
+| suite | items | question leaked | with its answer |
+|---|---|---|---|
+| MMLU | 14,042 | **1,095 (7.8%)** | **0 (0.0%)** |
+| HellaSwag | 10,042 | 151 (1.5%) | **128 (1.3%)** |
+| ARC-Easy | 2,371 | 42 (1.9%) | 2 (0.1%) |
+| ARC-Challenge | 1,167 | 13 (1.2%) | 4 (0.3%) |
+| PIQA | 1,777 | 0 (0.0%) | 22 (1.2%) |
+| **total** | | **1,301** | **156** |
+
+**Read the MMLU row, because it is the entire argument for splitting the columns.** Nearly
+eight percent of MMLU's questions are somewhere in our training data — and *not one of them*
+appears with its answer. A checker that collapsed the two would have reported MMLU as 7.8%
+contaminated, which is alarming, prominent, and means nothing: those questions are public
+text and a web crawl containing them tells you nothing about whether the model can answer
+them. Across all five suites the difference is **1,301 versus 156** — collapsing them
+over-reports by more than eight times.
+
+HellaSwag is the one genuinely worth watching at **1.3%**, and the reason is structural: its
+"answers" are real sentence continuations taken from web text, so unlike a multiple-choice
+answer key they plausibly occur in a crawl on their own. PIQA inverts the pattern — 0% on
+questions and 1.2% on answers — because most PIQA goals are shorter than thirteen tokens and
+are therefore **unchecked, not clean** (784 of them). That is exactly the distinction the
+`too_short` column exists to keep visible.
+
+And the number that decides whether any of this matters:
+
+```
+re-scoring 20260731-173740-small-code-mc.json without the 156 answer-leaked items:
+        arc-easy  reported 0.467  clean 0.467  (+0.000, 0 dropped, 60 kept)
+            piqa  reported 0.650  clean 0.650  (+0.000, 0 dropped, 60 kept)
+```
+
+**The Phase-2 scores stand.** Not one of the sampled items was contaminated, so ARC-Easy
+46.7% and PIQA 65.0% mean what they said they meant. That is the outcome you want and it is
+worth exactly as much as the check that produced it.
+
 **The output that matters is not the percentage, it is the clean score.** Re-read a
 benchmark result, drop the contaminated items, and see whether the number moves:
 

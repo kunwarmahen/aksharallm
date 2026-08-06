@@ -294,3 +294,24 @@ def test_the_clean_score_matches_the_real_result_schema():
                                      "correct": False}]}
     out = con.clean_score(real, {"arc/Mercury_1"})
     assert out["kept"] == 1 and out["clean"] == 0.0 and out["dropped"] == 1
+
+
+def test_a_saved_report_can_rescore_without_scanning_again(tmp_path):
+    """`--report` reuses a scan instead of repeating it. A half-hour pass over ten billion
+    tokens whose output cannot be re-used is a check that stops being run — so the report's
+    own JSON has to be enough to re-score any result."""
+    tok = Tok()
+    items = [Item("q1", LONG, ["wrong one", "right answer here"], 1),
+             Item("q2", LONG.replace("mitochondrion", "chloroplast"), ["no", "yes indeed"], 1)]
+    probe = con.build_probe(con.item_texts("toy", items), tok, 13)
+    path = write_bin(tmp_path, corpus(tok.encode(f"{LONG} right answer here"),
+                                      tok.encode(items[1].context)))
+    report = con.summarise(con.scan_bin(path, probe), probe, 13)
+
+    # Round-trip through JSON exactly as the CLI writes and reads it.
+    saved = json.loads(json.dumps(report))
+    result = {"score": 1.0, "items": [{"id": "q1", "correct": True},
+                                      {"id": "q2", "correct": False}]}
+    clean = con.clean_score(result, set(saved["dirty_ids"]))
+    assert clean["dropped"] == 1 and clean["kept"] == 1
+    assert clean["clean"] == 0.0, "only q1 leaked its answer, and q1 was the correct one"

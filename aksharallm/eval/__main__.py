@@ -166,6 +166,15 @@ def cmd_contaminate(args) -> int:
         print(f"error: training data not found: {', '.join(missing)}")
         return 1
 
+    # A full pass is half an hour, so its report has to be reusable: `--report` re-scores a
+    # result against a scan that already happened rather than doing it again. Without this
+    # the only way to answer "what does this do to my numbers?" was another 10B-token scan,
+    # which is the sort of thing that stops a check from being run.
+    if args.report:
+        out = con.load_result(args.report)
+        _rescore(out, args.against, con)
+        return 0
+
     names = resolve(args.suite)
     texts = []
     for name in names:
@@ -216,23 +225,39 @@ def cmd_contaminate(args) -> int:
           f"benchmark questions are public text.\n'answered' is the one that matters: the "
           f"question WITH its answer, which is what a contaminated corpus memorises.")
 
-    if args.against:
-        result = con.load_result(args.against)
-        dirty = set(out["dirty_ids"])
-        print(f"\nre-scoring {Path(args.against).name} without the contaminated items:")
-        for name, res in (result.get("suites") or {}).items():
-            clean = con.clean_score(res, dirty)
-            if not clean or clean["clean"] is None:
-                continue
-            delta = clean["clean"] - (clean["reported"] or 0)
-            print(f"  {name:>12}  reported {clean['reported']:.3f}  "
-                  f"clean {clean['clean']:.3f}  ({delta:+.3f}, {clean['dropped']} dropped)")
+    _rescore(out, args.against, con)
 
     path = Path(root) / "logs" / "eval" / f"contamination-{int(time.time())}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(out, indent=2))
     print(f"\nwrote {path}")
     return 0
+
+
+def _rescore(report: dict, against: str | None, con) -> None:
+    """Print reported vs clean for a benchmark result, given a contamination report.
+
+    `dirty_ids` is answer-leaks only. Dropping every item whose *question* appears in a web
+    crawl would discard most of a public benchmark and then report a confident number on
+    whatever was left — on our own blend that would have been 1,301 items instead of 156.
+    """
+    if not against:
+        return
+    result = con.load_result(against)
+    dirty = set(report.get("dirty_ids") or [])
+    print(f"\nre-scoring {Path(against).name} without the {len(dirty)} answer-leaked items:")
+    any_row = False
+    for name, res in (result.get("suites") or {}).items():
+        clean = con.clean_score(res, dirty)
+        if not clean or clean["clean"] is None:
+            continue
+        any_row = True
+        delta = clean["clean"] - (clean["reported"] or 0)
+        print(f"  {name:>14}  reported {clean['reported']:.3f}  "
+              f"clean {clean['clean']:.3f}  ({delta:+.3f}, {clean['dropped']} dropped, "
+              f"{clean['kept']} kept)")
+    if not any_row:
+        print("  (this result has no per-item verdicts — it was run with --no-items)")
 
 
 def cmd_domains(args) -> int:
@@ -339,6 +364,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="re-check every hit against the real tokens (drops collisions)")
     con_p.add_argument("--against", default=None,
                        help="a logs/eval/*.json result to re-score without dirty items")
+    con_p.add_argument("--report", default=None,
+                       help="re-score using an existing contamination report, skipping the "
+                            "scan entirely")
     con_p.add_argument("--quiet", action="store_true")
     con_p.add_argument("--root", default=None)
     con_p.set_defaults(fn=cmd_contaminate)
