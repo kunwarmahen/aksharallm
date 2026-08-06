@@ -95,12 +95,15 @@ DOC_HINTS = (
     ("aksharallm/infer/speculative", "docs/06-inference.md"),
     ("aksharallm/infer", "docs/06-inference.md"),
     ("aksharallm/serve", "docs/16-serving.md"),
+    ("aksharallm/interp", "docs/17-interpretability.md"),
     ("aksharallm/portal/explain", "docs/07-scaling.md"),
     ("aksharallm/portal/evals", "docs/12-eval.md"),
     ("aksharallm/portal/quantize", "docs/10-quantization.md"),
     ("aksharallm/portal/finetune", "docs/11-lora.md"),
     ("aksharallm/portal/synth", "docs/13-synthetic-data.md"),
     ("aksharallm/portal/learn", "docs/15-learning-path.md"),
+    ("aksharallm/portal/interp", "docs/17-interpretability.md"),
+    ("aksharallm/portal/serving", "docs/16-serving.md"),
     ("aksharallm/portal", "docs/09-running-and-watching.md"),
     ("docs/lessons", "docs/15-learning-path.md"),
     ("scripts", "docs/09-running-and-watching.md"),
@@ -127,6 +130,8 @@ Layout:
                          HumanEval, an LLM-judge, perplexity
   aksharallm/infer/      KV-cache generation, sampling, speculative decoding
   aksharallm/serve/      the HTTP server: paged KV blocks, continuous batching
+  aksharallm/interp/     looking inside: attention maps, the logit lens, activation
+                         patching, a sparse autoencoder over the residual stream
   aksharallm/quant/      int8/int4/NF4 from scratch: RTN, GPTQ, AWQ, QAT, a Triton kernel
   aksharallm/lora/       LoRA and QLoRA adapters from scratch
   aksharallm/synth/      generating training data with a local teacher, and checking it
@@ -134,7 +139,7 @@ Layout:
   aksharallm/portal/     this local web portal (stdlib HTTP server, no dependencies)
   configs/*.yaml         one YAML per run; a run = that file plus `-o key=value` overrides
   scripts/*.sh           the launchers a human would type
-  docs/00-16             the human-written deep dives; each ends with the order to read
+  docs/00-17             the human-written deep dives; each ends with the order to read
                          the files it covers, and each module names its chapter
 
 Conventions that explain a lot of the code:

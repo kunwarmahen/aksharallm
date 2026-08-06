@@ -54,6 +54,8 @@ from .gpu import Sampler, snapshot
 from .pipeline import Pipeline
 from .finetune import FinetuneJobs
 from .quantize import QuantJobs
+from .interp import Interp
+from .serving import ServeJobs
 from .learn import Learn
 from .synth import SynthJobs
 from .runs import PHASE_LAUNCHING, PHASE_TRAINING, LAUNCHERS, RunError, RunStore, repo_root
@@ -84,8 +86,8 @@ class Handler(BaseHTTPRequestHandler):
     def __init__(self, *args, store: RunStore, scheduler: Scheduler, sampler: Sampler,
                  source: SourceTree, explain: ExplainConfig, playground: Playground,
                  pipeline: Pipeline, quant: QuantJobs, finetune: FinetuneJobs,
-                 evals: EvalJobs, synth: SynthJobs, learn: Learn, cost: CostConfig,
-                 quiet: bool = True, **kw):
+                 evals: EvalJobs, synth: SynthJobs, learn: Learn, interp: Interp,
+                 serving: ServeJobs, cost: CostConfig, quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
         self.sampler = sampler
@@ -98,6 +100,8 @@ class Handler(BaseHTTPRequestHandler):
         self.evals = evals
         self.synth = synth
         self.learn = learn
+        self.interp = interp
+        self.serving = serving
         self.cost = cost
         self.quiet = quiet
         super().__init__(*args, **kw)
@@ -259,6 +263,37 @@ class Handler(BaseHTTPRequestHandler):
                         seconds=self._int(data, "seconds")))
                 if parts[2] == "export":
                     return self._json(self.synth.export(str(data.get("name") or "")))
+            # the HTTP server: /api/serve/<start|stop>, both shelling out to scripts/serve.sh
+            if len(parts) == 3 and parts[:2] == ["api", "serve"]:
+                if parts[2] == "start":
+                    return self._json(self.serving.start(
+                        checkpoint=str(data.get("checkpoint") or "") or None,
+                        port=self._int(data, "port"),
+                        max_batch=self._int(data, "max_batch"),
+                        device=str(data.get("device") or "") or None))
+                if parts[2] == "stop":
+                    return self._json(self.serving.stop())
+            # looking inside: /api/interp/<lens|attn|patch>. POSTs because they run the
+            # model — one forward pass per layer, and a patch grid is a few hundred.
+            if len(parts) == 3 and parts[:2] == ["api", "interp"]:
+                ckpt = str(data.get("checkpoint") or "")
+                if parts[2] == "lens":
+                    return self._json(self.interp.lens(
+                        ckpt, str(data.get("prompt") or ""),
+                        top=int(data.get("top") or 5)))
+                if parts[2] == "attn":
+                    # Not `self._int`: it treats 0 as "unset" (0 == False in Python), which
+                    # is right for a step count and wrong for head 0 — the map silently never
+                    # rendered for the first head of every layer.
+                    head = data.get("head")
+                    return self._json(self.interp.attention(
+                        ckpt, str(data.get("prompt") or ""),
+                        layer=int(data.get("layer") or 0),
+                        head=None if head is None else int(head)))
+                if parts[2] == "patch":
+                    return self._json(self.interp.patch(
+                        ckpt, str(data.get("clean") or ""), str(data.get("corrupt") or ""),
+                        str(data.get("answer") or ""), str(data.get("other") or "")))
             # the learning path: /api/learn/<check|reset>
             if len(parts) == 3 and parts[:2] == ["api", "learn"]:
                 if parts[2] == "check":
@@ -334,6 +369,20 @@ class Handler(BaseHTTPRequestHandler):
             if not name:
                 raise RunError("result needs ?file=<name>.json")
             return self._json(self.evals.result(name))
+        if parts == ["serve"]:
+            # The HTTP server is a separate process; this reads its pid file and asks its own
+            # /health, so a server started in a terminal shows up here too.
+            return self._json(self.serving.status(
+                tail=int((query.get("lines") or [60])[0])))
+        if parts == ["interp"]:
+            return self._json(self.interp.overview(
+                (query.get("checkpoint") or [None])[0]))
+        if parts == ["interp", "features"]:
+            # The trained dictionary's *report* only. Finding what a feature means needs a
+            # corpus pass, which is a terminal job rather than something to do in a click.
+            return self._json(self.interp.features(
+                (query.get("checkpoint") or [""])[0],
+                int((query.get("layer") or [12])[0])))
         if parts == ["learn"]:
             return self._json(self.learn.status())
         if parts == ["learn", "lesson"]:
@@ -729,10 +778,14 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
     evals = EvalJobs(store.root)
     synth = SynthJobs(store.root)
     learn = Learn(store.root)
+    interp = Interp(playground, store.root)
+    serving = ServeJobs(store.root)
     handler = partial(Handler, store=store, scheduler=scheduler, sampler=sampler,
                       source=source, explain=explain, playground=playground,
                       pipeline=pipeline, quant=quant, finetune=finetune, evals=evals,
-                      synth=synth, learn=learn, cost=cost, quiet=quiet)
+                      synth=synth, learn=learn, interp=interp, serving=serving,
+                      cost=cost,
+                      quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True
     httpd = ThreadingHTTPServer((host, port), handler)
     httpd.daemon_threads = True

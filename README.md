@@ -109,6 +109,7 @@ grep is one line away from the prose. `tests/test_docs.py` fails if either point
 | 12 | [Evaluation](docs/12-eval.md) | Is the model actually any good? MMLU/ARC/HellaSwag/PIQA scored by log-likelihood, GSM8K, HumanEval executed for real, an LLM-judge — and why 25% on MMLU is not a failure |
 | 15 | [The learning path](docs/15-learning-path.md) | The repo as a course: thirteen lessons that each end in breaking real code and watching a real test go red — and why a lesson only counts once the check has been red *and then* green |
 | 14 | [Mixture of experts](docs/14-moe.md) | More parameters than you compute with: a router, N experts, top-k per token — the load-balancing loss, why upcycling is an identity at init, and the collapse that is invisible in the loss curve |
+| 17 | [Looking inside](docs/17-interpretability.md) | Attention maps recomputed from the layer's own inputs, the logit lens (*when* did it decide?), activation patching (which activation actually carries the fact), and a sparse autoencoder that pulls apart superposition |
 | 16 | [Serving](docs/16-serving.md) | Turning a checkpoint into something you use: a paged KV cache so memory is bounded by what is *used*, continuous batching so thirty conversations share one pass over the weights (50 → 272 tok/s), and an OpenAI-shaped API so existing clients work |
 | 13 | [Synthetic data](docs/13-synthetic-data.md) | Making the training set with a local teacher instead of downloading it: a seed grid instead of a temperature, tests that are **executed twice**, near-duplicate detection, and why the rejection tally is the quality signal |
 
@@ -190,6 +191,11 @@ aksharallm/
 │   │   ├── judge.py          twelve open prompts graded 1-5 by a local Ollama model
 │   │   ├── runner.py         run suites against a checkpoint; one JSON per evaluation
 │   │   └── report.py         every result ever, and the trend across training steps
+│   ├── interp/           looking inside a trained model — docs/17
+│   │   ├── capture.py        hooks for the residual stream; attention maps, recomputed
+│   │   ├── lens.py           the logit lens: what each layer would have said
+│   │   ├── patch.py          activation patching: which activation carries the fact
+│   │   └── sae.py            a sparse autoencoder over the residual stream
 │   ├── serve/            an HTTP server: paged KV cache, continuous batching — docs/16
 │   │   ├── paged.py          blocks, block tables, reference-counted prefix sharing
 │   │   ├── batch.py          the ragged step: prefill and decode together, admission control
@@ -513,6 +519,38 @@ in `configs/portal.yaml` — `cost.per_kwh`, plus `host_watts`/`psu_efficiency` 
 number to match a plug meter rather than the card alone — and every run gains a price, a cost
 per million tokens, and a **coverage** figure saying how much of the run was actually
 recorded. With no rate set it shows kilowatt-hours and says so. Portal: the **Cost** panel.
+
+### Looking inside it
+
+```bash
+python -m aksharallm.interp lens small-code --prompt "The capital of France is"
+python -m aksharallm.interp patch small-code --clean "The capital of France is" \
+    --corrupt "The capital of Italy is" --answer " Paris" --other " Rome"
+```
+
+Or the portal's **Interp** tab. Four tools, and the reason they live together is that they
+check each other.
+
+A pre-norm transformer never rewrites its state — every block *adds* to a running total — so
+the output head can be pointed at that total halfway through and asked what the model would
+have said if it had stopped there. On the 300M at step 36,000, `"The capital of France is"`
+is `' not'` at block 7, `' usually'` at block 15, `' the'` at block 19, and only at **block 20
+of 24** does it become `' Paris'`. It changed its top token eleven times on the way.
+
+That is an observation, and observations about neural networks are how you fool yourself. So
+patching *intervenes*: run the corrupted prompt (`"...Italy is"`), force one activation back
+to its clean value, and see whether `Paris` returns. On this model the answer is unusually
+crisp — the country information sits **on the country token** through blocks 10–19 and moves
+to the last position at **block 20**, exactly where the lens said the answer appeared.
+Attention carries the fact forward; the final blocks read it out. Two independent methods
+agreeing is what makes it a finding rather than a story.
+
+Attention maps are *recomputed*, because the fused kernel never stores them — and since that
+is a claim, the test asserts the recomputed weights times V reproduce the layer's own output.
+And a **sparse autoencoder** pulls apart superposition: 8,192 features over a 1,024-wide
+stream, trained in minutes on the card. The sparsity penalty is the whole game — at α 0.003 it
+explains 97.5% of the variance with 200 features firing per token (the soup you started with),
+at 0.02 half the dictionary is dead, and at **0.008 it explains 94% with fourteen**.
 
 ### Serving it: many conversations at once
 

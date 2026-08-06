@@ -571,6 +571,8 @@ run is not worth risking its clean exit.
 | make it 4-bit and measure it | `python -m aksharallm.quant small-code/ckpt_best.pt --compare` | Quantize → Compare all |
 | is it any good yet? | `python -m aksharallm.eval small-code --suite fast` | Eval → Evaluate |
 | has it improved since last week? | `python -m aksharallm.eval report --suite arc-easy` | Eval → the trend chart |
+| serve it over HTTP | `scripts/serve.sh small-code --bg` | Dashboard → Serve |
+| look inside the model | `python -m aksharallm.interp lens small-code` | **Interp** tab |
 | read how a run went | `python -m aksharallm.train.report small-code` | Dashboard → Report |
 | what has this cost me? | `python -m aksharallm.portal.cost` | Dashboard → Cost |
 | …including telemetry from before | `python -m aksharallm.portal.cost backfill` | (one-off, from the shell) |

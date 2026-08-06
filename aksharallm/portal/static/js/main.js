@@ -5,7 +5,7 @@
 import { $, $$, api, flash, fmt, live, post } from './core.js';
 import { state } from './state.js';
 import { VIEWS, showView } from './router.js';
-import { UNIT_MINUTES, UNIT_MORE_STEPS, act, boundPicker, drawCharts, fmtMins, fmtWhen, refresh, renderRuns, renderSessionBudget, schedule, secPerStep, selectRun, wireGpu, wireReport, wireSchedule } from './dashboard.js';
+import { UNIT_MINUTES, UNIT_MORE_STEPS, act, boundPicker, drawCharts, fmtMins, fmtWhen, refresh, renderRuns, renderSessionBudget, schedule, secPerStep, selectRun, wireGpu, wireReport, wireSchedule, wireServe } from './dashboard.js';
 import { wireCode } from './code.js';
 import { wireQuantTab } from './quantize.js';
 import { wireLoraTab } from './lora.js';
@@ -14,11 +14,13 @@ import { wireSynthTab } from './synth.js';
 import { wireLearnTab } from './learn.js';
 import { wirePlay } from './play.js';
 import './docs.js';
+import './interp.js';   /* registers itself; nothing here needs its exports */
 
 function wire() {
   wireGpu();
   wireSchedule();
   wireReport();
+  wireServe();
   wireCode();
   wirePlay();
   wireQuantTab();

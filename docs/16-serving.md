@@ -160,9 +160,11 @@ curl -s http://127.0.0.1:8770/health | python -m json.tool
 server loads on the CPU and `/health` says so. A serving process must never be the reason a
 six-day run dies — the same argument that keeps the Code tab's explainer off the GPU.
 
-**Why this is not a portal tab.** The portal is for watching *training*, and a server is a
-separate process with a different lifetime that you point other tools at. `/health` is the
-right dashboard for it, and `curl` is the right client.
+**In the portal**: the dashboard's **Serve** panel starts and stops it and shows what
+`/health` reports — sequences in flight, the queue, the KV pool, tokens per model pass. It
+runs `scripts/serve.sh`, the same command you would type, so a server started in a terminal
+appears in the panel and stopping the portal never stops the server. That is the same
+contract `phase2.sh` and the training dashboard have always had.
 
 ## What is deliberately not here
 
@@ -183,7 +185,8 @@ right dashboard for it, and `curl` is the right client.
 | 1 | [`aksharallm/serve/paged.py`](../aksharallm/serve/paged.py) | `PagedCache._slots` — the one line of address translation — then `BlockPool` (allocate/release/share and the reference counts), `gather`, and `LayerView`, which makes a pool look like the `KVCache` the model expects |
 | 2 | [`aksharallm/serve/batch.py`](../aksharallm/serve/batch.py) | `BatchEngine._forward` — positions, the two-job mask, the padded rows — then `step` (sampling and finishing), `_admit` (FIFO, checked against free blocks) and `_share_prefix` |
 | 3 | [`aksharallm/serve/server.py`](../aksharallm/serve/server.py) | `ModelServer._loop` — one worker thread owns the model, HTTP threads only put requests in and take tokens out — then `Handler._generate` and `_stream` |
-| 4 | [`aksharallm/model/transformer.py`](../aksharallm/model/transformer.py) | `apply_rope`'s two shapes and the `positions` / `attn_mask` parameters of `forward`: the only changes serving needed in the model itself |
+| 4 | [`scripts/serve.sh`](../scripts/serve.sh) · [`aksharallm/portal/serving.py`](../aksharallm/portal/serving.py) | the lifecycle: a pid file, a log, and a panel that shells out to the script rather than holding a second way to start a server |
+| 5 | [`aksharallm/model/transformer.py`](../aksharallm/model/transformer.py) | `apply_rope`'s two shapes and the `positions` / `attn_mask` parameters of `forward`: the only changes serving needed in the model itself |
 
 What pins it: `tests/test_serve.py`, and the one to read first is
 `test_a_batch_gives_each_sequence_what_it_would_have_got_alone` — three prompts of different

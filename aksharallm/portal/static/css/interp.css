@@ -1,0 +1,44 @@
+/* The Interp tab. Two visual ideas do the work: a cell whose *opacity* is a weight (so a
+   whole attention head reads at a glance without a number in it), and a bar per block that
+   makes "the answer is built in blocks 18-21" visible in one look. */
+
+.interp-controls { display: flex; flex-wrap: wrap; gap: .6rem; align-items: flex-end; }
+.interp-controls .field-wide { flex: 1 1 22rem; }
+.interp-controls .field-wide input { width: 100%; }
+.interp-tabs { display: flex; gap: .4rem; margin-top: .8rem; flex-wrap: wrap; }
+.interp-story { margin: .2rem 0 .8rem; font-size: .95rem; }
+
+.lens-table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+.lens-table th, .lens-table td { border-bottom: 1px solid var(--border); padding: .25rem .5rem;
+  text-align: left; vertical-align: top; }
+.lens-table thead th { position: sticky; top: 0; background: var(--panel); z-index: 1; }
+.lens-entropy { opacity: .6; font-variant-numeric: tabular-nums; }
+.lens-tok { display: inline-block; margin-right: .5rem; padding: .05rem .3rem;
+  border: 1px solid var(--border); border-radius: 3px; white-space: pre; }
+.lens-tok em { opacity: .6; font-style: normal; margin-left: .3rem;
+  font-variant-numeric: tabular-nums; }
+.lens-top { border-color: var(--series-1); }
+
+#lens-table { max-height: 26rem; }
+#lens-chart { margin-top: .8rem; }
+.contrib-row { display: flex; align-items: center; gap: .5rem; font-size: .75rem; }
+.contrib-label { width: 1.6rem; text-align: right; opacity: .7;
+  font-variant-numeric: tabular-nums; }
+.contrib-bar { flex: 1; height: 8px; background: var(--border); border-radius: 2px; }
+.contrib-bar i { display: block; height: 100%; border-radius: 2px; }
+.contrib-bar i.up { background: var(--series-1); }
+.contrib-bar i.down { background: #b45309; }
+
+.attn-table { border-collapse: collapse; font-size: .7rem; }
+.attn-table th { font-weight: 500; opacity: .8; white-space: pre; padding: .1rem .3rem; }
+.attn-key { writing-mode: vertical-rl; transform: rotate(180deg); max-height: 6rem; }
+.attn-query { text-align: right; max-width: 9rem; overflow: hidden; }
+.attn-cell, .attn-void, .patch-cell { width: 1.1rem; height: 1.1rem; border: 1px solid var(--border); }
+/* The weight *is* the opacity: a local head shows a diagonal, a fixated head a stripe. */
+.attn-cell { background: color-mix(in srgb, var(--series-1) calc(var(--w) * 100%), transparent); }
+.attn-void { background: transparent; border-color: transparent; }
+.patch-cell { background: color-mix(in srgb, #059669 calc(var(--w) * 100%), transparent);
+  text-align: center; font-variant-numeric: tabular-nums; font-size: .6rem; }
+.patch-table th:first-child { text-align: right; }
+#attn-map, #patch-grid { margin-bottom: .8rem; }
+#attn-heads { max-height: 20rem; }

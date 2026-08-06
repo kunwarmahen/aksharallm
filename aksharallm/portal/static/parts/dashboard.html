@@ -141,6 +141,29 @@ before the real run. Skipping is only sane when resuming a config that has alrea
     <div class="scroll-x scroll-y" id="sessions"></div>
   </section>
 
+  <section class="panel" aria-label="serve">
+    <div class="panel-head">
+      <h2>Serve</h2>
+      <span class="panel-note">the model as an HTTP API — continuous batching, a paged KV cache, and the OpenAI shape other tools already speak</span>
+      <span class="panel-note" id="serve-status">–</span>
+      <div class="control-group">
+        <label class="field"><span class="field-label">checkpoint</span>
+          <select id="serve-ckpt"></select></label>
+        <label class="field"><span class="field-label">port</span>
+          <input id="serve-port" type="number" value="8770" min="1024" max="65535"></label>
+        <label class="field"><span class="field-label">max batch</span>
+          <input id="serve-batch" type="number" value="32" min="1" max="256"></label>
+        <button id="btn-serve-start" class="ghost" type="button">Start server</button>
+        <button id="btn-serve-stop" class="ghost" type="button" disabled>Stop</button>
+      </div>
+    </div>
+    <div class="tiles" id="serve-tiles"></div>
+    <p class="hint" id="serve-hint">It runs <code>scripts/serve.sh</code> — the same command you
+      would type — so a server started in a terminal shows up here too. While a run is
+      training it loads on the CPU and says so, exactly like the Playground.</p>
+    <pre class="log" id="serve-log" hidden></pre>
+  </section>
+
   <section class="panel" aria-label="report">
     <div class="panel-head">
       <h2>Report</h2>

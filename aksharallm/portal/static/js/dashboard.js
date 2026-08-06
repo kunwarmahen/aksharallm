@@ -1070,6 +1070,58 @@ export async function buildReport(save = false) {
   }
 }
 
+/* ---- the HTTP server ---------------------------------------------------------------------
+ * A separate process with its own lifetime, so this panel holds none of its state: it posts to
+ * scripts/serve.sh through the API and then reads the server's own /health. That is why a
+ * server started in a terminal appears here, and why stopping the portal never stops it. */
+export async function refreshServe() {
+  let d;
+  try {
+    d = await api('/api/serve');
+  } catch { return; }
+  state.serve = d;
+  const h = d.health || {};
+  const kv = h.kv_blocks || {};
+  $('#serve-status').textContent = d.phase === 'running'
+    ? `${d.url} · ${h.model || ''} on the ${(h.device || '?').toUpperCase()}`
+    : d.phase === 'starting' ? 'starting — loading the checkpoint…' : 'not running';
+  $('#btn-serve-start').disabled = d.running || state.busy;
+  $('#btn-serve-stop').disabled = !d.running || state.busy;
+
+  const tiles = !h.ok ? '' : [
+    ['in flight', `${fmt.int(h.running)}`, `${fmt.int(h.waiting)} waiting for a slot`],
+    ['max batch', fmt.int(h.max_batch), 'sequences per pass over the weights'],
+    ['kv pool', `${fmt.pct((kv.used || 0) / (kv.total || 1), 0)}`,
+      `${fmt.int(kv.used)} of ${fmt.int(kv.total)} blocks · ${fmt.bytes(kv.bytes)}`],
+    ['served', fmt.int((h.stats || {}).tokens),
+      `${fmt.num((h.stats || {}).tokens_per_step, 2)} tokens per model pass`],
+  ].map(([label, value, note]) => `<div class="tile"><div class="tile-label">${label}</div>`
+    + `<div class="tile-value">${value}</div><div class="tile-note">${escHtml(note)}</div></div>`).join('');
+  $('#serve-tiles').innerHTML = tiles;
+  if (d.running) $('#serve-hint').innerHTML = `Try it: <code>${escHtml(d.hint)}</code>`;
+  const log = $('#serve-log');
+  log.hidden = !(d.log || []).length;
+  log.textContent = (d.log || []).slice(-20).join('\n');
+}
+
+export function wireServe() {
+  $('#btn-serve-start').addEventListener('click', () => act(() => post('/api/serve/start', {
+    checkpoint: $('#serve-ckpt').value || undefined,
+    port: Number($('#serve-port').value) || undefined,
+    max_batch: Number($('#serve-batch').value) || undefined,
+  }), 'Server starting'));
+  $('#btn-serve-stop').addEventListener('click', () => act(() => post('/api/serve/stop', {}),
+    'Server stopped'));
+  /* The checkpoint list is the Playground's — one place that knows what exists. */
+  api('/api/infer').then((d) => {
+    $('#serve-ckpt').innerHTML = (d.checkpoints || [])
+      .map((c) => `<option value="${escHtml(c.rel)}">${escHtml(c.rel)}</option>`).join('');
+    if (d.default) $('#serve-ckpt').value = d.default;
+  }).catch(() => {});
+  refreshServe();
+  setInterval(refreshServe, 5000);
+}
+
 export function wireReport() {
   $('#btn-report').addEventListener('click', () => buildReport(false));
   $('#btn-report-save').addEventListener('click', () => buildReport(true));

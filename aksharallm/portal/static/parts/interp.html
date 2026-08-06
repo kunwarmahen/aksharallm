@@ -1,0 +1,93 @@
+<!-- The Interp tab: four ways of looking inside the model the Playground already has in
+     memory. Everything runs inline (a logit lens is one forward pass), so this tab
+     inherits the device policy — a live training run keeps the card. -->
+<div id="view-interp" class="view" hidden>
+
+<section class="panel" aria-label="interp controls">
+  <div class="panel-head">
+    <h2>Look inside</h2>
+    <span class="panel-note">what each layer believed, what attention attended to, and which activation actually carries the answer</span>
+    <span class="panel-note" id="interp-status"></span>
+  </div>
+  <div class="interp-controls">
+    <label class="field field-wide"><span class="field-label">checkpoint</span>
+      <select id="interp-ckpt"></select></label>
+    <label class="field field-wide"><span class="field-label">prompt</span>
+      <input id="interp-prompt" type="text" value="The capital of France is"
+             placeholder="a short prompt — this runs the model once per layer"></label>
+    <button id="interp-run" class="primary" type="button">Look</button>
+  </div>
+  <div class="interp-tabs" role="group" aria-label="view">
+    <button class="ghost on" type="button" data-view="lens">Logit lens</button>
+    <button class="ghost" type="button" data-view="attn">Attention</button>
+    <button class="ghost" type="button" data-view="patch">Patching</button>
+    <button class="ghost" type="button" data-view="sae">Features</button>
+  </div>
+</section>
+
+<section class="panel interp-view" id="ipanel-lens" aria-label="logit lens">
+  <div class="panel-head">
+    <h2>Logit lens</h2>
+    <span class="panel-note">every block <em>adds</em> to the residual stream, so the output head can be pointed at the running total halfway through: not what the model predicted, but <strong>when it decided</strong></span>
+  </div>
+  <p class="interp-story" id="lens-story"></p>
+  <div class="scroll-y" id="lens-table"></div>
+  <div class="chart" id="lens-chart"></div>
+  <p class="hint">A reading, not a measurement: nothing says an intermediate residual is
+    <em>supposed</em> to decode to anything. Treat a clean story as a hypothesis and check it
+    with Patching, which intervenes rather than observes.</p>
+</section>
+
+<section class="panel interp-view" id="ipanel-attn" hidden aria-label="attention">
+  <div class="panel-head">
+    <h2>Attention</h2>
+    <span class="panel-note">recomputed from the layer's own inputs — the fused kernel never stores these</span>
+    <label class="field"><span class="field-label">layer</span>
+      <input id="attn-layer" type="number" min="0" value="0" step="1"></label>
+    <label class="field"><span class="field-label">head</span>
+      <select id="attn-head"></select></label>
+  </div>
+  <div class="scroll-x" id="attn-map"></div>
+  <div class="scroll-y" id="attn-heads"></div>
+  <p class="hint">Read a <em>row</em>: it is what that position looked at, and it sums to 1.
+    Everything above the diagonal is empty because a token cannot attend to its future.</p>
+</section>
+
+<section class="panel interp-view" id="ipanel-patch" hidden aria-label="activation patching">
+  <div class="panel-head">
+    <h2>Activation patching</h2>
+    <span class="panel-note">run the corrupted prompt, force one activation back to its clean value, and see whether the answer returns</span>
+  </div>
+  <div class="interp-controls">
+    <label class="field field-wide"><span class="field-label">clean prompt</span>
+      <input id="patch-clean" type="text" value="The capital of France is"></label>
+    <label class="field field-wide"><span class="field-label">corrupted prompt</span>
+      <input id="patch-corrupt" type="text" value="The capital of Italy is"></label>
+    <label class="field"><span class="field-label">clean answer</span>
+      <input id="patch-answer" type="text" value=" Paris"></label>
+    <label class="field"><span class="field-label">other answer</span>
+      <input id="patch-other" type="text" value=" Rome"></label>
+    <button id="patch-run" class="primary" type="button">Patch</button>
+  </div>
+  <p class="interp-story" id="patch-story"></p>
+  <div class="scroll-x" id="patch-grid"></div>
+  <p class="hint">The two prompts must tokenize to the <strong>same length</strong>, or position 7
+    means different things in the two runs and every cell compares unrelated activations. Green
+    is "patching this alone restores the clean answer".</p>
+</section>
+
+<section class="panel interp-view" id="ipanel-sae" hidden aria-label="sparse features">
+  <div class="panel-head">
+    <h2>Dictionary features</h2>
+    <span class="panel-note">a sparse autoencoder over the residual stream: 8x wider, almost all zeros, so features stop overlapping</span>
+    <label class="field"><span class="field-label">layer</span>
+      <input id="sae-layer" type="number" min="0" value="12" step="1"></label>
+  </div>
+  <div id="sae-body"></div>
+  <p class="hint">Training one is a terminal job — it reads a corpus:
+    <code>python -m aksharallm.interp sae &lt;run&gt; --layer 12</code>. What a feature
+    <em>means</em> needs the tokens it fires on:
+    <code>python -m aksharallm.interp features &lt;run&gt; --feature N</code>.</p>
+</section>
+
+</div><!-- /view-interp -->
