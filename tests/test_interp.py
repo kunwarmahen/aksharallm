@@ -257,3 +257,36 @@ def test_a_pid_with_no_health_reads_as_starting_not_running(tmp_path, monkeypatc
     monkeypatch.setattr(jobs, "_pid", lambda: 4242)
     monkeypatch.setattr(jobs, "_health", lambda port: None)
     assert jobs.status()["phase"] == "starting"
+
+
+# ---- per-head attribution ------------------------------------------------------------------
+
+def test_head_outputs_sum_to_the_layers_output():
+    """The identity per-head patching rests on: `wo` over the concatenated heads is the sum of
+    `wo` over each head's slice with the others zeroed. If that is not exact, every per-head
+    number is an approximation nobody labelled as one."""
+    from aksharallm.interp.patch import head_outputs
+
+    model = tiny()
+    cap = run(model, PROMPT, device="cpu")
+    heads = head_outputs(model, cap, 1)
+    assert heads.shape[0] == model.cfg.n_heads
+    assert torch.allclose(heads.sum(0), cap.attn_out[1], atol=1e-5), \
+        (heads.sum(0) - cap.attn_out[1]).abs().max()
+
+
+def test_per_head_patching_lands_somewhere_and_reports_it():
+    from aksharallm.interp.patch import head_grid, summarise_heads
+
+    model = tiny()
+    res = head_grid(model, [3, 9, 27, 5], [3, 9, 28, 5], answer=11, other=12, device="cpu")
+    assert len(res["grid"]) == model.cfg.n_layers
+    assert all(len(row) == model.cfg.n_heads for row in res["grid"])
+    assert res["best"]["restored"] == max(max(r) for r in res["grid"])
+    assert "restores" in summarise_heads(res)
+
+
+def test_per_head_patching_says_so_when_there_is_nothing_to_attribute():
+    from aksharallm.interp.patch import summarise_heads
+
+    assert "nothing to attribute" in summarise_heads({"span": 0.0, "best": None})

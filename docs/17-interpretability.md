@@ -112,6 +112,18 @@ then the final blocks read it out.
 **The two prompts must tokenize to the same length**, or position 4 means different things in
 the two runs and every cell compares unrelated activations. That is a refusal, not a warning.
 
+### Narrowing it to a head
+
+A position carries the sum of every head's work plus the MLP's, so "block 20, last position"
+is a *place*, not a mechanism. Heads can be separated after the fact because `wo` is linear:
+`wo(concat(h1..hn))` is the sum of `wo` applied to each head's slice with the others zeroed —
+which makes swapping one head's contribution for the clean run's a single addition, exact
+rather than approximate. (`test_head_outputs_sum_to_the_layers_output` asserts the identity.)
+
+On the same prompt: **head 1 of block 20 alone restores 50%** of the clean logit difference —
+the same block the lens and the position grid both pointed at, now attributed to one of
+sixteen heads. Three methods agreeing is as close to a mechanism as this repo gets.
+
 ## A sparse autoencoder: pulling apart superposition
 
 Looking at single dimensions of the residual stream does not work, and the reason has a name.
@@ -150,16 +162,26 @@ What a feature *means* needs the tokens it fires on, which is a corpus pass and 
 terminal job:
 
 ```bash
-python -m aksharallm.interp features small-code --layer 12 --feature 5537
+python -m aksharallm.interp features small-code --layer 12 --feature 5537 --label
 ```
+
+`--label` asks the local Ollama model what those snippets have in common. Feature 5537 of
+layer 12 fires on `' the'` after a verb or preposition ("impacted by [the] condition", "how we
+take [the] world"), and the model calls it *"the word 'the' follows a preceding word"* — which
+is roughly right and not very illuminating, and that is exactly why it comes back the way it does: the
+label is **marked as a hypothesis, with its evidence attached**, `confident` is false when the
+model says "unclear", and nothing here stores a label without the contexts beside it. An
+automatic name is genuinely useful for triaging eight thousand features and is also the
+easiest way to convince yourself a feature means something it does not — the model is guessing
+from ten snippets and will always produce *a* phrase.
 
 ## What this does not do
 
-* **No causal tracing across heads.** Patching here replaces a whole residual position;
-  attributing to individual heads or MLPs needs finer hooks, and is the obvious next step.
-* **No automated feature naming.** The local Ollama model in the Code tab could label
-  top-activating contexts, and that is a good future job — but a label a model invented is a
-  hypothesis with a confident voice, and this repo has enough of those.
+* **No MLP attribution.** Heads can now be separated (above); the MLP's contribution to a
+  position is still lumped in with everything else.
+* **No automatic circuit finding.** Every question here is one you have to pose — a pair of
+  prompts, a layer, a feature. Searching for a circuit rather than checking one is a different
+  project.
 * **The lens is not a measurement**, as above. It is the cheapest hypothesis generator here
   and should always be checked with a patch.
 

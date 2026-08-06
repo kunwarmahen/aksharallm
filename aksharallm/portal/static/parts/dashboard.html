@@ -153,6 +153,12 @@ before the real run. Skipping is only sane when resuming a config that has alrea
           <input id="serve-port" type="number" value="8770" min="1024" max="65535"></label>
         <label class="field"><span class="field-label">max batch</span>
           <input id="serve-batch" type="number" value="32" min="1" max="256"></label>
+        <label class="field" title="Guess this many tokens per sequence per step by looking them up in that sequence's own text. It cannot change the output — only the speed.">
+          <span class="field-label">draft</span>
+          <select id="serve-spec">
+            <option value="0">off</option><option value="2">2</option>
+            <option value="4" selected>4</option><option value="8">8</option>
+          </select></label>
         <button id="btn-serve-start" class="ghost" type="button">Start server</button>
         <button id="btn-serve-stop" class="ghost" type="button" disabled>Stop</button>
       </div>

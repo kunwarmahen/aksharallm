@@ -223,7 +223,10 @@ def top_activating(model, sae: SAE, feature: int, token_batches, layer: int,
         cap = Capture(tokens=[])
         with hooks_on(model, cap):
             model(batch.to(device))
-        acts = cap.residual[layer]                       # (T, d) for the first row
+        # `hooks_on` keeps the full `(B, T, d)` — this walks one sequence at a time, so take
+        # its row. (Indexing the batch axis by mistake here asks for feature 5,537 of a
+        # 256-token sequence, which is the error rather than a silent wrong answer.)
+        acts = cap.residual[layer][0]                    # (T, d)
         f = sae.encode(acts.float())[:, feature]
         rows = batch[0].tolist() if batch.dim() > 1 else batch.tolist()
         for pos, value in enumerate(f.tolist()):
@@ -241,6 +244,61 @@ def top_activating(model, sae: SAE, feature: int, token_batches, layer: int,
             "after": decode(rows[pos + 1:hi]),
         })
     return out
+
+
+#: What a labelling model is asked. Deliberately narrow: it is shown contexts and asked for a
+#: phrase, not for an explanation — an explanation is where a model starts inventing mechanism.
+LABEL_PROMPT = """\
+Below are text snippets where one feature of a language model fired most strongly. The token
+that triggered it is in [square brackets].
+
+{examples}
+
+In at most eight words, name what these have in common. Answer with the phrase only — no
+preamble, no explanation, no mechanism. If they have nothing obvious in common, answer
+exactly: unclear.
+"""
+
+
+def label_feature(rows: list[dict], ollama=None, model: str | None = None) -> dict:
+    """Ask a local model what a feature's top activations have in common.
+
+    **The label is a hypothesis with a confident voice, and it is returned marked as one.**
+    That framing is the whole design: an automatic name is genuinely useful for triaging eight
+    thousand features, and it is also the easiest way to convince yourself a feature means
+    something it does not — the model is guessing from ten snippets, it cannot see the other
+    thousands of times the feature fired, and it will always produce *a* phrase.
+
+    So the evidence comes back with the label, `confident` is only true when the model did not
+    say "unclear", and nothing in this repo stores a label without the contexts beside it.
+    """
+    if not rows:
+        return {"label": None, "confident": False, "evidence": [],
+                "note": "the feature never fired on this sample — nothing to label"}
+    examples = "\n".join(
+        f"{i + 1}. ...{r['context']}[{r['token']}]{r.get('after', '')}..."
+        for i, r in enumerate(rows[:10]))
+    try:
+        if ollama is None:
+            from ..portal.explain import ExplainConfig, Ollama
+            cfg = ExplainConfig.load()
+            ollama = Ollama(cfg)
+            model = model or cfg.model
+        # `chat` yields ("delta", text) and ("thinking", text); a reasoning model's
+        # scratchpad is not the label, so only the deltas are kept.
+        text = "".join(chunk for kind, chunk in ollama.chat(
+            [{"role": "user", "content": LABEL_PROMPT.format(examples=examples)}],
+            model=model) if kind == "delta")
+    except Exception as exc:                      # noqa: BLE001 - a label is never worth failing for
+        return {"label": None, "confident": False, "evidence": rows[:10],
+                "note": f"no local model available ({type(exc).__name__}: {exc})"}
+    label = " ".join(text.strip().split())[:120]
+    return {
+        "label": label,
+        "confident": bool(label) and label.lower().strip(" .") != "unclear",
+        "evidence": rows[:10],
+        "note": "a guess from ten snippets by a local model — evidence above, not proof",
+    }
 
 
 def save(sae: SAE, path: Path, history: list[dict], report: dict | None = None) -> Path:

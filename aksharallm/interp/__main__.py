@@ -27,8 +27,16 @@ from ..infer.checkpoints import CheckpointStore, InferError, repo_root
 from ..tokenizer.tokenizer import Tokenizer
 from .capture import attention_maps, attention_summary, run
 from .lens import layer_contributions, lens_story, logit_lens
-from .patch import PatchError, patch_grid, summarise
-from .sae import SAEConfig, collect_activations, feature_report, save, top_activating, train_sae
+from .patch import PatchError, head_grid, patch_grid, summarise, summarise_heads
+from .sae import (
+    SAEConfig,
+    collect_activations,
+    feature_report,
+    label_feature,
+    save,
+    top_activating,
+    train_sae,
+)
 
 
 def load(args) -> tuple:
@@ -105,6 +113,16 @@ def cmd_patch(args) -> int:
         cells = " ".join(f"{v:10.2f}" for v in row)
         print(f"  {li:>5}  {cells}")
     print(f"\n{summarise(result, tokens)}")
+
+    if args.heads:
+        # Which *head* moved it, not just which position. One extra forward per head per
+        # layer, and exact rather than approximate — see `head_outputs`.
+        heads = head_grid(model, clean, corrupt, answer, other, device=args.device)
+        print(f"\n  block  " + " ".join(f"{h:>6}" for h in range(heads["heads"])))
+        for li, row in enumerate(heads["grid"]):
+            if max(row) > 0.05 or min(row) < -0.05:
+                print(f"  {li:>5}  " + " ".join(f"{v:6.2f}" for v in row))
+        print(f"\n{summarise_heads(heads)}")
     return 0
 
 
@@ -176,6 +194,10 @@ def cmd_features(args) -> int:
               f"{row['after']!r}...")
     if not rows:
         print("  it never fired on this sample — try more --samples, or a busier feature")
+    if args.label:
+        got = label_feature(rows)
+        print(f"\n  a local model calls it: {got['label'] or '(nothing)'}")
+        print(f"  {got['note']}")
     return 0
 
 
@@ -212,6 +234,8 @@ def main(argv: list[str] | None = None) -> int:
     patch.add_argument("--corrupt", required=True)
     patch.add_argument("--answer", required=True, help="the clean prompt's answer, e.g. ' Paris'")
     patch.add_argument("--other", required=True, help="the corrupted prompt's answer")
+    patch.add_argument("--heads", action="store_true",
+                       help="also attribute to individual attention heads")
     patch.set_defaults(fn=cmd_patch)
 
     sae = common(sub.add_parser("sae", help="train a sparse autoencoder on one layer"))
@@ -233,6 +257,8 @@ def main(argv: list[str] | None = None) -> int:
     feats.add_argument("--samples", type=int, default=200)
     feats.add_argument("--top", type=int, default=10)
     feats.add_argument("--data", default=None)
+    feats.add_argument("--label", action="store_true",
+                       help="ask the local Ollama model to name it — a hypothesis, not a fact")
     feats.set_defaults(fn=cmd_features)
 
     args = ap.parse_args(argv)

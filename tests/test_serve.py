@@ -378,3 +378,69 @@ class _ToyTokenizer:
 
     def render_chat(self, messages, add_generation_prompt=False):
         return self.encode(" ".join(m["content"] for m in messages)), []
+
+
+# ---- speculation inside the batch ------------------------------------------------------
+
+def test_drafting_inside_the_batch_changes_nothing_but_the_step_count():
+    """The two speedups compose, and neither may change a token.
+
+    Batching gets more *sequences* out of one pass over the weights; drafting gets more
+    *tokens* out of one pass per sequence. Together they must still produce exactly what each
+    request would have got alone — so this compares against the non-speculative batch, which
+    `test_a_batch_gives_each_sequence_what_it_would_have_got_alone` already ties to
+    single-sequence generation.
+    """
+    model = tiny()
+    prompts = [[2, 3, 4, 5] * 4, [7, 1, 7, 1, 7, 1, 7], [9, 9, 9, 9, 9, 9]]
+
+    plain = BatchEngine(model, pool_for(model), max_batch=8, device="cpu")
+    plain_reqs = [Request(prompt_ids=p, max_new_tokens=16, temperature=0.0) for p in prompts]
+    expected = plain.collect(plain_reqs)
+
+    fast = BatchEngine(model, pool_for(model), max_batch=8, device="cpu", speculate=4)
+    fast_reqs = [Request(prompt_ids=p, max_new_tokens=16, temperature=0.0) for p in prompts]
+    got = fast.collect(fast_reqs)
+
+    for a, b in zip(plain_reqs, fast_reqs):
+        assert got[b.id] == expected[a.id]
+    # ...and it actually did something: fewer passes over the weights for the same tokens.
+    assert fast.stats.drafted > 0
+    assert fast.stats.accepted > 0
+    assert fast.stats.steps < plain.stats.steps
+    assert fast.stats.tokens_per_step > plain.stats.tokens_per_step
+
+
+def test_a_cancelled_sequence_stops_and_gives_its_blocks_back():
+    """A client that hung up is not owed the rest of its answer, and every token it is still
+    sent costs a slot in the batch and blocks a waiting request could have had."""
+    model = tiny()
+    engine = BatchEngine(model, pool_for(model, n_blocks=32), max_batch=4, device="cpu")
+    a = engine.submit(Request(prompt_ids=[1, 2, 3], max_new_tokens=50, temperature=0.0))
+    engine.submit(Request(prompt_ids=[4, 5, 6], max_new_tokens=4, temperature=0.0))
+    engine.step()
+    used = engine.cache.pool.used_blocks
+
+    assert engine.cancel(a.id) is True
+    assert a.finished and a.finish_reason == "cancelled"
+    assert engine.cache.pool.used_blocks < used
+    assert all(s.id != a.id for s in engine.running)
+    assert engine.stats.cancelled == 1
+
+    # It is gone from the loop entirely: no further tokens carry its id.
+    assert all(seq_id != a.id for seq_id, _ in engine.run())
+    assert engine.cancel(a.id) is False          # cancelling twice is a no-op, not a crash
+
+
+def test_cancelling_a_queued_request_stops_it_being_admitted():
+    """The queue is the other half: a request abandoned while waiting should never start."""
+    model = tiny()
+    engine = BatchEngine(model, pool_for(model, n_blocks=32), max_batch=1, device="cpu")
+    engine.submit(Request(prompt_ids=[1, 2, 3], max_new_tokens=6, temperature=0.0))
+    queued = engine.submit(Request(prompt_ids=[4, 5, 6], max_new_tokens=6, temperature=0.0))
+    engine.step()
+    assert len(engine.waiting) == 1
+
+    assert engine.cancel(queued.id) is True
+    assert not engine.waiting
+    assert all(seq_id != queued.id for seq_id, _ in engine.run())

@@ -164,6 +164,26 @@ async function runPatch() {
     });
     renderPatch(d);
     status(`clean ${fmt.num(d.clean_diff, 2)} · corrupted ${fmt.num(d.corrupt_diff, 2)} logit diff`);
+    /* Then the finer question, in a second request so the position grid is on screen while
+     * the per-head passes run. */
+    try {
+      const h = await post('/api/interp/heads', {
+        checkpoint: interp.ckpt,
+        clean: $('#patch-clean').value, corrupt: $('#patch-corrupt').value,
+        answer: $('#patch-answer').value, other: $('#patch-other').value,
+      });
+      $('#heads-story').textContent = h.summary;
+      const head0 = `<tr><th>block</th>${Array.from({ length: h.heads },
+        (_, i) => `<th class="attn-key">head ${i}</th>`).join('')}</tr>`;
+      $('#heads-grid').innerHTML = `<table class="attn-table patch-table">${head0}`
+        + h.grid.map((row, li) => `<tr><th>${li}</th>` + row.map((v) =>
+          `<td class="patch-cell" style="--w:${Math.max(0, Math.min(1, v)).toFixed(3)}" `
+          + `title="block ${li}: ${(v * 100).toFixed(0)}% restored">`
+          + `${v > 0.15 ? (v * 100).toFixed(0) : ''}</td>`).join('') + '</tr>').join('')
+        + '</table>';
+    } catch (err) {
+      $('#heads-story').textContent = err.message;
+    }
   } catch (err) {
     $('#patch-story').textContent = '';
     $('#patch-grid').innerHTML = '';

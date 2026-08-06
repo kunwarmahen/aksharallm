@@ -26,7 +26,13 @@ from pathlib import Path
 from ..infer.checkpoints import InferError
 from ..interp.capture import attention_maps, attention_summary, run as capture_run
 from ..interp.lens import layer_contributions, lens_story, logit_lens
-from ..interp.patch import PatchError, patch_grid, summarise
+from ..interp.patch import (
+    PatchError,
+    head_grid,
+    patch_grid,
+    summarise,
+    summarise_heads,
+)
 from ..interp.sae import load as load_sae
 
 #: Longest prompt the tab will accept, in tokens. Patching is quadratic in attention *and*
@@ -139,6 +145,28 @@ class Interp:
             "summary": summarise(result, tokens),
             "checkpoint": loaded.info.rel,
         })
+        return result
+
+    def heads(self, ckpt_id: str, clean: str, corrupt: str, answer: str,
+              other: str) -> dict:
+        """Per-head attribution for the same pair of prompts as `patch`.
+
+        Layers x heads forward passes rather than layers x positions — comparable work, a
+        different question: not *where* the information is but *which head put it there*.
+        """
+        loaded = self._loaded(ckpt_id)
+        clean_ids = self._ids(loaded, clean, MAX_PATCH_TOKENS)
+        corrupt_ids = self._ids(loaded, corrupt, MAX_PATCH_TOKENS)
+        answer_ids = loaded.tokenizer.encode(answer)
+        other_ids = loaded.tokenizer.encode(other)
+        if not answer_ids or not other_ids:
+            raise InferError("both answers must be non-empty")
+        try:
+            result = head_grid(loaded.model, clean_ids, corrupt_ids, answer_ids[0],
+                               other_ids[0], device=loaded.device)
+        except PatchError as exc:
+            raise InferError(str(exc)) from exc
+        result["summary"] = summarise_heads(result)
         return result
 
     def features(self, ckpt_id: str, layer: int, limit: int = 24) -> dict:

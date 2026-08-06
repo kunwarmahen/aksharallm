@@ -122,6 +122,40 @@ Two rules, both about not disturbing work in flight:
    padded to the widest, with a mask that hides the padding. Splitting the two phases is
    simpler and leaves the card idle during every prefill.
 
+## Drafting inside the batch
+
+The two speedups compose. Batching gets more *sequences* out of one pass over the weights;
+[speculative decoding](06-inference.md) gets more *tokens* out of one pass per sequence.
+Running both means each row proposes its own few tokens — by looking them up in **its own**
+text, since a batch is unrelated conversations — and the ragged step verifies every row's
+guesses in the same forward it was already doing.
+
+The ragged step is why this costs almost nothing to add: a row that owes four guesses looks
+exactly like a row that owes four prompt tokens, which the scheduler already handles. And
+paging is why rejects are free: the rejected guesses' keys and values sit past `cached`, where
+`gather` never looks, and the next step overwrites them. No rewind, no copy, one integer.
+
+| | batch 8 | batch 32 |
+|---|---|---|
+| no drafting | 134 tok/s (8.0 tokens/step) | 238 tok/s (32.0 tokens/step) |
+| `--speculate 4` | **148 tok/s** (8.8/step, 13% accepted) | **372 tok/s** (52.5/step, 39% accepted) |
+
+That is 7.4x one-at-a-time decoding, and the output is still exactly the model's — the
+acceptance rule is the one `infer/speculative.py` proves, and the test compares a drafting
+batch against a non-drafting one token for token.
+
+Two endings have to be honoured *inside* a round, because a round can emit several tokens at
+once: everything after an EOS is dropped, and so is anything past the caller's budget. Without
+that, a request for 16 tokens gets 17 whenever the last round accepted two — correct text, one
+token too long, and exactly the sort of bug a diff finds and a reader does not.
+
+## When a client hangs up
+
+A connection that closes mid-answer used to leave its sequence running to its full
+`max_tokens` into a socket nobody was reading — safe, and a quiet way to halve a busy server's
+throughput. `BatchEngine.cancel` now stops it and frees its blocks on the spot, from the batch
+*or* from the queue: a request abandoned while waiting should never be admitted at all.
+
 ## The three things that make a batch wrong
 
 All of them produce fluent, plausible, *different* text — never an error — which is why the

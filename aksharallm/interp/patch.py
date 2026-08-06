@@ -125,6 +125,105 @@ def _best(grid: list[list[float]], positions: list[int]) -> dict | None:
     return best
 
 
+@torch.no_grad()
+def head_outputs(model, cap: Capture, layer: int) -> torch.Tensor:
+    """Each head's contribution to the residual stream, `(n_heads, T, d_model)`.
+
+    `wo` is a single matrix over the concatenated heads, which makes it look as though heads
+    cannot be separated after it. They can: the projection is linear, so `wo(concat(h_1..h_n))`
+    is the *sum* of `wo` applied to each head's slice with the others zeroed. That identity is
+    what makes per-head patching exact rather than approximate, and
+    `test_head_outputs_sum_to_the_layers_output` asserts it.
+    """
+    from .capture import attention_maps, attention_values
+
+    attn = model.blocks[layer].attn
+    weights = attention_maps(model, cap, layer)
+    values = attention_values(model, cap, layer)
+    mixed = weights.to(values.dtype) @ values                 # (H, T, head_dim)
+    heads, T, dim = mixed.shape
+    out = []
+    for h in range(heads):
+        padded = torch.zeros(T, heads * dim, dtype=mixed.dtype, device=mixed.device)
+        padded[:, h * dim:(h + 1) * dim] = mixed[h]
+        out.append(attn.wo(padded))
+    return torch.stack(out)
+
+
+@torch.no_grad()
+def head_grid(model, clean_ids: list[int], corrupt_ids: list[int], answer: int,
+              other: int, device: str = "cpu", position: int = -1) -> dict:
+    """Patch **one attention head at a time** and report what each restores.
+
+    `patch_grid` replaces a whole residual position, which answers *where* the information is
+    but not *what put it there* — a position carries the sum of every head's work plus the
+    MLP's. This narrows it to the head.
+
+    The mechanism is the linearity above: a head's contribution is added to the residual
+    stream, so swapping one head's contribution for the clean run's is a single addition of
+    `clean_head - corrupt_head` to that layer's attention output. No re-running the layer, and
+    no approximation.
+    """
+    check_pair(clean_ids, corrupt_ids)
+    clean = run(model, clean_ids, device=device)
+    corrupt = run(model, corrupt_ids, device=device)
+    base = logit_diff(corrupt.logits, answer, other, position)
+    target = logit_diff(clean.logits, answer, other, position)
+    span = target - base
+
+    ids = torch.tensor([corrupt_ids], dtype=torch.long, device=device)
+    n_heads = model.cfg.n_heads
+    grid: list[list[float]] = []
+    for layer in range(len(model.blocks)):
+        clean_heads = head_outputs(model, clean, layer)
+        dirty_heads = head_outputs(model, corrupt, layer)
+        row: list[float] = []
+        for head in range(n_heads):
+            delta = (clean_heads[head] - dirty_heads[head]).to(
+                next(model.parameters()).dtype)
+
+            def hook(_module, _inputs, output, _delta=delta):
+                return output + _delta
+
+            handle = model.blocks[layer].attn.register_forward_hook(hook)
+            try:
+                logits, _ = model(ids, full_logits=True)
+            finally:
+                handle.remove()
+            restored = ((logit_diff(logits[0], answer, other, position) - base) / span
+                        if span else 0.0)
+            row.append(restored)
+        grid.append(row)
+
+    return {
+        "grid": grid,                       # [layer][head] -> fraction restored
+        "layers": len(model.blocks),
+        "heads": n_heads,
+        "clean_diff": target,
+        "corrupt_diff": base,
+        "span": span,
+        "best": _best_head(grid),
+    }
+
+
+def _best_head(grid: list[list[float]]) -> dict | None:
+    best = None
+    for li, row in enumerate(grid):
+        for hi, value in enumerate(row):
+            if best is None or value > best["restored"]:
+                best = {"layer": li, "head": hi, "restored": value}
+    return best
+
+
+def summarise_heads(result: dict) -> str:
+    best = result.get("best")
+    if not best or not result.get("span"):
+        return ("nothing to attribute: the clean and corrupted runs agree, so no head can "
+                "restore anything.")
+    return (f"head {best['head']} of block {best['layer']} moves it most: patching that one "
+            f"head restores {best['restored'] * 100:.0f}% of the clean logit difference.")
+
+
 def summarise(result: dict, tokens: list[str]) -> str:
     """One sentence a person can act on, because a 24x12 grid of numbers is not a finding."""
     best = result.get("best")

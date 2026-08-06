@@ -9,6 +9,7 @@
 #   scripts/serve.sh --restart small-code  # stop, start again in the background
 #
 #   PORT=9000 MAX_BATCH=64 DEVICE=cuda scripts/serve.sh small-code --bg
+#   SPECULATE=4 scripts/serve.sh small-code --bg    # guess ahead; same output, faster
 #
 # The same shape as scripts/portal.sh on purpose: a pid file, a log, and lifecycle flags that
 # work from any terminal — so the portal's Serve panel can drive *this script* rather than
@@ -24,6 +25,7 @@ PORT=${PORT:-8770}
 MAX_BATCH=${MAX_BATCH:-32}
 DEVICE=${DEVICE:-}
 POOL_BLOCKS=${POOL_BLOCKS:-}
+SPECULATE=${SPECULATE:-0}
 DIR=logs/serve
 PID_FILE=$DIR/serve.pid
 META=$DIR/serve.meta
@@ -88,11 +90,13 @@ CKPT=${CKPT:-small-code}
 ARGS=("$CKPT" --port "$PORT" --max-batch "$MAX_BATCH")
 [ -n "$DEVICE" ] && ARGS+=(--device "$DEVICE")
 [ -n "$POOL_BLOCKS" ] && ARGS+=(--pool-blocks "$POOL_BLOCKS")
+[ "$SPECULATE" != "0" ] && ARGS+=(--speculate "$SPECULATE")
 
 {
     echo "checkpoint $CKPT"
     echo "port       $PORT"
     echo "max_batch  $MAX_BATCH"
+    echo "speculate  $SPECULATE"
     echo "device     ${DEVICE:-auto}"
     echo "started    $(date '+%Y-%m-%d %H:%M:%S')"
     echo "command    $PY -m aksharallm.serve ${ARGS[*]}"

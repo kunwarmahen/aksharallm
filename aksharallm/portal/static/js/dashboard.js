@@ -1095,6 +1095,8 @@ export async function refreshServe() {
       `${fmt.int(kv.used)} of ${fmt.int(kv.total)} blocks · ${fmt.bytes(kv.bytes)}`],
     ['served', fmt.int((h.stats || {}).tokens),
       `${fmt.num((h.stats || {}).tokens_per_step, 2)} tokens per model pass`],
+    ...(h.speculate ? [['drafting', fmt.pct((h.stats || {}).accept_rate, 0),
+      `${fmt.int((h.stats || {}).drafted)} guessed ${h.speculate} at a time, accepted`]] : []),
   ].map(([label, value, note]) => `<div class="tile"><div class="tile-label">${label}</div>`
     + `<div class="tile-value">${value}</div><div class="tile-note">${escHtml(note)}</div></div>`).join('');
   $('#serve-tiles').innerHTML = tiles;
@@ -1109,6 +1111,7 @@ export function wireServe() {
     checkpoint: $('#serve-ckpt').value || undefined,
     port: Number($('#serve-port').value) || undefined,
     max_batch: Number($('#serve-batch').value) || undefined,
+    speculate: Number($('#serve-spec').value) || undefined,
   }), 'Server starting'));
   $('#btn-serve-stop').addEventListener('click', () => act(() => post('/api/serve/stop', {}),
     'Server stopped'));

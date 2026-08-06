@@ -102,7 +102,8 @@ class ServeJobs:
 
     # ---- writing -------------------------------------------------------------------------
     def start(self, checkpoint: str | None = None, port: int | None = None,
-              max_batch: int | None = None, device: str | None = None) -> dict:
+              max_batch: int | None = None, device: str | None = None,
+              speculate: int | None = None) -> dict:
         if self._pid():
             raise RunError("a server is already running — stop it first.")
         ckpt = (checkpoint or "small-code").strip()
@@ -115,7 +116,7 @@ class ServeJobs:
         if not script.exists():
             raise RunError(f"{script} is missing")
         env = {**os.environ, "PORT": str(port or DEFAULT_PORT),
-               "MAX_BATCH": str(max_batch or 32)}
+               "MAX_BATCH": str(max_batch or 32), "SPECULATE": str(speculate or 0)}
         if device and device != "auto":
             env["DEVICE"] = device
         self.dir.mkdir(parents=True, exist_ok=True)

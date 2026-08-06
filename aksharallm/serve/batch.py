@@ -45,6 +45,7 @@ import torch
 import torch.nn.functional as F
 
 from ..infer.generate import _filter_logits
+from ..infer.speculative import NgramDrafter, accept_or_correct, next_distribution
 from .paged import BlockPool, LayerView, OutOfBlocks, PagedCache, Sequence
 
 
@@ -71,7 +72,14 @@ class BatchStats:
     admitted: int = 0
     finished: int = 0
     rejected: int = 0               #: admissions deferred because the pool was full
+    drafted: int = 0                #: tokens guessed ahead (0 unless `speculate` is on)
+    accepted: int = 0               #: ...of which the model agreed with
+    cancelled: int = 0              #: clients that hung up before their answer finished
     batch_sizes: list[int] = field(default_factory=list)
+
+    @property
+    def accept_rate(self) -> float:
+        return self.accepted / self.drafted if self.drafted else 0.0
 
     @property
     def mean_batch(self) -> float:
@@ -87,6 +95,8 @@ class BatchStats:
         return {"steps": self.steps, "tokens": self.tokens,
                 "prefill_tokens": self.prefill_tokens, "admitted": self.admitted,
                 "finished": self.finished, "rejected": self.rejected,
+                "cancelled": self.cancelled, "drafted": self.drafted,
+                "accepted": self.accepted, "accept_rate": self.accept_rate,
                 "mean_batch": self.mean_batch, "tokens_per_step": self.tokens_per_step}
 
 
@@ -113,12 +123,21 @@ class BatchEngine:
     """
 
     def __init__(self, model, pool: BlockPool, max_batch: int = 32,
-                 device: str = "cuda"):
+                 device: str = "cuda", speculate: int = 0, ngram: int = 3):
         self.model = model
         self.model.eval()
         self.cache = PagedCache(pool)
         self.max_batch = max_batch
         self.device = device
+        #: Tokens to guess per sequence per step, by looking the continuation up in that
+        #: sequence's own text (`infer/speculative.py`). 0 is off. It composes with batching
+        #: rather than competing with it: batching gets more *sequences* out of one pass over
+        #: the weights, drafting gets more *tokens* out of one pass per sequence, and the two
+        #: multiply. The ragged step already handles rows that owe different numbers of
+        #: tokens, which is why this costs so little here.
+        self.speculate = speculate
+        self.drafters: dict[int, NgramDrafter] = {}
+        self.ngram = ngram
         self.max_seq_len = model.cfg.max_seq_len
         self.running: list[Sequence] = []
         self.waiting: list[tuple[Sequence, Request]] = []
@@ -197,27 +216,68 @@ class BatchEngine:
             return []
 
         starts = [s.cached for s in seqs]
+        drafts = self._draft(seqs) if self.speculate else [([], []) for _ in seqs]
         lengths = [s.length for s in seqs]
         logits = self._forward(seqs, starts, lengths)
         out: list[tuple[int, int]] = []
         for i, seq in enumerate(seqs):
             req = self.params[seq.id]
-            last = lengths[i] - starts[i] - 1        # this row's final *real* query
-            self.stats.prefill_tokens += last        # everything before it was prompt
-            token = sample_row(logits[i, last], req.temperature, req.top_k, req.top_p)
-            seq.cached = seq.length
-            seq.tokens.append(token)
-            seq.generated += 1
-            self.stats.tokens += 1
-            out.append((seq.id, token))
+            guesses, probs = drafts[i]
+            # The row's last *non-drafted* query: with no drafts this is the final row, and
+            # with g drafts it is g rows earlier — the position that predicts the first guess.
+            last = lengths[i] - starts[i] - 1 - len(guesses)
+            self.stats.prefill_tokens += last
+            base = len(seq.tokens) - len(guesses)    # the sequence without its guesses
 
-            if req.eos_id is not None and token == req.eos_id:
+            accepted: list[int] = []
+            emitted: int | None = None
+            for j, guess in enumerate(guesses):
+                p = self._dist(logits[i, last + j], req)
+                ok, replacement = accept_or_correct(p, probs[j].to(p.device), guess)
+                if ok:
+                    accepted.append(guess)
+                    continue
+                emitted = replacement
+                break
+            if emitted is None:
+                # Every guess survived (or there were none), so the row after the last one is
+                # already computed and its token is free.
+                emitted = sample_row(logits[i, last + len(guesses)], req.temperature,
+                                     req.top_k, req.top_p)
+            self.stats.drafted += len(guesses)
+            self.stats.accepted += len(accepted)
+
+            # A round can emit several tokens at once, so both endings have to be honoured
+            # *inside* it: everything after an EOS is discarded, and so is anything past the
+            # caller's budget. Without this a request for 16 tokens gets 17 whenever the last
+            # round happened to accept two — output that is correct token for token and one
+            # token too long, which is the sort of bug a diff finds and a reader does not.
+            produced = accepted + [emitted]
+            if req.eos_id is not None and req.eos_id in produced:
+                produced = produced[:produced.index(req.eos_id) + 1]
+            room = max(0, seq.max_new_tokens - seq.generated)
+            produced = produced[:room]
+
+            # Keep what survived, drop the rest. The accepted guesses' keys and values were
+            # written during this very forward and are correct *because* the prefix was; the
+            # rejected ones sit past `cached`, where `gather` never looks, and are overwritten
+            # by the next step. That is paging paying off: no rewind, no copy, one integer.
+            kept_cached = min(base + len(accepted), base + len(produced))
+            seq.tokens = seq.tokens[:base] + produced
+            seq.cached = kept_cached
+            seq.generated += len(produced)
+            self.stats.tokens += len(produced)
+            for token in produced:
+                out.append((seq.id, token))
+
+            eos = req.eos_id is not None and req.eos_id in produced
+            if eos:
                 self._finish(seq, "stop")
             elif seq.generated >= seq.max_new_tokens or seq.length >= self.max_seq_len:
                 self._finish(seq, "length")
             else:
                 try:
-                    self.cache.reserve(seq, extra=1)
+                    self.cache.reserve(seq, extra=1 + self.speculate)
                 except OutOfBlocks:
                     # The pool filled while this sequence was mid-answer. Ending it cleanly
                     # and saying so beats corrupting it or dying: the caller gets its tokens
@@ -226,6 +286,35 @@ class BatchEngine:
 
         self.stats.steps += 1
         self.stats.batch_sizes.append(len(seqs))
+        return out
+
+    def _dist(self, row: torch.Tensor, req: Request) -> torch.Tensor:
+        """The distribution this request would sample from — the same one `sample_row` uses.
+
+        Acceptance compares the target's *sampled* distribution with the draft's, so it has to
+        be built the same way here or the output stops being the model's.
+        """
+        return next_distribution(row, set(), req.temperature, req.top_k, req.top_p, 1.0)
+
+    def _draft(self, seqs: list[Sequence]) -> list[tuple[list[int], list[torch.Tensor]]]:
+        """Guess the next few tokens of every sequence, and append them to be verified.
+
+        Per sequence, because a batch is unrelated conversations and a lookup in one of them
+        says nothing about another. The guesses go straight onto `seq.tokens`, which is what
+        makes the existing ragged step verify them with no special case: a row that owes four
+        guesses looks exactly like a row that owes four prompt tokens.
+        """
+        out = []
+        for seq in seqs:
+            drafter = self.drafters.get(seq.id)
+            if drafter is None:
+                drafter = self.drafters[seq.id] = NgramDrafter(
+                    self.model.cfg.vocab_size, n=self.ngram, device=self.device)
+            room = min(self.speculate, self.max_seq_len - seq.length - 1)
+            guesses, probs = drafter.propose(seq.tokens, max(0, room), None) if room > 0 \
+                else ([], [])
+            seq.tokens.extend(guesses)
+            out.append((guesses, probs))
         return out
 
     def _forward(self, seqs: list[Sequence], starts: list[int],
@@ -280,12 +369,41 @@ class BatchEngine:
         self.cache.free(seq)
         self.running = [s for s in self.running if s is not seq]
         self.stats.finished += 1
+        if reason == "cancelled":
+            self.stats.cancelled += 1
         self._just_finished.append(seq)
+        self.drafters.pop(seq.id, None)
 
     def take_finished(self) -> list[Sequence]:
         """Sequences that ended since the last call, and clear the list."""
         out, self._just_finished = self._just_finished, []
         return out
+
+    def cancel(self, seq_id: int) -> bool:
+        """Stop a sequence and hand its memory back now. Returns whether it found one.
+
+        A client that closes its connection mid-answer has stopped caring about the rest, and
+        every further token it is sent costs a slot in the batch and blocks in the pool that a
+        waiting request could have had. Before this existed such a sequence ran to its full
+        `max_tokens` into a socket nobody was reading — which is *safe* and quietly halves the
+        throughput of a busy server.
+
+        Cancelling from the queue is just as important as cancelling from the batch: a request
+        that waited for a slot and was abandoned while waiting should never be admitted at all.
+        """
+        for seq in self.running:
+            if seq.id == seq_id:
+                self._finish(seq, "cancelled")
+                return True
+        for i, (seq, _req) in enumerate(self.waiting):
+            if seq.id == seq_id:
+                self.waiting.pop(i)
+                seq.finished = True
+                seq.finish_reason = "cancelled"
+                self._just_finished.append(seq)
+                self.stats.cancelled += 1
+                return True
+        return False
 
     # ---- driving it -------------------------------------------------------------------------
     @property

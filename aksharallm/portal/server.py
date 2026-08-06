@@ -270,7 +270,8 @@ class Handler(BaseHTTPRequestHandler):
                         checkpoint=str(data.get("checkpoint") or "") or None,
                         port=self._int(data, "port"),
                         max_batch=self._int(data, "max_batch"),
-                        device=str(data.get("device") or "") or None))
+                        device=str(data.get("device") or "") or None,
+                        speculate=self._int(data, "speculate")))
                 if parts[2] == "stop":
                     return self._json(self.serving.stop())
             # looking inside: /api/interp/<lens|attn|patch>. POSTs because they run the
@@ -290,6 +291,10 @@ class Handler(BaseHTTPRequestHandler):
                         ckpt, str(data.get("prompt") or ""),
                         layer=int(data.get("layer") or 0),
                         head=None if head is None else int(head)))
+                if parts[2] == "heads":
+                    return self._json(self.interp.heads(
+                        ckpt, str(data.get("clean") or ""), str(data.get("corrupt") or ""),
+                        str(data.get("answer") or ""), str(data.get("other") or "")))
                 if parts[2] == "patch":
                     return self._json(self.interp.patch(
                         ckpt, str(data.get("clean") or ""), str(data.get("corrupt") or ""),
