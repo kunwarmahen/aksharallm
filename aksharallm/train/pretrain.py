@@ -347,6 +347,8 @@ def main():
                     last_step=cfg.train.max_steps - 1, steps=0,
                     elapsed=time.time() - run_t0, final_val_loss=best_val)
         logf.close()
+        # The run is complete (this launch found nothing left to do), so a report is exactly
+        # what the caller wants — and rewriting it is free.
         report.write_quietly(out_dir, run=cfg.name)
         return
 
@@ -510,10 +512,12 @@ def main():
                   f"{fmt_dur(time.time() - run_t0)}, finished {datetime.now():%Y-%m-%d %H:%M:%S}")
             print(f"[stop] resume with the same command "
                   f"(resume:auto picks up step {step + 1}).")
-            # Written on every clean exit, not only on the last one: a run trained over
-            # evenings is never "finished" until it is, and the report says which of the two
-            # this is. It is derived from the log, so rewriting it costs a file read.
-            report.write_quietly(out_dir, run=cfg.name)
+            # No report here, deliberately (user's call, 2026-08-05). A run trained over
+            # evenings stops dozens of times, and a report rewritten after every session is
+            # a file that always says "stopped short" — it belongs at the end, when it can
+            # describe the whole run. One is available on demand at any point:
+            print(f"[stop] a report of the run so far: "
+                  f"python -m aksharallm.train.report {cfg.name}")
             return
 
     # final
@@ -531,6 +535,8 @@ def main():
     print(f"ran {cfg.train.max_steps - start_step} steps in {fmt_dur(time.time() - run_t0)}, "
           f"finished {datetime.now():%Y-%m-%d %H:%M:%S}")
     print(f"checkpoints in {out_dir}")
+    # The end of the budget: the one moment a report can describe the whole run rather than
+    # the evening that just ended. Stops do not write one — see the stop path above.
     report.write_quietly(out_dir, run=cfg.name)
 
 

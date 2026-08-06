@@ -109,6 +109,7 @@ grep is one line away from the prose. `tests/test_docs.py` fails if either point
 | 12 | [Evaluation](docs/12-eval.md) | Is the model actually any good? MMLU/ARC/HellaSwag/PIQA scored by log-likelihood, GSM8K, HumanEval executed for real, an LLM-judge — and why 25% on MMLU is not a failure |
 | 15 | [The learning path](docs/15-learning-path.md) | The repo as a course: thirteen lessons that each end in breaking real code and watching a real test go red — and why a lesson only counts once the check has been red *and then* green |
 | 14 | [Mixture of experts](docs/14-moe.md) | More parameters than you compute with: a router, N experts, top-k per token — the load-balancing loss, why upcycling is an identity at init, and the collapse that is invisible in the loss curve |
+| 16 | [Serving](docs/16-serving.md) | Turning a checkpoint into something you use: a paged KV cache so memory is bounded by what is *used*, continuous batching so thirty conversations share one pass over the weights (50 → 272 tok/s), and an OpenAI-shaped API so existing clients work |
 | 13 | [Synthetic data](docs/13-synthetic-data.md) | Making the training set with a local teacher instead of downloading it: a seed grid instead of a temperature, tests that are **executed twice**, near-duplicate detection, and why the rejection tally is the quality signal |
 
 ---
@@ -189,6 +190,10 @@ aksharallm/
 │   │   ├── judge.py          twelve open prompts graded 1-5 by a local Ollama model
 │   │   ├── runner.py         run suites against a checkpoint; one JSON per evaluation
 │   │   └── report.py         every result ever, and the trend across training steps
+│   ├── serve/            an HTTP server: paged KV cache, continuous batching — docs/16
+│   │   ├── paged.py          blocks, block tables, reference-counted prefix sharing
+│   │   ├── batch.py          the ragged step: prefill and decode together, admission control
+│   │   └── server.py         OpenAI-shaped endpoints, SSE streaming, /health
 │   └── infer/            talking to a checkpoint, and judging what comes back
 │       ├── generate.py       KV-cache sampling loop (streaming + one-shot)
 │       ├── speculative.py    guess several tokens, check them in one pass; same text,
@@ -509,6 +514,43 @@ number to match a plug meter rather than the card alone — and every run gains 
 per million tokens, and a **coverage** figure saying how much of the run was actually
 recorded. With no rate set it shows kilowatt-hours and says so. Portal: the **Cost** panel.
 
+### Serving it: many conversations at once
+
+```bash
+python -m aksharallm.serve small-code            # http://127.0.0.1:8770/v1
+curl -s http://127.0.0.1:8770/v1/completions \
+  -d '{"prompt": "def quicksort(arr):", "max_tokens": 64}'
+```
+
+A forward pass reads 600 MB of weights and does 0.6 GFLOPs with them — on a card that can do
+71 TFLOPs, decoding spends 98% of its time waiting for memory. Run thirty sequences through
+that same pass and the weights are read *once*. Measured on the 300M: **50 tok/s one at a
+time, 134 batched 8, 236 batched 32, 272 batched 64.** No single reply gets faster; they all
+fit in the time one used to take, which is the trade a server should make and a terminal
+should not.
+
+Holding thirty conversations needs the other half: keys and values live in **pages**. Blocks
+of 16 tokens come from one pool and a sequence holds a list of block ids, so waste is bounded
+by one block per sequence instead of by the context window, and two conversations that begin
+with the same system prompt can *share* the blocks holding it, reference-counted. Requests
+join the batch mid-flight and leave on the step they finish, so a short question behind a long
+answer waits for a slot rather than for the answer.
+
+The API is OpenAI-shaped — `/v1/models`, `/v1/completions`, `/v1/chat/completions`, with
+streaming — so tools you did not write already speak it, plus `/health` for the device, the
+queue and the KV pool. And the training run still owns the card: if a run is training the
+server loads on the CPU and says so, the same policy the Playground uses.
+
+Three traps, all of which produce fluent, plausible, *wrong* text rather than an error: RoPE
+positions are per row once a batch is unrelated conversations; the mask has to stop a query
+seeing both the future and past the end of its own row; and a padded row with an all-False
+mask makes `softmax` return NaN, which then poisons every other sequence through the shared
+weights. There was a fourth, and it is the best bug of the build — the pool was viewed with
+`transpose().reshape()`, **which returns a copy**, so every write landed in a temporary and
+the cache stayed full of zeros. The model attended to nothing but the token it had just been
+given and repeated it forever, which reads exactly like an undertrained model.
+[docs/16](docs/16-serving.md) has the whole thing.
+
 ### Making it faster: speculative decoding
 
 ```bash
@@ -552,9 +594,10 @@ python -m aksharallm.train.report small-code            # write checkpoints/<run
 python -m aksharallm.train.report small-code --stdout   # or just print it
 ```
 
-Every trainer writes this when it exits — not only when the budget is spent, because a run
-trained over evenings is not finished until it is, and the report says which of the two this
-was. It is one page: steps and tokens against the budget, best validation loss and its
+A run writes this once, when it finishes its budget — not after every session, because a base
+model is trained over dozens of evenings and a report rewritten each night would permanently
+read "stopped short". You can generate one for a run in any state at any time, which is what
+the command above does. It is one page: steps and tokens against the budget, best validation loss and its
 perplexity, a sparkline of the whole curve, every session with the reason it ended,
 throughput, energy, benchmark scores, and the checkpoints on disk. Nothing in it is stored
 anywhere else — it is recomputed from the log each time, which is why the portal's **Report**

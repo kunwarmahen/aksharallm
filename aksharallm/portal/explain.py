@@ -92,7 +92,9 @@ DOC_HINTS = (
     ("aksharallm/lora", "docs/11-lora.md"),
     ("aksharallm/synth", "docs/13-synthetic-data.md"),
     ("aksharallm/learn", "docs/15-learning-path.md"),
+    ("aksharallm/infer/speculative", "docs/06-inference.md"),
     ("aksharallm/infer", "docs/06-inference.md"),
+    ("aksharallm/serve", "docs/16-serving.md"),
     ("aksharallm/portal/explain", "docs/07-scaling.md"),
     ("aksharallm/portal/evals", "docs/12-eval.md"),
     ("aksharallm/portal/quantize", "docs/10-quantization.md"),
@@ -123,7 +125,8 @@ Layout:
                          and post-training: SFT, DPO, GRPO
   aksharallm/eval/       the benchmark harness: MMLU, ARC, HellaSwag, PIQA, GSM8K,
                          HumanEval, an LLM-judge, perplexity
-  aksharallm/infer/      KV-cache generation and sampling
+  aksharallm/infer/      KV-cache generation, sampling, speculative decoding
+  aksharallm/serve/      the HTTP server: paged KV blocks, continuous batching
   aksharallm/quant/      int8/int4/NF4 from scratch: RTN, GPTQ, AWQ, QAT, a Triton kernel
   aksharallm/lora/       LoRA and QLoRA adapters from scratch
   aksharallm/synth/      generating training data with a local teacher, and checking it
@@ -131,7 +134,7 @@ Layout:
   aksharallm/portal/     this local web portal (stdlib HTTP server, no dependencies)
   configs/*.yaml         one YAML per run; a run = that file plus `-o key=value` overrides
   scripts/*.sh           the launchers a human would type
-  docs/00-15             the human-written deep dives; each ends with the order to read
+  docs/00-16             the human-written deep dives; each ends with the order to read
                          the files it covers, and each module names its chapter
 
 Conventions that explain a lot of the code:

@@ -76,10 +76,21 @@ def _rotate_half(x: torch.Tensor) -> torch.Tensor:
 
 
 def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-    """x: (B, n_heads, T, D). cos/sin: (T, D) already sliced to this window's positions."""
-    cos = cos[None, None, :, :].to(x.dtype)
-    sin = sin[None, None, :, :].to(x.dtype)
-    return x * cos + _rotate_half(x) * sin
+    """x: (B, n_heads, T, D). cos/sin: (T, D), or (B, T, D) when positions differ per row.
+
+    The two shapes are the two ways this model is used. Training and single-sequence
+    generation share one window of positions across the batch — every row is at the same
+    place — so `(T, D)` broadcasts and costs nothing. **Serving does not**: a batch there is
+    several unrelated conversations, one on its 12th token and another on its 400th, so each
+    row carries its own positions and RoPE has to rotate them by different angles. Getting
+    that wrong is silent: every sequence still attends to the right keys, they are just
+    labelled with someone else's position.
+    """
+    if cos.dim() == 3:
+        cos, sin = cos[:, None, :, :], sin[:, None, :, :]
+    else:
+        cos, sin = cos[None, None, :, :], sin[None, None, :, :]
+    return x * cos.to(x.dtype) + _rotate_half(x) * sin.to(x.dtype)
 
 
 class KVCache:
@@ -301,6 +312,8 @@ class Transformer(nn.Module):
         caches: list[KVCache] | None = None,
         loss_mask: torch.Tensor | None = None,
         full_logits: bool = False,
+        positions: torch.Tensor | None = None,
+        attn_mask: torch.Tensor | None = None,
     ):
         """idx: (B, T) int64 token ids.
         targets: (B, T) int64, -100 to ignore. If given, returns (logits, loss).
@@ -317,20 +330,28 @@ class Transformer(nn.Module):
         """
         B, T = idx.shape
         start = caches[0].pos if caches is not None else 0
-        assert start + T <= self.cfg.max_seq_len, (
-            f"sequence position {start + T} exceeds max_seq_len {self.cfg.max_seq_len}"
-        )
 
-        cos = self.rope_cos[start : start + T]
-        sin = self.rope_sin[start : start + T]
+        # `positions` and `attn_mask` are the serving path: a batch of unrelated sequences at
+        # different lengths, whose keys and values live in a paged pool rather than one
+        # contiguous block. The caller knows where each row is and what it may attend to, so
+        # it says. Everything else — training, single-sequence generation — leaves both None
+        # and gets the ordinary shared-window behaviour below, unchanged.
+        if positions is None:
+            assert start + T <= self.cfg.max_seq_len, (
+                f"sequence position {start + T} exceeds max_seq_len {self.cfg.max_seq_len}"
+            )
+            cos = self.rope_cos[start : start + T]
+            sin = self.rope_sin[start : start + T]
+        else:
+            cos = self.rope_cos[positions]        # (B, T, head_dim)
+            sin = self.rope_sin[positions]
 
         # Several tokens against a WARM cache: build the mask once here rather than in each
         # of the 24 attention layers. Query j is at absolute position start+j and may see
         # every key up to and including it — the whole cached prefix, plus the part of this
         # block that precedes it. `start > 0` is the point: a prefill into an empty cache is
         # already aligned, needs no mask, and keeps the faster kernel.
-        attn_mask = None
-        if caches is not None and T > 1 and start > 0:
+        if attn_mask is None and caches is not None and T > 1 and start > 0:
             q_pos = torch.arange(start, start + T, device=idx.device)[:, None]
             k_pos = torch.arange(start + T, device=idx.device)[None, :]
             attn_mask = k_pos <= q_pos

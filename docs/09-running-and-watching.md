@@ -493,10 +493,13 @@ python -m aksharallm.portal.runs delete  tiny-moe  # prompts for the name before
 
 A finished run has told you a great deal and summarised none of it: forty thousand step
 lines, a dozen session markers, an energy ledger and a folder of benchmark JSON. Reading
-that is a skill, and a run should not require one. So **every trainer writes
-`checkpoints/<run>/report.md` when it exits** — not only when the budget is spent, because a
-run trained over evenings is not finished until it is, and the report says which of the two
-this was.
+that is a skill, and a run should not require one. So **a run that finishes its budget writes
+`checkpoints/<run>/report.md`** — SFT, DPO and GRPO too, each at the end of its own run.
+
+**Once, at the end — not after every session.** A base model is trained over dozens of
+evenings, and a report rewritten each night would permanently read "stopped short" and
+describe one session instead of the run. Stopping for the night prints the command instead,
+because a report is available for a run in *any* state, at any time:
 
 ```mermaid
 flowchart LR

@@ -2,12 +2,18 @@
 
 A finished run leaves a lot of evidence behind — 40,000 step lines, a dozen session markers,
 an energy ledger, a folder of benchmark JSON — and no single place that says *how it went*.
-Reading that evidence is a skill; a run should not require one. So when a trainer exits it
-writes `<out_dir>/report.md`: the budget it spent, what the loss did, how fast it ran, what
-it cost in electricity, what it scored, and — the part worth the module — **the things worth
-knowing**, computed rather than eyeballed: crashed sessions, loss spikes, a validation loss
-that stopped improving two thirds of the way in, a throughput regression between sessions,
-an expert that died.
+Reading that evidence is a skill; a run should not require one. So when a run **finishes its
+budget** it writes `<out_dir>/report.md`: the budget it spent, what the loss did, how fast it
+ran, what it cost in electricity, what it scored, and — the part worth the module — **the
+things worth knowing**, computed rather than eyeballed: crashed sessions, loss spikes, a
+validation loss that stopped improving two thirds of the way in, a throughput regression
+between sessions, an expert that died.
+
+**At the end, not after every session** (the user's call, and the right one): a base model is
+trained over dozens of evenings, and a report rewritten after each of them is a file that
+permanently reads "stopped short" and describes one night instead of the run. Stopping for the
+night prints the command instead. `python -m aksharallm.train.report <run>` produces one for a
+run in any state, at any time, and the portal's Report panel builds it live.
 
 Three rules it is built on:
 
