@@ -121,17 +121,19 @@ class LongContext:
         if method == "none":
             return "No scaling — the model falls off a cliff one token past its trained window."
         if method == "linear":
-            return ("Simple, and it damages short contexts: on our 300M it doubled the "
-                    "in-window loss (0.99 → 1.83) to buy the range.")
+            return ("Simple, and it damages short contexts badly: on our 300M it took the "
+                    "in-window loss from 2.356 to 3.035 at 2x, and to 4.379 at 4x.")
         if method == "ntk":
             return ("Best value up to about 2x — on our 300M, doubling the context cost "
-                    "nothing measurable (0.989 against a 0.990 baseline). It runs out of "
-                    "room beyond that." if factor <= 2 else
-                    "Past 2x, NTK's tilt runs out of room; our 13.8M at 4x preferred YaRN "
-                    "(1.512) to NTK (2.366). Try YaRN.")
+                    "0.009 nats in-window (2.356 → 2.365). Effectively free."
+                    if factor <= 2 else
+                    "Past ~3.5x NTK's tilt runs out and grows a cliff of its own — on our "
+                    "300M at 4x, at position 3,584 (loss 2.895 against YaRN's 2.464). "
+                    "Try YaRN.")
         if method == "yarn":
-            return ("The one that holds up furthest: at 4x on our 13.8M it was the only "
-                    "method still close to its in-window baseline.")
+            return ("The one that holds up furthest. Our 300M extended 4x this way scores "
+                    "92.5% on the needle test at 4,096 tokens — four times the window its "
+                    "weights were trained on, with nothing retrained.")
         return ("Recomputes the factor from each input's length, so prompts inside the "
                 "original window are bit-for-bit unscaled. Stateful — read doc 18 first.")
 

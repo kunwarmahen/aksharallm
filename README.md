@@ -348,18 +348,24 @@ no parameters: extending a trained model's context is arithmetic, not training. 
 about token 4,000 and it does not get vaguer, it falls off a cliff — position is encoded as a
 rotation *angle*, and past the trained window it is being handed angles it has never seen.
 Three one-line fixes exist, and we measured all of them on our own checkpoints. On the 300M,
-**doubling the context with NTK-aware scaling cost nothing measurable** (loss 0.989 against
-an in-window baseline of 0.990); linear interpolation, the obvious approach, nearly doubled
-the in-window loss to buy the same range. At 4x the methods separate and YaRN is the only one
-still close to baseline.
+**doubling the context with NTK-aware scaling cost nine thousandths of a nat** — in-window
+loss 2.356 → 2.365 — while linear interpolation, the obvious approach, took it to 3.035 to
+buy the same range. At 4x the methods separate: NTK grows a cliff of its own at 3,584 and
+YaRN holds all the way out.
 
-The part worth keeping is the measurement. Perplexity by position says whether the model is
-still *fluent* out there; a from-scratch needle-in-a-haystack says whether it can still
-*retrieve*. They disagree, sharply: a sliding window scores the best perplexity of anything
-we tried and is structurally blind past its window. Our 13.8M scores 16.7% ± 10.8% on the
-needle against a 25% chance line — nothing — and publishing that is the point. Scaling makes
-distant positions legible; being able to use them is a capability, and capabilities come from
-training.
+And it is not just perplexity. Extended 4x with YaRN, the 300M finds a fact hidden anywhere
+in a 4,096-token haystack **92.5% of the time against a 25% chance line** — four times the
+window its weights ever saw, with no fine-tune. The grid even reproduces the published shape:
+a needle near the end is found every time, one at the very front of a long context drops to
+33%.
+
+The part worth keeping is the measurement, because the two halves disagree. Perplexity by
+position says whether the model is still *fluent* out there; the needle test says whether it
+can still *retrieve*. A sliding window scores the best perplexity of anything we tried and is
+structurally blind past its window. And our 13.8M, extended identically, sits at chance on the
+needle — same legible positions, no retrieval, because it never learned any. Scaling makes
+distant positions legible; using them is a capability, and capabilities come from training.
+Both numbers are published rather than only the good one.
 
 The FlashAttention kernel is the one with the most surprising answer. Forward and backward,
 in Triton, from the online-softmax rescale up — and it reaches **parity with PyTorch's SDPA

@@ -5,6 +5,9 @@
 > specific way, the three one-line fixes for it, and how to tell which of them actually
 > worked. Everything here is measured on our own checkpoints, and none of it required a
 > single minute of retraining.
+>
+> The short version: **one config line takes it to 4,096 tokens**, where it still finds a fact
+> hidden in the text **92.5% of the time** against a 25% chance line — and no weight changes.
 
 ---
 
@@ -132,23 +135,42 @@ pay nothing. Reach for this when one checkpoint has to serve both.
 `python -m aksharallm.longctx sweep <ckpt>` runs every method over the same windows — same
 weights, same data, one variable.
 
-### The 300M, trained on 1,024, measured at 2,048
+### The 300M, trained on 1,024
+
+**At 2x** (measured over 2,048 tokens, 32 windows):
 
 | method | overall loss | inside the window | past it | cliff |
 |---|---|---|---|---|
-| **none** | 1.984 | 0.990 | 2.979 | **at 1,536** |
-| linear | 1.926 | **1.832** ← ruined | 2.019 | none |
-| **ntk** | **0.989** | 0.995 | 0.984 | none |
-| **yarn** | **0.989** | 1.010 | 0.968 | none |
+| **none** | 3.264 | 2.356 | 4.173 | **at 1,280** |
+| linear | 3.004 | **3.035** ← ruined | 2.974 | none |
+| **ntk** | **2.323** | 2.365 | 2.282 | none |
+| **yarn** | **2.310** | 2.376 | 2.245 | none |
 
-Read the middle column twice. `linear` doubled the in-window loss — 0.990 → 1.832 — to buy
-its range. That is the local-resolution cost, and it is not subtle.
+The in-window baseline is **2.356**. NTK lands at 2.365 inside the window — **nine
+thousandths of a nat**, which is nothing — and 2.282 *past* it. Doubling this model's context
+cost effectively nothing: no fine-tune, no weights touched, one config line.
 
-And read the NTK row twice too, because it is the headline: **overall loss 0.989, against an
-in-window baseline of 0.990.** Doubling this model's context cost nothing measurable. No
-fine-tune, no weights touched, one config line.
+(Its *overall* loss of 2.323 sitting **below** the in-window baseline is not an error, and it
+is worth understanding. Loss normally improves with position, because later tokens have more
+context to condition on. A working extension keeps that slope going — which is what "it is
+actually using the extra room" looks like as a number.)
 
-### The 13.8M, trained on 512 — where it starts to hurt
+Now read the `linear` row. It took the in-window loss from 2.356 to **3.035** to buy the same
+range. That is the local-resolution cost, and it is not subtle.
+
+**At 4x** (measured over 4,096 tokens, 24 windows) the methods separate hard:
+
+| method | overall loss | inside the window | past it | cliff |
+|---|---|---|---|---|
+| none | 4.740 | 2.578 | 5.461 | at 1,536 |
+| linear | 4.275 | **4.379** | 4.241 | none |
+| ntk | 2.895 | 2.623 | 2.986 | **at 3,584** |
+| **yarn** | **2.464** | 2.650 | **2.402** | none |
+
+**NTK grows a cliff of its own at 3,584.** Its tilt buys roughly 3.5x and then runs out.
+YaRN's per-pair ramp does not, and holds 2.402 all the way to the end.
+
+### The 13.8M, trained on 512 — the same shape, one tenth the size
 
 | | 2x (measured at 1,024) | 4x (measured at 2,048) |
 |---|---|---|
@@ -157,13 +179,17 @@ fine-tune, no weights touched, one config line.
 | ntk | 1.526 | 2.366 |
 | **yarn** | **1.372** | **1.512** |
 
-At 2x everything works and the methods are within a whisker of each other. At 4x they
-separate hard, and **YaRN is the only one still close to the in-window baseline** — which is
-exactly the published result, reproduced from scratch on a model small enough to run in a few
-minutes. NTK, notably, *loses* to linear at 4x here while beating it at 2x: NTK's tilt runs
-out of room before YaRN's per-pair ramp does.
+Same story at a scale that runs in a couple of minutes: everything works at 2x, and at 4x NTK
+*loses* to linear while YaRN stays close to its baseline.
 
-**Rule of thumb from our own numbers: NTK to 2x, YaRN beyond it.**
+**Rule of thumb, now confirmed at both scales: NTK to 2x, YaRN beyond it.**
+
+> **A methodology warning, from getting this wrong in this very chapter.** The first version
+> of the 300M table was run on the CPU with **two** windows and reported an in-window baseline
+> of 0.990 where 32 windows say **2.356**. Two windows of 2,048 tokens is four thousand tokens
+> of one or two documents; land on something repetitive and the whole curve moves by more than
+> a nat. Every *conclusion* survived the correction and not one *number* did. Use at least 16
+> windows before quoting anything.
 
 ---
 
@@ -244,7 +270,7 @@ flowchart TB
     Q["does the long context work?"] --> A["1. is it still fluent out there?<br/><b>curve.py</b> — loss by position"]
     Q --> B["2. can it still <i>retrieve</i> from out there?<br/><b>haystack.py</b> — needle in a haystack"]
     A --> AR["fixed by RoPE scaling.<br/>A sliding window scores<br/>well here while being blind."]
-    B --> BR["not fixed by anything here.<br/>Needs a model that learned<br/>to use long range."]
+    B --> BR["not fixed by anything here.<br/>Needs a model that learned<br/>to use long range —<br/>our 300M has, our 13.8M has not."]
     style AR fill:#1d3557,color:#fff
     style BR fill:#9d0208,color:#fff
 ```
@@ -264,11 +290,40 @@ wins — the same machinery as our ARC and PIQA suites, exactly reproducible, an
 model far too small to answer out loud. And the filler is the model's **own validation data**,
 so a failure means "could not retrieve", not "was confused by our noise".
 
-Our 13.8M scores **16.7% ± 10.8% against a 25% chance line** — i.e. nothing, at every length
-and depth. That is not a broken test, it is the answer: a 13.8M TinyStories model never
-learned to retrieve from far away, and no amount of RoPE arithmetic will teach it. Scaling
-makes the positions *legible*; using them is a capability, and capabilities come from
-training. Publishing that number is the point of building the harness.
+### The 300M, extended to 4x with YaRN — and it works
+
+6 trials per cell, four-way choice, chance 25%:
+
+| needle depth | 512 | 1,024 | 2,048 | 4,096 |
+|---|---|---|---|---|
+| 0% (very front) | 100% | 100% | 83% | **33%** |
+| 25% | 100% | 100% | 83% | 83% |
+| 50% | 100% | 83% | 100% | 83% |
+| 75% | 100% | 100% | 100% | 100% |
+| 100% (very end) | 100% | 100% | 100% | 100% |
+
+**Overall 92.5% ± 2.4% against a 25% chance line**, at lengths up to **four times the window
+the weights were ever trained on**, with no fine-tune and no weights changed. This is the
+result that justifies the whole chapter: the perplexity curve said the positions had become
+legible, and this says the model can actually *use* them.
+
+The grid also has a shape, and it is the published one. Read the last two rows: a needle near
+the **end** is found every single time at every length. Read the first row: a needle at the
+very **front** of a 4,096-token context drops to 33%, barely above chance. Information nearest
+the question is easiest, information furthest from it is hardest, and the gap opens up exactly
+as the context gets long. Nothing here was tuned to produce that.
+
+### The 13.8M, for contrast — at chance
+
+The same test on the 13.8M scores **16.7% ± 10.8% against 25%** — i.e. nothing, at every
+length and depth, and the CLI says "NOT distinguishable from chance" rather than printing a
+number that reads like partial credit.
+
+That is not a broken test, it is the answer, and the contrast with the 300M is the lesson.
+Both models have legible positions after scaling. Only one of them ever learned to retrieve
+from far away. **Scaling makes the positions legible; using them is a capability, and
+capabilities come from training** — which is why both numbers are published rather than only
+the good one.
 
 ---
 
@@ -323,8 +378,9 @@ model:
 
 **No fine-tune.** Every number here is a training-free extension, which is the interesting
 regime and the one that fits an evening. A short fine-tune at the extended length is the
-standard next step and would mostly help the *retrieval* number, which is the one currently
-at chance.
+standard next step; on this model the place it would show is the top-left of the needle grid,
+where a needle at the very front of a 4,096-token context is still only found a third of the
+time.
 
 **No block-skipping for the sliding window in the Triton kernel.** Our own
 [FlashAttention kernel](03-model.md) understands `window` and `sinks` — passed as two

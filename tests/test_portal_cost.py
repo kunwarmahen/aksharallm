@@ -12,7 +12,7 @@ silently wrong. Every path here either measures energy or refuses to, and says w
 from __future__ import annotations
 
 import json
-import time
+from datetime import datetime
 
 import pytest
 
@@ -20,6 +20,13 @@ from aksharallm.portal import cost as costmod
 from aksharallm.portal.cost import CostConfig, Ledger, integrate
 
 T0 = 1_785_000_000.0
+
+#: Local noon on a fixed date. Tests that assert anything about "today" anchor here rather
+#: than to `time.time()` or to T0: `report` buckets by *local* midnight, so a window that
+#: straddles one splits in two. Against the wall clock that broke for ten minutes after every
+#: midnight; against T0 (07:50 UTC) it would break in any UTC-8 timezone. Naive `datetime` is
+#: interpreted as local time, so noon is noon everywhere.
+NOON = datetime(2026, 7, 25, 12, 0).timestamp()
 
 
 def rec(t, power, *, run=None, job=None, index=0, util=98.0):
@@ -213,8 +220,11 @@ def test_broken_yaml_does_not_take_the_panel_down(tmp_path):
 # ---- the report --------------------------------------------------------------------------
 
 def test_report_totals_each_run_and_the_whole_machine(tmp_path):
+    # `NOON`, not `time.time()`: this asserts that "today" accounts for *everything*, which
+    # holds only when the samples and `now` land on the same local day. See NOON's comment
+    # for the two ways that used to be false.
     led = Ledger(tmp_path / "energy.jsonl")
-    now = time.time()
+    now = NOON
     for r in (steady(121, 360.0, start=now - 600, run="small-code")
               + steady(61, 60.0, start=now - 300, job="eval")):
         led.fold(r)
