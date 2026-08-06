@@ -2,9 +2,9 @@
 # Launch a Phase-1-scale experiment run: hours, not days, on data that already exists.
 #
 # scripts/phase2.sh is the launcher for the real base model — it builds 20 GB of tokens and
-# pre-flights for a six-day run. The experiments (mixture of experts today, masked diffusion
-# next) are a different shape: TinyStories is already tokenized, the run is a few hours, and
-# the point is to compare against the dense baseline that already reached val 1.472.
+# pre-flights for a six-day run. The experiments (mixture of experts, masked diffusion) are a
+# different shape: TinyStories is already tokenized, the run is a few hours, and the point is
+# to compare against the dense baseline that already reached val 1.472.
 #
 # It publishes exactly the same contract phase2.sh does — launch.pid / launch.meta while
 # pre-flighting, train.pid / run.meta / sessions.log once training, one log per session with
@@ -12,6 +12,7 @@
 # without knowing which launcher started it.
 #
 #   scripts/experiment.sh tiny-moe          # the MoE experiment (configs/tiny-moe.yaml)
+#   scripts/experiment.sh tiny-diffusion    # the masked diffusion experiment (docs/19)
 #   scripts/experiment.sh tiny              # re-run the dense baseline
 #
 # Env knobs (same names and meanings as phase2.sh):
@@ -173,7 +174,8 @@ if [ "$SKIP_SMOKE" = "1" ] && [ -s "$RUN_DIR/ckpt_last.pt" ]; then
     echo "    SKIP_SMOKE=1 and $RUN_DIR/ckpt_last.pt exists -- skipping (resume of a proven config)"
 else
     [ "$SKIP_SMOKE" = "1" ] && echo "    SKIP_SMOKE=1 ignored: nothing to resume, so this is a first launch."
-    echo "    check: step-0 loss ~9.0, memory stable, and for an MoE run the experts field"
+    echo "    check: step-0 loss ~9.0, memory stable; for an MoE run the experts field,"
+    echo "           for a diffusion run 'masked ~50%' and the objective line in the header"
     $PY -m aksharallm.train.pretrain "$CFG" \
         -o train.max_steps=30 -o train.out_dir=/tmp/aksharallm_smoke -o train.resume=null \
         -o train.eval_every=1000 -o train.log_every=10

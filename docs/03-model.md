@@ -507,7 +507,7 @@ data flow:
 | 1 | [`aksharallm/config.py`](../aksharallm/config.py) | `ModelConfig` — every dimension in the table above, plus `__post_init__`, where `d_ff` gets rounded and `head_dim` is derived |
 | 2 | [`transformer.py`](../aksharallm/model/transformer.py) → `Transformer.forward` | **start here.** Embedding → blocks → final norm → `lm_head`, and the `if targets is None` branch that projects only the last position. Fifteen lines that name everything below |
 | 3 | `Block.forward` | the residual stream in two lines: `x = x + attn(norm(x))`, `x = x + ffn(norm(x))`. Pre-norm — the belt itself is never normalised |
-| 4 | `Attention.forward` | q/k/v projections, `apply_rope`, the cache update, then `F.scaled_dot_product_attention` — or our own kernel, if `attn_impl` says so. The line to read twice is `is_causal = attn_mask is None and T > 1` |
+| 4 | `Attention.forward` | q/k/v projections, `apply_rope`, the cache update, then `F.scaled_dot_product_attention` — or our own kernel, if `attn_impl` says so. The line to read twice is `is_causal = self.causal and attn_mask is None and T > 1`; `self.causal` is False only for the masked diffusion model of [doc 19](19-diffusion.md), and it is the entire architectural difference between the two paradigms |
 | 5 | `build_rope_cache` + `apply_rope` + `_rotate_half` | the geometric frequencies, and the rotation whose dot product depends only on the *distance* |
 | 6 | `RMSNorm.forward` · `SwiGLU.forward` | four lines each. Note the fp32 upcast for the mean-of-squares, and the gate `silu(w1 x) * (w3 x)` |
 | 7 | `KVCache` | preallocated, `update` appends and returns the live prefix. Read it again with [doc 6](06-inference.md) |

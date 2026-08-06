@@ -1,0 +1,87 @@
+# The masked-diffusion experiment, at Phase 1 scale.
+#
+# Identical to configs/tiny.yaml in every field except the four marked below — same data,
+# same tokenizer, same depth and width, same optimiser, same batch, same number of steps,
+# same seed. That is the point: the dense autoregressive run of this config already exists
+# and reached val loss 1.472, so any difference here is the objective and nothing else.
+#
+# The one thing that is NOT comparable is the val number itself. An autoregressive model's
+# val loss is an exact per-token cross-entropy; this one is a Monte-Carlo estimate of an
+# ELBO — an UPPER BOUND on the same quantity. A diffusion run showing 1.9 is not "0.43 worse
+# than the baseline"; it is "at most this bad, by an unknown margin". Read docs/19 before
+# putting the two numbers in one table. What IS comparable is the text, and the two things
+# an autoregressive model cannot do at all: infilling, and choosing how many forward passes
+# to spend.
+#
+#   scripts/experiment.sh tiny-diffusion        (or the portal's Start button)
+#
+# Expect it to be worse than the baseline. Published comparisons put masked diffusion at
+# roughly 3–16x the compute of autoregression for equal quality, because the gradient only
+# reaches the masked positions — at t ~ U(0,1) that is half the sequence on average, where
+# next-token prediction gets a target at every position. This run is here to be understood,
+# not to win.
+
+name: tiny-diffusion
+
+model:
+  # ---- difference 1: room for [MASK] -----------------------------------------------
+  # The tokenizer is untouched — the same 8,192-id tokenizer.json the baseline used, so
+  # both runs see identical text. The MODEL gets one extra embedding row, at an id the
+  # tokenizer can never emit. This is what makes a diffusion checkpoint incompatible with
+  # an autoregressive one: the embedding matrices are different shapes.
+  vocab_size: 8193
+  mask_token_id: 8192     # == the tokenizer's vocab_size, i.e. one past the last real token
+
+  # ---- difference 2: attention runs both ways --------------------------------------
+  # Denoising position i uses the whole sequence, including what comes after it. With this
+  # off, "predict the next token" would be trivially solved by reading it.
+  causal: false
+
+  d_model: 384
+  n_layers: 6
+  n_heads: 6
+  n_kv_heads: 6
+  max_seq_len: 512
+  tie_embeddings: true
+  dropout: 0.0
+
+data:
+  train_bin: data/tinystories/train.bin
+  val_bin: data/tinystories/val.bin
+  tokenizer: data/tinystories/tokenizer.json
+
+# ---- difference 3: the objective's own knobs ---------------------------------------
+diffusion:
+  t_min: 1.0e-3           # smallest mask rate drawn; the loss is weighted by 1/t
+  eval_seed: 20260806     # fixed, so the val curve measures the model and not the draw
+  sample_steps: 32        # denoising steps for the mid-run samples
+
+optim:
+  lr: 1.0e-3
+  min_lr_ratio: 0.1
+  warmup_steps: 200
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/tiny-diffusion
+  batch_size: 48
+  grad_accum: 2           # 48 * 2 * 512 = 49,152 tokens/step — same as the baseline
+  seq_len: 512
+  max_steps: 8000
+  eval_every: 500
+  eval_batches: 40
+  sample_every: 1000
+  ckpt_every: 1000
+  log_every: 20
+  # ---- difference 4 ---------------------------------------------------------------
+  # Off. A mid-run sample runs 32 full forward passes through a model dynamo has compiled
+  # for the training shape, and the recompiles cost more than the compile saves at this
+  # size. Worth revisiting if this is ever run at 300M.
+  compile: false
+  seed: 1337              # the same seed the autoregressive baseline used
+  wandb_project: null
+  resume: auto

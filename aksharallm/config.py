@@ -39,6 +39,21 @@ class ModelConfig:
     #: falls back to SDPA for any shape it does not handle (see `flash.usable`).
     attn_impl: str = "sdpa"
 
+    # ---- which direction attention runs (see docs/19) ----------------------------------
+    #: `True` is a decoder-only language model: token *n* may look at 1..n and no further,
+    #: which is what makes next-token prediction a valid objective at every position at once.
+    #: `False` lets every position see every other one — the setting a **masked diffusion**
+    #: model needs, because it denoises a whole corrupted sequence rather than extending a
+    #: prefix. It is not a knob to try on an autoregressive run: with it off, predicting the
+    #: next token is trivially solved by reading it, and the model learns nothing.
+    causal: bool = True
+    #: The id of the `[MASK]` token, for a diffusion model. Conventionally the LAST id in the
+    #: vocabulary: the tokenizer keeps the ids it always had and the model gets one more row
+    #: in its embedding, so `vocab_size = tokenizer.vocab_size + 1`. It lives in the *model*
+    #: config, not the data config, because a checkpoint has to be able to say what its own
+    #: mask id was — decoding it as an ordinary token would print a random word.
+    mask_token_id: int | None = None
+
     # ---- long context (see docs/18) ----------------------------------------------------
     #: How to stretch RoPE past the window the weights were trained on. `type: none` is the
     #: identity, so a model that has never heard of this is unaffected. Written as a nested
@@ -94,6 +109,22 @@ class ModelConfig:
             raise ValueError(f"attn_sinks must be >= 0, got {self.attn_sinks}")
         if self.attn_sinks and self.attn_window is None:
             raise ValueError("attn_sinks only means something with attn_window set")
+        if not self.causal:
+            # Both of these are causal-shaped ideas. A sliding window is defined here as
+            # "the last w keys" and attention sinks exist because a causal model dumps
+            # leftover attention on the first token it can always see; neither has a
+            # meaning once every position sees every other one. Refuse rather than compute
+            # something that looks like an answer.
+            if self.attn_window is not None:
+                raise ValueError("attn_window is a causal idea; it does not apply with "
+                                 "causal: false (see docs/19)")
+            if self.mask_token_id is None:
+                raise ValueError("causal: false with no mask_token_id — a bidirectional "
+                                 "model has no objective to train on. Set "
+                                 "mask_token_id: <vocab_size - 1> for masked diffusion.")
+        if self.mask_token_id is not None and not 0 <= self.mask_token_id < self.vocab_size:
+            raise ValueError(f"mask_token_id {self.mask_token_id} is outside the vocabulary "
+                             f"(0..{self.vocab_size - 1})")
         if self.d_ff is None:
             hidden = int(8 * self.d_model / 3)
             self.d_ff = self.multiple_of * ((hidden + self.multiple_of - 1) // self.multiple_of)
@@ -113,6 +144,17 @@ class ModelConfig:
     @property
     def is_moe(self) -> bool:
         return bool(self.n_experts)
+
+    @property
+    def is_diffusion(self) -> bool:
+        """A masked diffusion model: bidirectional, with a `[MASK]` id to corrupt with.
+
+        Every loader in the project rebuilds a model with `ModelConfig(**ckpt["model_config"])`,
+        so this property makes a checkpoint **self-describing**. Nothing has to be told which
+        paradigm a `.pt` came from — which matters, because an autoregressive sampler run
+        against a diffusion checkpoint produces fluent-looking nonsense rather than an error.
+        """
+        return not self.causal and self.mask_token_id is not None
 
     def moe_layer(self, i: int) -> bool:
         """Whether layer `i` is a mixture-of-experts block."""
@@ -181,12 +223,36 @@ class TrainConfig:
 
 
 @dataclass
+class DiffusionConfig:
+    """Knobs for the masked-diffusion objective. Ignored unless `model.causal: false`.
+
+    See docs/19. The defaults are the MDLM/LLaDA formulation with nothing tuned, which is
+    the point: there is no noise schedule to get right — "noise" for discrete tokens just
+    means "replaced by [MASK]", and the mask rate is drawn uniformly.
+    """
+
+    #: Smallest mask rate drawn. The loss is weighted by 1/t, so a t of 1e-9 would multiply
+    #: one unlucky token's cross-entropy by a billion and blow the gradient clip. Clamping
+    #: the *draw* rather than the weight keeps the estimator honest: it is an unbiased ELBO
+    #: for t ~ U(t_min, 1), and t_min is small enough that the missing slice is negligible.
+    t_min: float = 1e-3
+    #: The seed the validation masking uses. Fixed on purpose — with a fresh mask every
+    #: evaluation, "best val" would partly be a record of which draw was kindest, and the
+    #: 13.8M comparison against the dense baseline's 1.472 would be reading noise.
+    eval_seed: int = 20260806
+    #: Denoising steps used when the trainer samples mid-run. More steps = better text and
+    #: linearly more compute; this is the one number that has no equivalent in an AR model.
+    sample_steps: int = 32
+
+
+@dataclass
 class Config:
     name: str = "tiny"
     model: ModelConfig = field(default_factory=ModelConfig)
     data: DataConfig = field(default_factory=DataConfig)
     optim: OptimConfig = field(default_factory=OptimConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
+    diffusion: DiffusionConfig = field(default_factory=DiffusionConfig)
 
 
 def _build(cls, raw: dict[str, Any]):

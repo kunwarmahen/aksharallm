@@ -9,8 +9,12 @@ Everything else in this file is the machinery that makes it survive days of wall
 mixed precision, gradient accumulation, LR scheduling, checkpoint/resume, and throughput
 measurement so you can tell when you've made things slower.
 
+None of that machinery knows what the loss means, so the loss is a swappable object -- see
+`ARObjective` and `objective_for` below. The second implementation is masked diffusion
+(`aksharallm/diffusion/objective.py`), and it reuses every line of this loop.
+
 Read with: docs/04-pretraining.md -- the chapter this implements; it ends with the order to read
-these files in.
+these files in. See also docs/19-diffusion.md.
 """
 
 from __future__ import annotations
@@ -181,6 +185,72 @@ def sample_text(model, tok: Tokenizer, prompt: str, max_new: int = 100, device="
     return tok.decode(out)
 
 
+# ---------------------------------------------------------------------------------------
+# the objective
+# ---------------------------------------------------------------------------------------
+# Everything below this line in the file is the machinery of *training*, not the machinery
+# of next-token prediction: accumulation, the schedule, autocast, resume, the stop file, the
+# session log, throughput, the report. None of it knows what the loss means.
+#
+# So the loss is a small object with four methods, and there are two of them. This one is
+# the objective this project has always had; `aksharallm.diffusion.objective` is masked
+# diffusion, and the loop below cannot tell them apart. That is the claim doc 19 makes about
+# paradigms — "the difference is the objective, not the trainer" — held to by construction
+# rather than asserted in prose.
+
+class ARObjective:
+    """Next-token prediction. `x = tokens[i:i+T]`, `y = tokens[i+1:i+1+T]`."""
+
+    name = "autoregressive"
+    metric = "cross-entropy"
+    comparable_to_ar = True
+
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
+
+    def check(self, tok: Tokenizer) -> None:
+        if tok.vocab_size != self.cfg.model.vocab_size:
+            raise ValueError(
+                f"config says vocab_size={self.cfg.model.vocab_size} but tokenizer has "
+                f"{tok.vocab_size}")
+
+    def describe(self) -> str:
+        return "next-token prediction, causal attention"
+
+    def batch(self, dataset, batch_size: int):
+        return dataset.get_batch(batch_size)
+
+    def loss(self, model, batch):
+        x, y = batch
+        _, loss = model(x, targets=y)
+        return loss
+
+    def evaluate(self, model, dataset, batch_size: int, n_batches: int, ctx) -> float:
+        return evaluate(model, dataset, batch_size, n_batches, ctx)
+
+    def sample(self, model, tok: Tokenizer, prompt: str, device: str) -> str:
+        return sample_text(model, tok, prompt, 80, device)
+
+    def stats(self) -> dict:
+        return {}
+
+    def log_suffix(self) -> str:
+        return ""
+
+
+def objective_for(cfg: Config):
+    """Pick the objective from the config. One key decides it: `model.causal`.
+
+    Imported late so that `aksharallm.diffusion` — which imports the model and the sampler —
+    is only loaded by a run that needs it, and so that neither package depends on the other
+    at import time.
+    """
+    if cfg.model.is_diffusion:
+        from ..diffusion.objective import DiffusionObjective
+        return DiffusionObjective(cfg)
+    return ARObjective(cfg)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Pretrain a language model.")
     ap.add_argument("config", help="path to a YAML config")
@@ -213,10 +283,11 @@ def main():
         train_ds = TokenDataset(cfg.data.train_bin, cfg.train.seq_len, device)
     val_ds = TokenDataset(cfg.data.val_bin, cfg.train.seq_len, device)
     tok = Tokenizer(cfg.data.tokenizer)
-    if tok.vocab_size != cfg.model.vocab_size:
-        raise ValueError(
-            f"config says vocab_size={cfg.model.vocab_size} but tokenizer has {tok.vocab_size}"
-        )
+    # What this run is training *for*. `check` is each objective's own vocabulary rule --
+    # an autoregressive run wants the tokenizer's size exactly, a diffusion run wants one
+    # more id than that for [MASK].
+    objective = objective_for(cfg)
+    objective.check(tok)
 
     # ---- model -------------------------------------------------------------------
     model = Transformer(cfg.model).to(device)
@@ -245,6 +316,7 @@ def main():
 
     print("=" * 78)
     print(f"run          {cfg.name}")
+    print(f"objective    {objective.name} — {objective.describe()}")
     print(f"params       {human(model.num_params())} total, "
           f"{human(model.num_params(True))} non-embedding")
     print(f"             decay={human(n_decay)} no-decay={human(n_nodecay)}")
@@ -332,7 +404,8 @@ def main():
     log_session("session_start", pid=os.getpid(), start_step=start_step,
                 max_steps=cfg.train.max_steps, stop_at=stop_at, stop_by=stop_by,
                 tokens_per_step=tokens_per_step, params=n_params,
-                params_active=n_params_active, params_nonemb=n_params_nonemb)
+                params_active=n_params_active, params_nonemb=n_params_nonemb,
+                objective=objective.name, metric=objective.metric)
 
     if start_step >= cfg.train.max_steps:
         # Resuming a finished run. It is not an error -- the checkpoint is intact and this
@@ -367,9 +440,9 @@ def main():
         optimizer.zero_grad(set_to_none=True)
         loss_sum = 0.0
         for _ in range(cfg.train.grad_accum):
-            x, y = train_ds.get_batch(cfg.train.batch_size)
+            batch = objective.batch(train_ds, cfg.train.batch_size)
             with ctx:
-                _, loss = model(x, targets=y)
+                loss = objective.loss(model, batch)
                 loss = loss / cfg.train.grad_accum
             loss.backward()
             loss_sum += loss.item()
@@ -454,13 +527,19 @@ def main():
                   f"(ema {running_loss:.4f}) | ppl {math.exp(min(running_loss, 20)):>7.1f} | "
                   f"lr {lr:.2e} | gnorm {grad_norm:.2f} | {tok_per_sec/1e3:.1f}k tok/s | "
                   f"mfu {mfu*100:.1f}% | {mem:.1f}GB | {s_per_step:.2f}s/step | "
-                  f"up {fmt_dur(up)} | eta {fmt_dur(eta)}{moe_line}")
+                  f"up {fmt_dur(up)} | eta {fmt_dur(eta)}{moe_line}"
+                  f"{objective.log_suffix()}")
             rec = {"step": step, "loss": loss_sum, "ema": running_loss, "lr": lr,
                    "grad_norm": float(grad_norm), "tok_per_sec": tok_per_sec, "mfu": mfu,
                    "time": time.time(), "s_per_step": s_per_step, "elapsed": up,
                    "eta_s": eta}
             if routing:
                 rec["moe"] = routing
+            # An objective may have numbers of its own worth keeping (masked diffusion logs
+            # the unweighted cross-entropy and the realised mask rate). Nested under one key
+            # so `runlog` and the charts stay indifferent to which objective wrote the line.
+            if (extra := objective.stats()):
+                rec["objective"] = extra
             logf.write(json.dumps(rec) + "\n")
             logf.flush()
             if use_wandb:
@@ -470,9 +549,15 @@ def main():
         # ---- eval -----------------------------------------------------------------
         if step > 0 and cfg.train.eval_every and step % cfg.train.eval_every == 0:
             te = time.time()
-            val_loss = evaluate(model, val_ds, cfg.train.batch_size,
-                                cfg.train.eval_batches, ctx)
-            print(f"  >> val loss {val_loss:.4f}  ppl {math.exp(min(val_loss, 20)):.2f}"
+            val_loss = objective.evaluate(model, val_ds, cfg.train.batch_size,
+                                          cfg.train.eval_batches, ctx)
+            # `ppl` is only a perplexity when the loss is a cross-entropy. For the diffusion
+            # objective the same exp() is an upper *bound* on perplexity, and printing it
+            # under the same three letters is how a number ends up in a comparison it has no
+            # business being in.
+            ppl_label = "ppl" if objective.comparable_to_ar else "ppl <="
+            print(f"  >> val {objective.metric} {val_loss:.4f}  "
+                  f"{ppl_label} {math.exp(min(val_loss, 20)):.2f}"
                   f"{'  * best' if val_loss < best_val else ''}"
                   f"  ({fmt_dur(time.time() - te)})")
             logf.write(json.dumps({"step": step, "val_loss": val_loss}) + "\n")
@@ -488,7 +573,8 @@ def main():
         # `0` reads as "never" for every one of these cadences, which is what a person
         # writing `sample_every: 0` means. It used to be a ZeroDivisionError on step 1.
         if step > 0 and cfg.train.sample_every and step % cfg.train.sample_every == 0:
-            print("  >> sample:", repr(sample_text(model, tok, "Once upon a time", 80, device)))
+            print("  >> sample:",
+                  repr(objective.sample(model, tok, "Once upon a time", device)))
             t0 = time.time()
 
         if step > 0 and cfg.train.ckpt_every and step % cfg.train.ckpt_every == 0:
@@ -521,8 +607,11 @@ def main():
             return
 
     # final
-    val_loss = evaluate(model, val_ds, cfg.train.batch_size, cfg.train.eval_batches, ctx)
-    print(f"\nfinal val loss {val_loss:.4f}  ppl {math.exp(min(val_loss, 20)):.2f}")
+    val_loss = objective.evaluate(model, val_ds, cfg.train.batch_size,
+                                  cfg.train.eval_batches, ctx)
+    print(f"\nfinal val {objective.metric} {val_loss:.4f}  "
+          f"{'ppl' if objective.comparable_to_ar else 'ppl <='} "
+          f"{math.exp(min(val_loss, 20)):.2f}")
     save_checkpoint(out_dir / "ckpt_last.pt", model, optimizer, cfg,
                     cfg.train.max_steps - 1, min(best_val, val_loss))
     if val_loss < best_val:

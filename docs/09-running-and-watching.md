@@ -326,7 +326,7 @@ flowchart TD
     charts["charts.js"]
     md["markdown.js"]
     dash["dashboard.js"]
-    tabs["code · docs · quant · lora<br/>evals · synth · learn · play"]
+    tabs["code · docs · quant · lora · evals<br/>synth · interp · longctx · diffusion<br/>learn · play"]
     main["main.js — wire + boot"]
 
     core --> charts & md & router & dash & tabs & main

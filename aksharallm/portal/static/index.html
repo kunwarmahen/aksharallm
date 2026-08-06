@@ -21,6 +21,7 @@
 <link rel="stylesheet" href="/static/css/synth.css">
 <link rel="stylesheet" href="/static/css/interp.css">
 <link rel="stylesheet" href="/static/css/longctx.css">
+<link rel="stylesheet" href="/static/css/diffusion.css">
 <link rel="stylesheet" href="/static/css/learn.css">
 <link rel="stylesheet" href="/static/css/narrow.css">
 </head>
@@ -43,6 +44,7 @@
     <button class="tab" data-view="synth" type="button">Synth</button>
     <button class="tab" data-view="interp" type="button">Interp</button>
     <button class="tab" data-view="longctx" type="button">Context</button>
+    <button class="tab" data-view="diff" type="button">Diffusion</button>
     <button class="tab" data-view="learn" type="button">Learn</button>
     <button class="tab" data-view="docs" type="button">Docs</button>
   </nav>
@@ -82,6 +84,7 @@
 
 <!--#include interp.html -->
 <!--#include longctx.html -->
+<!--#include diffusion.html -->
 <!--#include learn.html -->
 
 <footer class="footer">
@@ -111,6 +114,11 @@
   seed grid. The python recipe runs the tests it wrote, then runs them again against a
   stubbed solution. Everything lands in <code>data/synth/</code> with its provenance. See
   docs/13.</span>
+  <span class="foot-diff" hidden>The second paradigm in this repo, at 13.8M on
+  TinyStories — never the main model, because masked diffusion needs roughly 3–16x the
+  compute of next-token prediction for equal quality. Its validation loss is an ELBO
+  <em>upper bound</em> and is not comparable with an autoregressive run's cross-entropy.
+  What it buys is infilling and a compute dial. See docs/19.</span>
   <span class="foot-learn" hidden>Every lesson ends in a real test: break the code the
   lesson names, watch that test go red, put it back. A lesson only counts as done once its
   check has gone <em>red and then green</em> — the check passes on a clean checkout, so

@@ -155,6 +155,10 @@ def _arch_str(mcfg: dict | None) -> str | None:
                 f" from {scaling['original_max_seq_len']})")
     if mcfg.get("attn_window"):
         ctx += f" win={mcfg['attn_window']}"
+    if not mcfg.get("causal", True):
+        # Said first, because it changes what every other number in this string means: this
+        # is not a decoder-only model and cannot be sampled like one. See docs/19.
+        ctx += " bidirectional"
     return (f"d={mcfg.get('d_model')} L={mcfg.get('n_layers')} "
             f"H={mcfg.get('n_heads')} KV={mcfg.get('n_kv_heads')} "
             f"ctx={ctx}")
@@ -224,7 +228,17 @@ class Checkpoint:
     rope_scaling: dict | None = None
     attn_window: int | None = None
     attn_sinks: int = 0
+    #: Masked diffusion (docs/19): bidirectional attention plus a `[MASK]` id. Read from the
+    #: header so a picker can grey out the checkpoints a tab cannot use without opening a
+    #: 1.2 GB file — and so nothing ever runs an autoregressive sampler over one of these,
+    #: which does not fail, it just returns fluent nonsense.
+    causal: bool = True
+    mask_token_id: int | None = None
     error: str | None = None
+
+    @property
+    def is_diffusion(self) -> bool:
+        return not self.causal and self.mask_token_id is not None
 
     @property
     def modes(self) -> list[str]:
@@ -253,6 +267,8 @@ class Checkpoint:
             "seq_len": self.seq_len, "error": self.error,
             "rope_scaling": self.rope_scaling, "trained_window": self.trained_window,
             "attn_window": self.attn_window, "attn_sinks": self.attn_sinks,
+            "causal": self.causal, "mask_token_id": self.mask_token_id,
+            "diffusion": self.is_diffusion,
             "id": f"{self.run}/{self.name}",
         }
 
@@ -450,7 +466,11 @@ class CheckpointStore:
                "seq_len": tcfg.get("seq_len"),
                "rope_scaling": _mapping(mcfg.get("rope_scaling")) or None,
                "attn_window": mcfg.get("attn_window"),
-               "attn_sinks": mcfg.get("attn_sinks") or 0},
+               "attn_sinks": mcfg.get("attn_sinks") or 0,
+               # Defaulted rather than required: every checkpoint written before docs/19
+               # existed has neither key, and all of them are autoregressive.
+               "causal": bool(mcfg.get("causal", True)),
+               "mask_token_id": mcfg.get("mask_token_id")},
             error=None)
 
     def _loss_at(self, run_dir: Path, step: int | None) -> float | None:

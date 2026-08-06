@@ -154,6 +154,27 @@ code and math, and it reuses the same sandbox we built to *evaluate* the model a
 
 ---
 
+## The other way to build a language model
+
+Everything above is **autoregressive**: predict token *n+1* from tokens *1..n*, left to
+right, and never revisit a choice. That is not a law of language modelling — it is a design
+decision, and this repo builds the main alternative too so you can see what the decision was
+actually buying.
+
+A **masked diffusion** model is trained to fill in blanks, with every position able to see
+every other one, and generates by unmasking the positions it is most confident about first:
+
+```mermaid
+flowchart LR
+  A["▁ ▁ ▁ ▁ ▁ ▁"] --> B["▁ ▁ cat ▁ ▁ ."] --> C["The ▁ cat sat ▁ ."] --> D["The big cat sat on ."]
+```
+
+It costs roughly 3–16x the compute of next-token prediction for equal quality, so it is
+never the main model here — it runs at Phase-1 scale as a controlled comparison against the
+13.8M baseline. What it buys is two things autoregression structurally cannot do:
+**infilling** (give it a prefix *and* a suffix and it writes the middle) and **choosing how
+many forward passes to spend** on a given length of text. → [doc 19](19-diffusion.md)
+
 ## Learning it by breaking it
 
 Reading the chapters that follow is one way through this project. There is another, and it

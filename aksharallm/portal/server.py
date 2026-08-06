@@ -54,6 +54,7 @@ from .gpu import Sampler, snapshot
 from .pipeline import Pipeline
 from .finetune import FinetuneJobs
 from .quantize import QuantJobs
+from .diffusion import Diffusion
 from .interp import Interp
 from .longctx import LongContext
 from .serving import ServeJobs
@@ -88,7 +89,8 @@ class Handler(BaseHTTPRequestHandler):
                  source: SourceTree, explain: ExplainConfig, playground: Playground,
                  pipeline: Pipeline, quant: QuantJobs, finetune: FinetuneJobs,
                  evals: EvalJobs, synth: SynthJobs, learn: Learn, interp: Interp,
-                 longctx: LongContext, serving: ServeJobs, cost: CostConfig, quiet: bool = True, **kw):
+                 longctx: LongContext, diffusion: Diffusion, serving: ServeJobs,
+                 cost: CostConfig, quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
         self.sampler = sampler
@@ -103,6 +105,7 @@ class Handler(BaseHTTPRequestHandler):
         self.learn = learn
         self.interp = interp
         self.longctx = longctx
+        self.diffusion = diffusion
         self.serving = serving
         self.cost = cost
         self.quiet = quiet
@@ -319,6 +322,37 @@ class Handler(BaseHTTPRequestHandler):
                         lengths=data.get("lengths")))
                 if parts[2] == "stop":
                     return self._json(self.longctx.stop())
+            # masked diffusion: /api/diffusion/<corrupt|generate|infill|measure>. Inline, on
+            # the resident model — a denoising run is `steps` forward passes at Phase-1
+            # scale, so a job runner with a pid file would be more machinery than the work.
+            if len(parts) == 3 and parts[:2] == ["api", "diffusion"]:
+                ckpt = str(data.get("checkpoint") or "")
+                if parts[2] == "corrupt":
+                    return self._json(self.diffusion.corrupt_preview(
+                        ckpt, str(data.get("text") or ""),
+                        float(data.get("t") or 0.4), int(data.get("seed") or 0)))
+                if parts[2] == "generate":
+                    return self._json(self.diffusion.generate(
+                        ckpt, prompt=str(data.get("prompt") or ""),
+                        length=int(data.get("length") or 48),
+                        steps=int(data.get("steps") or 16),
+                        temperature=float(data.get("temperature", 0.8)),
+                        top_k=int(data.get("top_k") or 50),
+                        top_p=float(data.get("top_p", 0.95)),
+                        remask=str(data.get("remask") or "low_confidence"),
+                        seed=self._int(data, "seed")))
+                if parts[2] == "infill":
+                    return self._json(self.diffusion.infill(
+                        ckpt, str(data.get("prefix") or ""), str(data.get("suffix") or ""),
+                        length=int(data.get("length") or 12),
+                        steps=int(data.get("steps") or 12),
+                        temperature=float(data.get("temperature", 0.8)),
+                        seed=self._int(data, "seed")))
+                if parts[2] == "measure":
+                    return self._json(self.diffusion.measure(
+                        ckpt, kind=str(data.get("kind") or "elbo"),
+                        batches=int(data.get("batches") or 4),
+                        batch_size=int(data.get("batch_size") or 4)))
             # the learning path: /api/learn/<check|reset>
             if len(parts) == 3 and parts[:2] == ["api", "learn"]:
                 if parts[2] == "check":
@@ -421,6 +455,10 @@ class Handler(BaseHTTPRequestHandler):
                 float((query.get("factor") or [4.0])[0])))
         if parts == ["longctx", "result"]:
             return self._json(self.longctx.result((query.get("name") or [""])[0]))
+        # masked diffusion: which checkpoints can be denoised, and what the current one is.
+        if parts == ["diffusion"]:
+            return self._json(self.diffusion.overview(
+                (query.get("checkpoint") or [None])[0]))
         if parts == ["learn"]:
             return self._json(self.learn.status())
         if parts == ["learn", "lesson"]:
@@ -818,12 +856,13 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
     learn = Learn(store.root)
     interp = Interp(playground, store.root)
     longctx = LongContext(playground.store, store, store.root)
+    diffusion = Diffusion(playground, store.root)
     serving = ServeJobs(store.root)
     handler = partial(Handler, store=store, scheduler=scheduler, sampler=sampler,
                       source=source, explain=explain, playground=playground,
                       pipeline=pipeline, quant=quant, finetune=finetune, evals=evals,
                       synth=synth, learn=learn, interp=interp, longctx=longctx,
-                      serving=serving,
+                      diffusion=diffusion, serving=serving,
                       cost=cost,
                       quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True

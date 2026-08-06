@@ -184,6 +184,11 @@ class Attention(nn.Module):
         self.attn_impl = cfg.attn_impl
         self.window = cfg.attn_window
         self.sinks = cfg.attn_sinks
+        # False only for a masked diffusion model, where every position denoises using the
+        # whole sequence. See docs/19 — and note that everything below which builds a mask
+        # has to ask this first, because a causal mask silently applied to a bidirectional
+        # model trains and generates without ever raising.
+        self.causal = cfg.causal
 
     def forward(self, x, cos, sin, cache: KVCache | None = None, attn_mask=None):
         B, T, _ = x.shape
@@ -229,8 +234,12 @@ class Attention(nn.Module):
         # A sliding window goes to the kernel as two integers rather than as a mask, which
         # is the concrete payoff for having written it: the (T, S) bool that SDPA needs is
         # 64 MB at T=8192, and long context is exactly where that matters.
+        #
+        # `causal=self.causal` is the whole of the bidirectional path here: the kernel
+        # already had the flag, because "full attention" is what it computes before the
+        # diagonal is applied.
         if self.attn_impl == "flash" and flash.usable(q, k, dropout_p, attn_mask):
-            out = flash.flash_attention(q, k, v, causal=True,
+            out = flash.flash_attention(q, k, v, causal=self.causal,
                                         window=self.window, sinks=self.sinks)
             return self.wo(out.transpose(1, 2).contiguous().view(B, T, -1))
 
@@ -242,7 +251,7 @@ class Attention(nn.Module):
         if self.window is not None and attn_mask is None:
             attn_mask = sliding_window_mask(T, k.shape[2], self.window, self.sinks, x.device)
 
-        is_causal = attn_mask is None and T > 1
+        is_causal = self.causal and attn_mask is None and T > 1
 
         if _SDPA_HAS_GQA:
             out = F.scaled_dot_product_attention(
@@ -464,6 +473,15 @@ class Transformer(nn.Module):
         # every key up to and including it — the whole cached prefix, plus the part of this
         # block that precedes it. `start > 0` is the point: a prefill into an empty cache is
         # already aligned, needs no mask, and keeps the faster kernel.
+        if caches is not None and not self.cfg.causal:
+            # A KV cache is the memo an autoregressive model keeps because token n's keys
+            # never change once written. In a diffusion model every position can be rewritten
+            # on every denoising step, so a cache would serve keys for tokens that no longer
+            # exist. This is the whole reason `infer/generate.py` does not transfer — see
+            # docs/19 — and it is worth an exception rather than a wrong answer.
+            raise ValueError("a bidirectional (causal: false) model cannot use a KV cache: "
+                             "every position may change on every step. Use "
+                             "aksharallm.diffusion.generate instead.")
         if attn_mask is None and caches is not None and T > 1 and start > 0:
             q_pos = torch.arange(start, start + T, device=idx.device)[:, None]
             k_pos = torch.arange(start + T, device=idx.device)[None, :]

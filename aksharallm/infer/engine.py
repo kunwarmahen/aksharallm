@@ -615,6 +615,16 @@ class Engine:
         not just the last thing you typed.
         """
         tok = loaded.tokenizer
+        # A masked diffusion checkpoint has bidirectional attention and no left-to-right
+        # training signal at all, so every sampler in `infer/` is the wrong tool for it —
+        # and it would not fail, it would return fluent nonsense. Refused here, where the
+        # base-model chat refusal lives, for the same reason: this is the gate that knows
+        # what a loaded model can actually be asked to do.
+        if loaded.model.cfg.is_diffusion:
+            raise InferError(
+                f"{loaded.info.rel} is a masked diffusion model (docs/19): it generates by "
+                "unmasking a whole sequence, not by extending a prefix. Use the portal's "
+                "Diffusion tab, or `python -m aksharallm.diffusion`.")
         if mode in ("complete", "code"):
             if not prompt.strip():
                 raise InferError("nothing to complete — type a prompt first.")

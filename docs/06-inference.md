@@ -90,6 +90,19 @@ At inference we only need logits for the final position. Projecting all `T` posi
 `vocab_size` would be the single largest allocation in generation — at `T=1024`,
 `vocab=32768`, that's 134 MB of logits we'd throw away.
 
+### The assumption underneath all of this
+
+A KV cache works because **position *n*'s keys are settled the moment token *n* is
+generated**. Nothing later can change them, so they are computed once and reused forever.
+That one sentence is what makes generation `O(T)` cached passes instead of `O(T²)`, and
+everything in this chapter — the cache, `IncrementalDecoder`, speculative decoding's
+`rewind`, the paged pool in [doc 16](16-serving.md) — is built on it.
+
+It is an assumption, not a law. The masked diffusion model in [doc 19](19-diffusion.md) may
+rewrite any position on any step, so a cached key would belong to a token that no longer
+exists. None of this file transfers to it, and `Transformer.forward` raises rather than
+letting it try.
+
 ---
 
 ## Sampling

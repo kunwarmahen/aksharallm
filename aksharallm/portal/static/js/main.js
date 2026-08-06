@@ -16,6 +16,7 @@ import { wirePlay } from './play.js';
 import './docs.js';
 import './interp.js';   /* registers itself; nothing here needs its exports */
 import './longctx.js';  /* likewise */
+import './diffusion.js'; /* likewise */
 
 function wire() {
   wireGpu();

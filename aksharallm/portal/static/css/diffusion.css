@@ -1,0 +1,62 @@
+/* The Diffusion tab. One visual idea carries the tab: a token is a cell, and its state —
+   blank, just committed, settled, given — is a colour. The animation of those colours IS the
+   explanation of the paradigm, so everything else here stays out of its way. */
+
+.diff-controls { display: flex; flex-wrap: wrap; gap: .6rem; align-items: flex-end; }
+/* `min(20rem, 100%)` and `min-width: 0`, not a bare `20rem`: a flex item will not shrink
+   below its basis without both, so on a 320px phone the row is 320px of control inside a
+   padded panel and the whole PAGE scrolls sideways. See doc 9, "On a phone". */
+.diff-controls .field-wide { flex: 1 1 min(20rem, 100%); min-width: 0; }
+.diff-controls .field-wide input,
+.diff-controls .field-wide select { width: 100%; max-width: 100%; }
+.diff-controls input[type="range"] { width: 10rem; }
+
+.diff-two { display: grid; gap: 1rem 1.4rem; margin-bottom: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(22rem, 100%), 1fr)); }
+/* A grid item's automatic minimum size is its content's min-content width, so a wide child
+   would push the page sideways on a phone without this. See doc 9, "On a phone". */
+.diff-two > * { min-width: 0; }
+.diff-h3 { font-size: .85rem; text-transform: uppercase; letter-spacing: .05em;
+  opacity: .7; margin: 0 0 .4rem; }
+.diff-flow { display: flex; flex-wrap: wrap; gap: .35rem; margin: 0 0 .4rem; }
+.diff-flow span { border: 1px solid var(--border); border-radius: 4px;
+  padding: .15rem .4rem; font-family: ui-monospace, monospace; font-size: .75rem; }
+
+.diff-cells { display: flex; flex-wrap: wrap; gap: 2px; margin: .8rem 0 .5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; }
+.diff-cells .cell { display: inline-block; padding: .1rem .25rem; border-radius: 3px;
+  white-space: pre; border: 1px solid transparent; min-width: .8rem; text-align: center; }
+/* Still blank. Deliberately the loudest thing on the row at step 0 and gone by the end. */
+.diff-cells .masked { background: var(--border); color: transparent; min-width: 1.1rem; }
+/* Committed on THIS step; opacity carries the confidence. */
+.diff-cells .fresh { background: color-mix(in srgb, #059669 calc(var(--w, 1) * 90%), transparent);
+  color: #fff; }
+/* Committed on an earlier step. */
+.diff-cells .done { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+/* Given by the prompt — never masked, never predicted. */
+.diff-cells .given { background: transparent; border-color: var(--border); opacity: .75; }
+.diff-grid { min-height: 4rem; align-content: flex-start; }
+
+.diff-player { display: flex; align-items: center; gap: .7rem; margin-top: .4rem; }
+.diff-player input[type="range"] { flex: 1; min-width: 0; }
+.diff-step-label { font-size: .75rem; opacity: .75; font-variant-numeric: tabular-nums;
+  white-space: nowrap; }
+
+.diff-formula { font-size: .8rem; opacity: .85; margin: .4rem 0; }
+.diff-infill { font-size: 1rem; line-height: 1.6; margin: .8rem 0; }
+.diff-infill mark { background: color-mix(in srgb, #059669 30%, transparent);
+  color: inherit; padding: .1rem .25rem; border-radius: 3px; }
+
+/* The comparison warning. It is a box rather than a hint because putting a diffusion val
+   loss next to an autoregressive one is the single most likely mistake this tab enables. */
+.diff-warn { border: 1px solid var(--border); border-left: 3px solid #b45309;
+  border-radius: 4px; padding: .6rem .8rem; margin: .6rem 0 1rem; font-size: .85rem; }
+
+.byt { margin: .6rem 0; }
+.byt-row { display: flex; align-items: center; gap: .6rem; font-size: .75rem; }
+.byt-label { width: 3rem; text-align: right; opacity: .7;
+  font-variant-numeric: tabular-nums; }
+.byt-bar { flex: 1; height: 10px; background: var(--border); border-radius: 2px;
+  min-width: 0; }
+.byt-bar i { display: block; height: 100%; border-radius: 2px; background: var(--series-1); }
+.byt-val { width: 3.2rem; font-variant-numeric: tabular-nums; opacity: .8; }

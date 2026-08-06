@@ -112,6 +112,8 @@ grep is one line away from the prose. `tests/test_docs.py` fails if either point
 | 17 | [Looking inside](docs/17-interpretability.md) | Attention maps recomputed from the layer's own inputs, the logit lens (*when* did it decide?), activation patching (which activation actually carries the fact), and a sparse autoencoder that pulls apart superposition |
 | 16 | [Serving](docs/16-serving.md) | Turning a checkpoint into something you use: a paged KV cache so memory is bounded by what is *used*, continuous batching so thirty conversations share one pass over the weights (50 → 272 tok/s), and an OpenAI-shaped API so existing clients work |
 | 13 | [Synthetic data](docs/13-synthetic-data.md) | Making the training set with a local teacher instead of downloading it: a seed grid instead of a temperature, tests that are **executed twice**, near-duplicate detection, and why the rejection tally is the quality signal |
+| 18 | [Long context](docs/18-long-context.md) | Reading further than the weights were trained for, without retraining anything: RoPE scaling (linear/NTK/YaRN), sliding windows and why they need attention sinks, and the two measurements — loss by position and needle-in-a-haystack — that disagree |
+| 19 | [Diffusion](docs/19-diffusion.md) | The *other* way to build a language model: fill in blanks with attention running both ways, and generate by unmasking what you are surest about. Infilling, a compute dial, no KV cache — and the ELBO you must never compare with a cross-entropy |
 
 ---
 
@@ -139,6 +141,11 @@ aksharallm/
 │   │   ├── flash.py          FlashAttention in Triton, fwd + bwd (model.attn_impl) — docs/03
 │   │   └── rope.py           RoPE scaling: linear / NTK / YaRN / dynamic — docs/18
 │   ├── longctx/          extend a context and measure it — see docs/18
+│   ├── diffusion/        masked diffusion: the OTHER paradigm — see docs/19
+│   │   ├── corrupt.py        the forward process and the 1/t-weighted ELBO
+│   │   ├── generate.py       iterative unmasking, infilling, the denoising trace
+│   │   ├── evaluate.py       the ELBO (an upper bound) and loss-by-mask-rate
+│   │   └── objective.py      a drop-in for pretrain.py's objective — no second trainer
 │   ├── quant/            int8/int4/NF4 from scratch — see docs/10
 │   ├── lora/             LoRA + QLoRA adapters from scratch — see docs/11
 │   │   ├── qtensor.py        group scales, zero-points, 4-bit packing
@@ -338,10 +345,23 @@ In order, all written from scratch: **GRPO** ✅ (RL on a reward the code sandbo
 verifies) → **quantization** ✅ → **LoRA/QLoRA** ✅ → a **real eval harness** ✅ (MMLU, ARC,
 HellaSwag, PIQA, GSM8K, HumanEval and a model-judged suite — [docs/12](docs/12-eval.md)) →
 **synthetic data** ✅ ([docs/13](docs/13-synthetic-data.md)) → **mixture of experts** ✅
-([docs/14](docs/14-moe.md)) → **distillation** → **diffusion training** → **audio** → export
-and serving ✅, with **speculative decoding** ✅, an **interpretability tab** ✅,
-**FlashAttention written in Triton** ✅ ([docs/03](docs/03-model.md)) and
-**long context** ✅ ([docs/18](docs/18-long-context.md)).
+([docs/14](docs/14-moe.md)) → **distillation** → **diffusion training** ✅
+([docs/19](docs/19-diffusion.md)) → **audio** → export and serving ✅, with **speculative
+decoding** ✅, an **interpretability tab** ✅, **FlashAttention written in Triton** ✅
+([docs/03](docs/03-model.md)) and **long context** ✅ ([docs/18](docs/18-long-context.md)).
+
+**Masked diffusion** is the one item on that list that is not an improvement to the model —
+it is a second *paradigm*. Everything else here predicts token n+1 from tokens 1..n; a
+diffusion model is trained to fill in blanks with attention running both ways, and generates
+by unmasking the positions it is most confident about first. Watching a sentence resolve out
+of a row of `▁` is the best thing in the repo to look at, and it makes the point that no
+prose does: the model committed the comma and the full stop before it had decided what the
+sentence was about. It costs 3–16x the compute of next-token prediction for equal quality,
+so it runs at 13.8M as a controlled comparison and never as the main model. What it buys is
+**infilling** — give it a prefix *and* a suffix and it writes the middle, which an
+autoregressive model cannot do at all — and a **compute dial**: 48 tokens in 16 forward
+passes, or in 4, at whatever quality that costs. Its validation loss is an ELBO **upper
+bound** and must never be put in a table beside an autoregressive cross-entropy.
 
 **Long context** turned out to be the cheapest big win in the whole list, because RoPE has
 no parameters: extending a trained model's context is arithmetic, not training. Ask our 300M

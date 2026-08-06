@@ -1,0 +1,139 @@
+<!-- The Diffusion tab: the second paradigm in this repo, and the one that is far easier to
+     watch than to read about. Everything runs inline on the Playground's resident model,
+     so this tab inherits the device policy — a live training run keeps the card. -->
+<div id="view-diff" class="view" hidden>
+
+<section class="panel" aria-label="what a diffusion model is">
+  <div class="panel-head">
+    <h2>Writing in the order you are sure of</h2>
+    <span class="panel-note">every other model here writes strictly left to right — this one fills in blanks</span>
+    <span class="panel-note" id="diff-status"></span>
+  </div>
+
+  <div class="diff-two">
+    <div>
+      <h3 class="diff-h3">Autoregressive</h3>
+      <p class="diff-flow"><span>The</span> <span>The big</span> <span>The big cat</span> <span>The big cat sat</span></p>
+      <p class="hint">One token at a time, each one final the moment it is chosen. Sixty-four
+        tokens cost sixty-four forward passes, and the past can be cached.</p>
+    </div>
+    <div>
+      <h3 class="diff-h3">Masked diffusion</h3>
+      <p class="diff-flow"><span>▁ ▁ ▁ ▁ ▁ ▁</span> <span>▁ ▁ cat ▁ ▁ .</span> <span>The ▁ cat sat ▁ .</span> <span>The big cat sat on .</span></p>
+      <p class="hint">Every position predicted on every pass; the most confident ones are
+        committed and the rest stay blank. You choose how many passes to spend — and there is
+        no cache, because any position may still change.</p>
+    </div>
+  </div>
+
+  <div class="diff-controls">
+    <label class="field field-wide"><span class="field-label">checkpoint</span>
+      <select id="diff-ckpt"></select></label>
+    <span class="panel-note" id="diff-current"></span>
+  </div>
+  <p class="hint" id="diff-empty" hidden>No diffusion checkpoint yet. Train one with
+    <code>scripts/experiment.sh tiny-diffusion</code> — or pick <code>tiny-diffusion</code>
+    on the Dashboard and press Start. It is the same trainer, the same budget and the same
+    data as the <code>tiny</code> baseline; only the objective differs. See docs/19.</p>
+</section>
+
+<section class="panel" aria-label="the training objective">
+  <div class="panel-head">
+    <h2>1 · What it is trained on</h2>
+    <span class="panel-note">no model runs here — this is the forward process, applied to your text</span>
+  </div>
+  <div class="diff-controls">
+    <label class="field field-wide"><span class="field-label">text</span>
+      <input id="diff-corrupt-text" type="text" value="The cat sat on the mat and fell asleep."></label>
+    <label class="field"><span class="field-label">mask rate <em id="diff-t-label">40%</em></span>
+      <input id="diff-t" type="range" min="1" max="99" value="40" step="1"></label>
+    <button id="diff-corrupt-run" class="ghost" type="button">Re-roll</button>
+  </div>
+  <p class="diff-cells" id="diff-corrupt-out"></p>
+  <p class="diff-formula" id="diff-weight"></p>
+  <p class="hint">Training draws that rate <strong>uniformly at random</strong> for every
+    sequence, so the model learns to fill one blank in twenty and nineteen in twenty from the
+    same weights. The <code>1/t</code> weight is what stops the near-blank sequences — which
+    have the most blanks and therefore the most loss terms — from dominating the gradient.</p>
+</section>
+
+<section class="panel" aria-label="generate">
+  <div class="panel-head">
+    <h2>2 · Watch it resolve</h2>
+    <span class="panel-note">the finished sentence says nothing about the order it was decided in; this does</span>
+  </div>
+  <div class="diff-controls">
+    <label class="field field-wide"><span class="field-label">prompt (kept, never masked)</span>
+      <input id="diff-prompt" type="text" value="Once upon a time"></label>
+    <label class="field"><span class="field-label">tokens</span>
+      <input id="diff-length" type="number" min="1" max="256" value="48" step="1"></label>
+    <label class="field"><span class="field-label">steps</span>
+      <input id="diff-steps" type="number" min="1" max="128" value="16" step="1"></label>
+    <label class="field"><span class="field-label">temperature</span>
+      <input id="diff-temp" type="number" min="0" max="2" value="0.8" step="0.1"></label>
+    <label class="field"><span class="field-label">order</span>
+      <select id="diff-remask">
+        <option value="low_confidence">most confident first</option>
+        <option value="random">random</option>
+      </select></label>
+    <button id="diff-run" class="primary" type="button">Generate</button>
+  </div>
+
+  <div class="diff-cells diff-grid" id="diff-trace"></div>
+
+  <div class="diff-player" id="diff-player" hidden>
+    <button id="diff-play" class="ghost" type="button">▶ play</button>
+    <input id="diff-scrub" type="range" min="0" max="0" value="0" step="1"
+           aria-label="denoising step">
+    <span class="diff-step-label" id="diff-step-label"></span>
+  </div>
+  <p class="diff-formula" id="diff-cost"></p>
+  <p class="hint">Green is a position committed on <em>this</em> step; the darker it is, the
+    surer the model was. Grey is still blank. Try <strong>random</strong> order and the same
+    seed of steps — the text gets noticeably worse, because committing the easy positions
+    first is what gives the hard ones something to agree with.</p>
+</section>
+
+<section class="panel" aria-label="infilling">
+  <div class="panel-head">
+    <h2>3 · Infilling — the thing an ordinary model cannot do</h2>
+    <span class="panel-note">give it both ends and it writes the middle, conditioning on both</span>
+  </div>
+  <div class="diff-controls">
+    <label class="field field-wide"><span class="field-label">before</span>
+      <input id="diff-prefix" type="text" value="The cat sat"></label>
+    <label class="field field-wide"><span class="field-label">after</span>
+      <input id="diff-suffix" type="text" value="and fell asleep."></label>
+    <label class="field"><span class="field-label">tokens between</span>
+      <input id="diff-mid-len" type="number" min="1" max="64" value="10" step="1"></label>
+    <button id="diff-infill-run" class="primary" type="button">Fill the gap</button>
+  </div>
+  <p class="diff-infill" id="diff-infill-out"></p>
+  <p class="hint">An autoregressive model has no mechanism for this: it conditions only on
+    what came before, so "and fell asleep." cannot influence what it writes. Here it is the
+    same code path as above, with the fixed positions in a different place.</p>
+</section>
+
+<section class="panel" aria-label="measurement">
+  <div class="panel-head">
+    <h2>4 · What the numbers mean</h2>
+    <span class="panel-note">and the one comparison that is never valid</span>
+    <button id="diff-elbo" class="ghost" type="button">Measure</button>
+    <button id="diff-byt" class="ghost" type="button">Loss by mask rate</button>
+  </div>
+  <div class="diff-warn">
+    <strong>This model's validation loss is not comparable with an autoregressive one's.</strong>
+    An AR run's val loss is the exact per-token cross-entropy of held-out text, and
+    <code>exp()</code> of it is a real perplexity. This one is a Monte-Carlo estimate of an
+    <em>upper bound</em> (an ELBO). If the <code>tiny</code> baseline reads 1.472 and this
+    reads 1.9, this model is <em>not</em> "0.43 worse" — it is "at most this bad, by an
+    unknown margin". Compare the text, and compare what it can do that the other cannot.
+  </div>
+  <div id="diff-measure"></div>
+  <p class="hint">Loss by mask rate is the diagnostic with no autoregressive equivalent: at
+    5% masked the model is doing a cloze test with almost all of the context, at 85% it is
+    nearly writing from scratch. A model that is good only at the left of that chart will
+    infill well and generate badly, and the single val number will not say so.</p>
+</section>
+
+</div>

@@ -44,6 +44,8 @@ LAUNCHERS: dict[str, dict] = {
     "small": {"env": {"PURE": "1"}},                         # FineWeb-Edu only fallback
     "tiny-moe": {"script": "scripts/experiment.sh", "args": ["tiny-moe"]},
     "tiny": {"script": "scripts/experiment.sh", "args": ["tiny"]},
+    "tiny-diffusion": {"script": "scripts/experiment.sh",
+                       "args": ["tiny-diffusion"]},   # docs/19
 }
 
 
