@@ -62,10 +62,43 @@ async function loadPlan() {
         rotation angles are computed from the position, so this is a config edit. The file
         <code>extend</code> writes has byte-for-byte the same tensors in it.</p>`;
     $('#lc-advice').textContent = p.advice;
+    lc.plan = p;
+    const btn = $('#lc-extend');
+    btn.disabled = !p.out_name;
+    $('#lc-extend-note').textContent = p.out_name
+      ? (p.exists ? `${p.out_name} already exists — writing again overwrites it`
+                  : `writes ${p.out_name}`)
+      : 'nothing to write — "none" removes a scaling rather than adding one';
   } catch (err) {
     $('#lc-plan').innerHTML = `<p class="err">${escHtml(err.message)}</p>`;
     $('#lc-advice').textContent = '';
+    $('#lc-extend').disabled = true;
   }
+}
+
+/* Writing a checkpoint is the one button on this tab that puts a 3.6 GB file on disk, so it
+ * names the file, says what it does to the original, and warns before an overwrite. */
+async function extendCheckpoint() {
+  const p = lc.plan;
+  if (!p || !p.out_name) return;
+  const lines = [
+    `Write ${p.out_name}?`,
+    '',
+    ...p.changes.map((c) => `  ${c}`),
+    '',
+    'The weights are copied unchanged — RoPE has no parameters, so this is a config edit.',
+    `${lc.ckpt} itself is not modified.`,
+    p.exists ? `\n${p.out_name} already exists and will be overwritten.` : '',
+  ];
+  if (!confirm(lines.filter((l) => l !== '').join('\n') || 'Write it?')) return;
+  try {
+    const res = await post('/api/longctx/start', {
+      kind: 'extend', checkpoint: lc.ckpt,
+      method: $('#lc-method').value, factor: Number($('#lc-factor').value),
+    });
+    flash(`Writing ${p.out_name} — ${res.why_device}.`, 'ok');
+    poll(1000);
+  } catch (err) { flash(err.message, 'error'); }
 }
 
 /* ---- the measured half ------------------------------------------------------------------- */
@@ -116,7 +149,17 @@ async function poll(delay = 2000) {
       ? `running (pid ${job.pid})${res.training ? ` — on the CPU, ${res.training} has the card` : ''}`
       : (res.training ? `${res.training} is training, so a measurement would run on the CPU` : '');
     renderResults(res.results || []);
-    if (job.running) lc.timer = setTimeout(() => poll(), delay);
+    if (job.running) {
+      lc.timer = setTimeout(() => poll(), delay);
+      lc.wasRunning = true;
+    } else if (lc.wasRunning) {
+      /* A finished `extend` has put a new checkpoint on disk. Nothing else would notice —
+       * the picker was filled once when the tab opened. */
+      lc.wasRunning = false;
+      await reloadCheckpoints();
+      await refreshCurrent();
+      await loadPlan();
+    }
   } catch (err) { /* the tab may have been left; nothing to say */ }
 }
 
@@ -290,13 +333,24 @@ function renderNeedle(blob) {
 
 /* ---- wiring ------------------------------------------------------------------------------- */
 
+/* Refills the picker, keeping the current selection if it is still there. Called on open
+ * and again after a job finishes, because a finished `extend` has put a new checkpoint on
+ * disk and nothing else would notice. */
+async function reloadCheckpoints() {
+  const res = await api('/api/longctx');
+  const sel = $('#lc-ckpt');
+  const want = sel.value;
+  sel.innerHTML = (res.checkpoints || [])
+    .map((c) => `<option value="${escHtml(c.rel)}">${escHtml(c.rel)}</option>`).join('');
+  sel.value = [...sel.options].some((o) => o.value === want) ? want : sel.value;
+  lc.ckpt = sel.value;
+  return res;
+}
+
 async function openLongCtxTab() {
   if (!lc.loaded) {
-    const res = await api('/api/longctx');
+    const res = await reloadCheckpoints();
     const sel = $('#lc-ckpt');
-    sel.innerHTML = (res.checkpoints || [])
-      .map((c) => `<option value="${escHtml(c.rel)}">${escHtml(c.rel)}</option>`).join('');
-    lc.ckpt = sel.value;
     $('#lc-len').innerHTML = (res.lengths || [])
       .map((n) => `<option value="${n}"${n === 2048 ? ' selected' : ''}>${n}</option>`).join('');
 
@@ -312,6 +366,7 @@ async function openLongCtxTab() {
     $('#lc-run-sweep').addEventListener('click', () => start('sweep'));
     $('#lc-run-needle').addEventListener('click', () => start('needle'));
     $('#lc-run-flash').addEventListener('click', () => start('flash'));
+    $('#lc-extend').addEventListener('click', extendCheckpoint);
     $('#lc-stop').addEventListener('click', async () => {
       await post('/api/longctx/stop', {});
       flash('Stop requested.', 'ok');

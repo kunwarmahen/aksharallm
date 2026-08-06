@@ -35,7 +35,7 @@ import sys
 from pathlib import Path
 
 from ..infer.checkpoints import InferError
-from ..longctx.extend import describe, plan_extension
+from ..longctx.extend import default_out_name, describe, plan_extension
 from ..model.rope import METHODS
 
 #: Where the CLI leaves its JSON. The tab reads this directory and nothing else.
@@ -113,6 +113,13 @@ class LongContext:
             "changes": describe(before, after),
             "weights_change": False,   # stated explicitly; it is the surprising part
             "advice": self._advice(method, float(factor)),
+            # Named from `default_out_name`, the same function the CLI writes with — a
+            # confirmation dialog quoting a path that turns out not to be the one used is
+            # worse than no dialog at all.
+            "out_name": (None if method == "none"
+                         else default_out_name(info.path, method, float(factor)).name),
+            "exists": (False if method == "none" else
+                       default_out_name(info.path, method, float(factor)).exists()),
         }
 
     @staticmethod
@@ -147,7 +154,7 @@ class LongContext:
         tab because it answers the other half of the same question — reading further costs
         attention, and attention is quadratic in how far you read.
         """
-        if kind not in ("curve", "sweep", "needle", "flash"):
+        if kind not in ("curve", "sweep", "needle", "flash", "extend"):
             raise InferError(f"unknown measurement {kind!r}")
         if self.status()["running"]:
             raise InferError("a measurement is already running — stop it or wait")
@@ -161,6 +168,18 @@ class LongContext:
             cmd = [sys.executable, "-m", "aksharallm.model.flash",
                    "--seqlens", "512", "1024", "2048", "4096"]
             return self._spawn(cmd, kind, "cuda", "the card is free")
+
+        if kind == "extend":
+            # Writing a 3.6 GB copy is disk work; the device flag is irrelevant and `cpu`
+            # keeps it away from a card someone may be using. No `--out`: the CLI names the
+            # file from `default_out_name`, so no path ever arrives from a browser.
+            method = str(opts.get("method") or "yarn")
+            if method == "none":
+                raise InferError("'none' removes a scaling rather than writing an extension")
+            cmd = [sys.executable, "-m", "aksharallm.longctx", "extend", ckpt_id,
+                   "--device", "cpu", "--quiet",
+                   "--method", method, "--factor", str(opts.get("factor") or 4.0)]
+            return self._spawn(cmd, kind, "cpu", "writing a checkpoint is disk work")
 
         cmd = [sys.executable, "-m", "aksharallm.longctx", kind, ckpt_id, "--quiet"]
         # The device decision is made here rather than offered as a checkbox: a long

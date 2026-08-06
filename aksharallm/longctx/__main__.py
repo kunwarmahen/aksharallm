@@ -34,7 +34,7 @@ from ..infer.checkpoints import CheckpointStore, InferError, repo_root
 from ..model.rope import METHODS, RopeScaling
 from ..tokenizer.tokenizer import Tokenizer
 from .curve import cliff, position_curve
-from .extend import describe, extend, plan_extension
+from .extend import default_out_name, describe, extend, plan_extension
 from .haystack import DEFAULT_DEPTHS, run as haystack_run
 
 #: Where a sweep leaves its JSON, next to every other measurement this repo keeps.
@@ -210,8 +210,7 @@ def cmd_extend(args) -> int:
             print(f"  {line}")
         print("\n(dry run — nothing written)")
         return 0
-    out = args.out or str(Path(src).with_name(f"{Path(src).stem}_{args.method}"
-                                              f"{args.factor:g}x.pt"))
+    out = args.out or str(default_out_name(src, args.method, args.factor))
     result = extend(src, out, args.method, args.factor, args.original,
                     window=args.window, sinks=args.sinks)
     for line in result["changes"]:

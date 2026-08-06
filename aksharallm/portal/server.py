@@ -312,6 +312,7 @@ class Handler(BaseHTTPRequestHandler):
                         str(data.get("kind") or "curve"),
                         str(data.get("checkpoint") or ""),
                         length=self._int(data, "length"),
+                        method=data.get("method"),
                         factor=data.get("factor"),
                         windows=self._int(data, "windows"),
                         bucket=self._int(data, "bucket"),

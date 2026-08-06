@@ -21,6 +21,7 @@ Several tests here exist because the failure they catch is invisible:
 from __future__ import annotations
 
 import math
+import os
 
 import numpy as np
 import pytest
@@ -464,3 +465,81 @@ def test_the_grid_reports_chance_beside_every_number():
     assert out["chance"] == 0.25
     assert out["grid"][0][0]["accuracy"] == 0.5
     assert out["by_length"][0]["n"] == 2
+
+
+# ---- the portal's Context tab ---------------------------------------------------------------
+
+def portal(tmp_path):
+    """A LongContext over a throwaway repo holding one checkpoint."""
+    from aksharallm.infer.checkpoints import CheckpointStore
+    from aksharallm.portal.longctx import LongContext
+
+    run = tmp_path / "checkpoints" / "toy"
+    run.mkdir(parents=True)
+    model = Transformer(cfg(max_seq_len=1024))
+    torch.save({"model": model.state_dict(), "model_config": base_cfg_dict(), "step": 1},
+               run / "ckpt_best.pt")
+    return LongContext(CheckpointStore(tmp_path), None, tmp_path)
+
+
+def test_the_tab_reads_a_window_without_loading_weights(tmp_path):
+    got = portal(tmp_path).describe_checkpoint("toy/ckpt_best.pt")
+    assert got["trained_window"] == 1024 and got["addressable"] == 1024
+    assert got["extended"] is False
+
+
+def test_the_plan_names_the_file_the_cli_would_actually_write(tmp_path):
+    """The confirmation dialog quotes this name. If it drifted from what `extend` writes,
+    the dialog would be describing a file that never appears."""
+    from aksharallm.longctx.extend import default_out_name
+
+    p = portal(tmp_path).plan("toy/ckpt_best.pt", "yarn", 4.0)
+    assert p["out_name"] == default_out_name("ckpt_best.pt", "yarn", 4.0).name
+    assert p["out_name"] == "ckpt_best_yarn4x.pt"
+    assert p["exists"] is False
+    assert p["weights_change"] is False
+    assert any("4,096" in c for c in p["changes"])
+
+
+def test_the_plan_flags_an_overwrite(tmp_path):
+    lc = portal(tmp_path)
+    (tmp_path / "checkpoints" / "toy" / "ckpt_best_yarn4x.pt").write_bytes(b"x")
+    assert lc.plan("toy/ckpt_best.pt", "yarn", 4.0)["exists"] is True
+
+
+def test_extending_to_none_is_refused_rather_than_writing_nothing(tmp_path):
+    """`none` removes a scaling; there is no file to write, and a button that silently did
+    nothing would be worse than one that says so."""
+    from aksharallm.infer.checkpoints import InferError
+
+    lc = portal(tmp_path)
+    assert lc.plan("toy/ckpt_best.pt", "none", 1.0)["out_name"] is None
+    with pytest.raises(InferError, match="removes a scaling"):
+        lc.start("extend", "toy/ckpt_best.pt", method="none")
+
+
+def test_one_job_at_a_time(tmp_path):
+    from aksharallm.infer.checkpoints import InferError
+
+    lc = portal(tmp_path)
+    (tmp_path / "logs" / "longctx").mkdir(parents=True)
+    (tmp_path / "logs" / "longctx" / "job.pid").write_text(str(os.getpid()))
+    with pytest.raises(InferError, match="already running"):
+        lc.start("extend", "toy/ckpt_best.pt", method="yarn")
+
+
+def test_an_unknown_measurement_is_refused(tmp_path):
+    from aksharallm.infer.checkpoints import InferError
+
+    with pytest.raises(InferError, match="unknown measurement"):
+        portal(tmp_path).start("rm -rf", "toy/ckpt_best.pt")
+
+
+def test_a_result_name_cannot_escape_the_results_folder(tmp_path):
+    """`name` arrives from a browser. It is a bare filename or it is nothing."""
+    from aksharallm.infer.checkpoints import InferError
+
+    lc = portal(tmp_path)
+    for bad in ("../../etc/passwd", "sub/dir.json", "notjson.txt"):
+        with pytest.raises(InferError):
+            lc.result(bad)

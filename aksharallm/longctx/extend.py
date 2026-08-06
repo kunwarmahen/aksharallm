@@ -32,6 +32,17 @@ import torch
 from ..model.rope import METHODS, RopeScaling
 
 
+def default_out_name(source: str | Path, method: str, factor: float) -> Path:
+    """Where an extension lands when nobody says otherwise: beside the source, renamed.
+
+    One function because two callers need to agree — the CLI writes the file and the portal
+    tells the reader what it is about to write, and a confirmation dialog naming a path that
+    turns out not to be the one used is worse than no dialog.
+    """
+    source = Path(source)
+    return source.with_name(f"{source.stem}_{method}{factor:g}x.pt")
+
+
 def plan_extension(model_cfg: dict, method: str, factor: float,
                    original: int | None = None, **knobs) -> dict:
     """The new `model_config` dict. Pure — it touches nothing on disk.

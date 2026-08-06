@@ -344,8 +344,10 @@ python -m aksharallm.longctx extend small-code --method ntk --factor 2 \
 python -m aksharallm.longctx needle small-code --lengths 512 1024 2048 --device cpu
 ```
 
-Or press the buttons in the portal's **Context** tab, which drives exactly these functions
-and draws the curve, the method comparison and the needle grid.
+Or press the buttons in the portal's **Context** tab, which drives exactly these functions —
+including **Write the extended checkpoint**, which names the file it is about to create
+before it creates one, and adds it to the picker when it lands. The original is never
+touched: an extension is a second file, so it stays a hypothesis you can delete.
 
 In a config:
 
@@ -404,7 +406,7 @@ real thing; extending it to a window is bounded work and is the obvious next opt
 | 7 | [`longctx/curve.py`](../aksharallm/longctx/curve.py) | `reduction="none"` is the point of the file; then `cliff()`, and why it anchors to the in-window mean rather than position 0 |
 | 8 | [`longctx/haystack.py`](../aksharallm/longctx/haystack.py) | `build_context` (the needle goes in at a *token* boundary) and `_score_candidates` (the off-by-one that would score every candidate on the wrong tokens) |
 | 9 | [`longctx/__main__.py`](../aksharallm/longctx/__main__.py) | `sweep` is the command the chapter exists for; `_check_device` is the courtesy that stops a measurement killing a run |
-| 10 | [`aksharallm/portal/longctx.py`](../aksharallm/portal/longctx.py) | the Context tab's server side — same functions, one job at a time |
+| 10 | [`aksharallm/portal/longctx.py`](../aksharallm/portal/longctx.py) | the Context tab's server side. `plan` is free (metadata only, no weights) and `start` is a detached job, one at a time; note that no path ever arrives from the browser — `default_out_name` decides where an extension lands |
 
 What pins it: `tests/test_longctx.py`. The four worth reading are
 `test_none_is_bit_for_bit_the_old_cache` (every existing checkpoint depends on the default
