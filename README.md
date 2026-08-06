@@ -414,6 +414,18 @@ distillation are all changes to model *quality*, and validation loss either cann
 or reports them backwards — training on generated text is the easiest way to improve a loss
 curve while making a model worse. You need the instrument before you run the experiment.
 
+And the instrument itself gets checked. Two things every score above quietly assumed are now
+measured. **Contamination**: if a question and its answer already sit in the ten billion
+tokens the model trained on, a right answer means nothing — so every benchmark item is
+checked for a shared run of 13 tokens against the whole corpus, counting the *question*
+(public text, usually harmless) separately from the *question with its answer attached* (the
+one that matters), with a `--against` flag that re-scores a result with the leaked items
+dropped. **Per-domain loss**: the blended run reports one validation number over 85% prose
+and 15% Python, and splitting it shows Python at perplexity **3.5** against prose's **16.0**
+— the model's code ability was almost invisible in an average that is 85% prose. The two
+halves blend back to 2.5425 against the run's own 2.5552, which is what says the split was
+taken in the right place.
+
 **Synthetic data**, built next, turned out to be mostly *filters*. A local teacher writing
 exercises is four lines; the package around it exists because generated data is the easiest
 way to make a model worse while its loss improves. So the Python recipe runs the tests the

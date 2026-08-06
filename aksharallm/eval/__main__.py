@@ -28,10 +28,10 @@ from pathlib import Path
 
 from .report import Results, compare_table, summary_table
 from .runner import Harness, Options, describe
-from .sources import EvalError, SOURCES, fetch, status
-from .suites import ALL_SUITES, DEFAULT_SUITES, SUITES, catalogue, resolve
+from .sources import EvalError, SOURCES, fetch, load, status
+from .suites import ALL_SUITES, DEFAULT_SUITES, SUITES, build, catalogue, resolve
 
-SUBCOMMANDS = ("run", "fetch", "suites", "report")
+SUBCOMMANDS = ("run", "fetch", "suites", "report", "contaminate", "domains")
 
 
 def cmd_suites(args) -> int:
@@ -147,6 +147,138 @@ def cmd_run(args) -> int:
     return 0
 
 
+def cmd_contaminate(args) -> int:
+    """n-gram overlap between the benchmark suites and the training corpus."""
+    from ..config import load_config
+    from ..tokenizer.tokenizer import Tokenizer
+    from . import contamination as con
+    from .runner import Harness
+
+    harness = Harness(args.root)
+    root = harness.root
+    cfg = load_config(args.config)
+    tok = Tokenizer(cfg.data.tokenizer)
+
+    bins = [s["bin"] for s in (cfg.data.train_sources or [])] or [cfg.data.train_bin]
+    bins = [str(root / b) if not Path(b).is_absolute() else b for b in bins]
+    missing = [b for b in bins if not Path(b).is_file()]
+    if missing:
+        print(f"error: training data not found: {', '.join(missing)}")
+        return 1
+
+    names = resolve(args.suite)
+    texts = []
+    for name in names:
+        suite = SUITES[name]
+        if not suite.source:
+            continue                       # perplexity has no items to leak
+        rows = load(suite.source, root, limit=args.limit)
+        items = build(name, rows)
+        texts.extend(con.item_texts(name, items))
+    if not texts:
+        print("error: no suites with items were selected")
+        return 1
+
+    probe = con.build_probe(texts, tok, n=args.n, keep_tokens=args.verify)
+    total_tokens = sum(Path(b).stat().st_size // 2 for b in bins)
+    print(f"probing {len(texts):,} texts ({len(probe):,} distinct {args.n}-grams) "
+          f"against {total_tokens:,} training tokens\n")
+
+    last = [0.0]
+
+    def progress(done, total, label):
+        now = time.monotonic()
+        if now - last[0] < 1.0 and done < total:
+            return
+        last[0] = now
+        print(f"[contam] {label} {done:,}/{total:,} ({done / max(1, total) * 100:.0f}%)",
+              flush=True)
+
+    hits: dict[str, int] = {}
+    where: dict[str, tuple[str, int]] = {}
+    for b in bins:
+        for key, count in con.scan_bin(b, probe, max_tokens=args.max_tokens,
+                                       progress=None if args.quiet else progress,
+                                       where=where if args.verify else None).items():
+            hits[key] = hits.get(key, 0) + count
+    if args.verify and hits:
+        before = len(hits)
+        hits = con.verify(hits, probe, where, args.n)
+        print(f"  verified {len(hits)}/{before} hits against the real token stream")
+
+    out = con.summarise(hits, probe, args.n)
+    print(f"\n{'suite':>12} {'part':>10} {'items':>7} {'dirty':>7} {'rate':>7}")
+    for s in out["suites"]:
+        for part, p in sorted(s["parts"].items()):
+            rate = "–" if p["rate"] is None else f"{p['rate']:.1%}"
+            print(f"{s['suite']:>12} {part:>10} {p['checkable']:>7} {p['dirty']:>7} {rate:>7}")
+    print(f"\n{args.n}-gram overlap. 'question' leaking is common and mostly harmless — "
+          f"benchmark questions are public text.\n'answered' is the one that matters: the "
+          f"question WITH its answer, which is what a contaminated corpus memorises.")
+
+    if args.against:
+        result = con.load_result(args.against)
+        dirty = set(out["dirty_ids"])
+        print(f"\nre-scoring {Path(args.against).name} without the contaminated items:")
+        for name, res in (result.get("suites") or {}).items():
+            clean = con.clean_score(res, dirty)
+            if not clean or clean["clean"] is None:
+                continue
+            delta = clean["clean"] - (clean["reported"] or 0)
+            print(f"  {name:>12}  reported {clean['reported']:.3f}  "
+                  f"clean {clean['clean']:.3f}  ({delta:+.3f}, {clean['dropped']} dropped)")
+
+    path = Path(root) / "logs" / "eval" / f"contamination-{int(time.time())}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out, indent=2))
+    print(f"\nwrote {path}")
+    return 0
+
+
+def cmd_domains(args) -> int:
+    """Held-out loss split by training source. One number is hiding two."""
+    from ..infer.cli import load_model, resolve_tokenizer
+    from ..infer.checkpoints import CheckpointStore
+    from ..tokenizer.tokenizer import Tokenizer
+    from . import domains as dom
+    from .runner import Harness
+
+    harness = Harness(args.root)
+    store = CheckpointStore(args.root)
+    path = store.resolve(*store.identify(args.checkpoint).split("/"))
+    model, ckpt = load_model(str(path), device=args.device)
+    tok = Tokenizer(resolve_tokenizer(ckpt, None))
+
+    data_cfg = (ckpt.get("config") or {}).get("data", {})
+    val_bin = args.val_bin or data_cfg.get("val_bin")
+    if not val_bin:
+        print("error: this checkpoint does not record a val_bin; pass --val-bin")
+        return 1
+    sources = data_cfg.get("train_sources")
+    spans = dom.spans_for(val_bin, sources, tok)
+
+    seq_len = args.seq_len or ckpt["model_config"].get("max_seq_len", 1024)
+    rows = dom.per_domain_loss(model, val_bin, spans, seq_len, batches=args.batches,
+                               batch_size=args.batch, device=args.device)
+
+    print(f"\n{args.checkpoint} on {val_bin}, {seq_len}-token windows\n")
+    print(f"{'source':>22} {'tokens':>12} {'weight':>7} {'loss':>8} {'ppl':>9}  check")
+    for r in rows:
+        mark = {True: "ok", False: "MISMATCH", None: "unverified"}[r.get("verified")]
+        loss = "–" if r["loss"] is None else f"{r['loss']:.4f}"
+        ppl = "–" if r["loss"] is None else f"{r['perplexity']:.2f}"
+        print(f"{r['name']:>22} {r['tokens']:>12,} "
+              f"{(r.get('weight') or 0):>7.2f} {loss:>8} {ppl:>9}  {mark}")
+    if any(r.get("verified") is False for r in rows):
+        print("\nMISMATCH: a span's content does not match its name, so these boundaries are"
+              "\nderived wrongly and the split above is meaningless. See docs/12.")
+    b = dom.blended(rows)
+    if b is not None:
+        print(f"\nweight-blended: {b:.4f}  (compare with the run's own val loss; a big "
+              f"disagreement means the spans are wrong)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="python -m aksharallm.eval",
@@ -193,6 +325,34 @@ def build_parser() -> argparse.ArgumentParser:
     rep.add_argument("--run", default=None, help="only this training run")
     rep.add_argument("--limit", type=int, default=25)
     rep.add_argument("--root", default=None)
+
+    con_p = sub.add_parser("contaminate",
+                           help="n-gram overlap between the suites and the training data")
+    con_p.add_argument("--config", default="configs/small-code.yaml",
+                       help="the run whose training data to check against")
+    con_p.add_argument("--suite", default="mc", help="which suites to check")
+    con_p.add_argument("--n", type=int, default=13, help="n-gram length (13 is standard)")
+    con_p.add_argument("--limit", type=int, default=None, help="items per suite")
+    con_p.add_argument("--max-tokens", type=int, default=None,
+                       help="scan only the first N tokens of each bin (a quick look)")
+    con_p.add_argument("--verify", action="store_true",
+                       help="re-check every hit against the real tokens (drops collisions)")
+    con_p.add_argument("--against", default=None,
+                       help="a logs/eval/*.json result to re-score without dirty items")
+    con_p.add_argument("--quiet", action="store_true")
+    con_p.add_argument("--root", default=None)
+    con_p.set_defaults(fn=cmd_contaminate)
+
+    dom_p = sub.add_parser("domains", help="held-out loss split by training source")
+    dom_p.add_argument("checkpoint")
+    dom_p.add_argument("--val-bin", default=None)
+    dom_p.add_argument("--seq-len", type=int, default=None)
+    dom_p.add_argument("--batches", type=int, default=20)
+    dom_p.add_argument("--batch", type=int, default=4)
+    dom_p.add_argument("--device", default="cpu", choices=("cuda", "cpu"))
+    dom_p.add_argument("--root", default=None)
+    dom_p.set_defaults(fn=cmd_domains)
+
     return ap
 
 
@@ -207,8 +367,12 @@ def main(argv: list[str] | None = None) -> int:
         build_parser().print_help()
         return 0
     try:
-        return {"run": cmd_run, "fetch": cmd_fetch, "suites": cmd_suites,
-                "report": cmd_report}[args.cmd](args)
+        # Newer subcommands carry their own handler on `fn`; the original four predate
+        # that and are still dispatched by name.
+        handler = getattr(args, "fn", None) or {
+            "run": cmd_run, "fetch": cmd_fetch, "suites": cmd_suites,
+            "report": cmd_report}[args.cmd]
+        return handler(args)
     except EvalError as exc:
         print(f"\n  {exc}\n", file=sys.stderr)
         return 1

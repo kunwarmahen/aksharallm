@@ -121,3 +121,23 @@
   padding: 10px; margin: 0; overflow: auto; max-height: 220px; white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* The audit panel: contamination and the per-domain split. Two cards side by side down to
+   a phone, where they stack — same minmax(min(...)) rule as every other grid here, because
+   a plain minmax(340px, 1fr) track cannot shrink below 340 and takes the page with it. */
+.ev-audit { margin-top: var(--gap); border-top: 1px solid var(--border); padding-top: var(--gap); }
+.ev-audit-grid { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); }
+.ev-audit-card { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+.ev-audit-card h3 { margin: 0 0 6px; font-size: 14px; }
+.ev-audit-card p { margin: 0 0 8px; color: var(--ink-2); font-size: 13px; }
+.ev-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; margin-bottom: 8px; }
+.ev-row .field { min-width: 0; }
+.ev-audit-out { margin-top: 10px; overflow-x: auto; }
+.ev-audit-out table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.ev-audit-out th, .ev-audit-out td {
+  padding: 5px 8px; text-align: right; border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.ev-audit-out tbody th { text-align: left; font-weight: 600; }
+.ev-audit-out .dirty { color: var(--critical); font-weight: 650; }
+.ev-audit-out .clean-ok { color: var(--good); }

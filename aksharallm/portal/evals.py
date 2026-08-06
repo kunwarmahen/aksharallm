@@ -274,6 +274,70 @@ class EvalJobs:
         cmd = [sys.executable, "-u", "-m", "aksharallm.eval", "fetch", *wanted]
         return self._launch(cmd, job, {"kind": "fetch", "datasets": wanted})
 
+    def start_audit(self, spec: dict) -> dict:
+        """The two checks that measure the *benchmark* rather than the model.
+
+        They share the eval panel's one-job-at-a-time lock deliberately. A contamination
+        scan streams ten billion tokens and a per-domain split runs the model; neither
+        wants to be doing that while an evaluation is trying to produce a number.
+        """
+        kind = str(spec.get("kind") or "")
+        if kind not in ("contaminate", "domains"):
+            raise RunError(f"unknown audit {kind!r}")
+        if self._pid():
+            raise RunError("a job is already running — wait for it to finish.")
+        self.dir.mkdir(parents=True, exist_ok=True)
+        job = f"{time.strftime('%Y%m%d-%H%M%S')}-{kind}"
+
+        if kind == "contaminate":
+            cfg = str(spec.get("config") or "configs/small-code.yaml")
+            # A config name, not a path: this decides which .bin files get opened.
+            if "/" in cfg.replace("configs/", "") or not cfg.endswith(".yaml"):
+                raise RunError("pick one of the run configs")
+            if not (self.root / cfg).is_file():
+                raise RunError(f"{cfg} does not exist")
+            cmd = [sys.executable, "-u", "-m", "aksharallm.eval", "contaminate",
+                   "--config", cfg,
+                   "--suite", ",".join(suites_mod.resolve(spec.get("suites") or "mc"))]
+            if spec.get("max_tokens"):
+                cmd += ["--max-tokens", str(int(spec["max_tokens"]))]
+            if spec.get("verify"):
+                cmd.append("--verify")
+            if spec.get("against"):
+                cmd += ["--against", str(self.json_path(str(spec["against"])))]
+            meta = {"kind": "contaminate", "config": cfg}
+        else:
+            ref = str(spec.get("checkpoint") or "").strip()
+            if not ref:
+                raise RunError("pick a checkpoint")
+            info = self.store.get(self.store.identify(ref))
+            if info.error:
+                raise RunError(f"{info.rel} cannot be loaded: {info.error}")
+            cmd = [sys.executable, "-u", "-m", "aksharallm.eval", "domains", str(info.path),
+                   "--device", self.device().get("device", "cpu")]
+            if spec.get("batches"):
+                cmd += ["--batches", str(int(spec["batches"]))]
+            meta = {"kind": "domains", "checkpoint": info.rel}
+
+        return self._launch(cmd, job, meta)
+
+    def audits(self, limit: int = 10) -> dict:
+        """The latest contamination report, and where to find the rest.
+
+        Read from the JSON the CLI wrote, never recomputed — the terminal and the browser
+        have to be looking at the same measurement or one of them is lying.
+        """
+        files = sorted(self.dir.glob("contamination-*.json"),
+                       key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
+        latest = None
+        if files:
+            try:
+                latest = {**json.loads(files[0].read_text()),
+                          "name": files[0].name, "when": files[0].stat().st_mtime}
+            except (json.JSONDecodeError, OSError):
+                latest = None
+        return {"latest": latest, "history": [f.name for f in files]}
+
     def _launch(self, cmd: list[str], job: str, meta: dict) -> dict:
         log = self.log_path(job)
         with open(log, "wb") as fh:

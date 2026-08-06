@@ -346,6 +346,134 @@ judge:
    because the portal writes it there; the reader excludes it by name. Without that the
    running job appears in the table as an empty evaluation.
 
+## Is the benchmark trustworthy? (contamination, and the number hiding two)
+
+Every score above assumes two things nobody had checked. This section checks them.
+
+### 1. Did the test leak into the training data?
+
+If a question and its answer already sit somewhere in the ten billion tokens the model was
+trained on, a right answer means nothing — the model may simply be remembering. In the
+chapter's own words from earlier: **a benchmark number nobody has checked for leakage is a
+rumour.**
+
+The published method is **n-gram overlap**. An item is *dirty* if any run of 13 consecutive
+tokens from it also appears anywhere in the training corpus. Thirteen is the standard choice
+and it is a Goldilocks number: at 8, ordinary English shares n-grams by accident and
+everything looks contaminated; at 25, a reformatted whitespace run or a one-word paraphrase
+breaks the streak and nothing does.
+
+```mermaid
+flowchart LR
+    E["the benchmark<br/>~10^5 tokens"] --> H["every 13-gram,<br/>hashed and sorted"]
+    T["the training corpus<br/>~10^10 tokens"] -->|"chunks of 32M"| R["every 13-gram,<br/>hashed"]
+    R --> S{"seen<br/>before?"}
+    H --> S
+    S -->|yes| D["this item is dirty"]
+    S -->|no| C["this item is clean"]
+    style D fill:#9d0208,color:#fff
+    style C fill:#2d6a4f,color:#fff
+```
+
+The asymmetry is what makes it tractable: build the tiny side into a sorted array, then
+stream the huge side past it once. Both sides are hashed with the same rolling polynomial
+computed over whole chunks in numpy — a Python loop over ten billion positions is not a
+program that finishes — and membership is a vectorised binary search.
+
+**The one distinction the report exists to draw** is between the question and the answer:
+
+| part | what it means | how worried to be |
+|---|---|---|
+| `question` | the question text appears in training | usually **not at all**. Benchmark questions are public text; a web crawl is expected to contain them |
+| `answered` | the question **with its correct answer attached** appears | **this is the one.** It is what a contaminated corpus memorises, and what makes a score meaningless |
+
+Getting that distinction right took a second attempt, and the mistake is instructive.
+"Question plus answer" contains every n-gram of the question, so the first version lit up
+`answered` for any corpus that merely held the public question — the two columns were the
+same column, and the more alarming one was the useless one. The fix is to keep only the
+n-grams that **reach into the answer**: the last 12 tokens of the question and everything
+after it. A test plants a question-only corpus and requires `answered` to stay at zero.
+
+**The output that matters is not the percentage, it is the clean score.** Re-read a
+benchmark result, drop the contaminated items, and see whether the number moves:
+
+```bash
+python -m aksharallm.eval contaminate --suite mc --verify     --against logs/eval/20260806-small-code-eval.json
+```
+
+A suite that is 8% dirty and scores the same either way is fine. One that is 3% dirty and
+gains four points on exactly those three percent is telling you something. This needs the
+run's per-item verdicts, so it does not work on a result recorded with `--no-items` — and
+it says so rather than inventing a number.
+
+Three things the implementation is careful about, all of which would otherwise make the
+report **quietly optimistic**, which is the wrong direction for a contamination check to be
+wrong in:
+
+- **Chunks overlap by n-1 tokens.** An n-gram straddling a chunk boundary is still an n-gram
+  in the corpus; forget the overlap and you silently lose one window per chunk.
+- **Items shorter than 13 tokens are counted as *unchecked*, not as clean.** A suite of
+  one-line questions must not report 0% dirty when the truth is 0% checked.
+- **Hash collisions are acknowledged and can be removed.** Two different 13-grams can share
+  a 64-bit hash; with ~10⁶ probe hashes and ~10¹⁰ lookups that is about one spurious hit per
+  two thousand full scans. Small enough to ignore in a summary, too large to leave unstated
+  in a finding somebody will quote — so `--verify` re-reads the actual tokens behind every
+  hit and drops the ones that do not hold up.
+
+### 2. One validation number is hiding two
+
+`configs/small-code.yaml` trains on **85% prose and 15% Python** and reports a single val
+loss. That average is 85% prose by construction, so the model's Python ability is nearly
+invisible in it, and either half can move without the total saying so.
+
+Split it and the two halves are not remotely alike:
+
+| source | tokens | weight | loss | perplexity |
+|---|---|---|---|---|
+| fineweb-edu (prose) | 8,500,000 | 0.85 | **2.7696** | 15.95 |
+| codeparrot-python | 1,500,000 | 0.15 | **1.2558** | **3.51** |
+| *weight-blended* | | | *2.5425* | |
+
+**Python is more than twice as predictable as prose** — perplexity 3.5 against 16.0. That is
+not the model being good at code so much as code being repetitive, but either way it is a
+fact the single number 2.54 completely conceals, and it is the number to watch when the
+Python specialist of Phase 4 starts training.
+
+The blended figure is also the check. The run's own best val loss at this step was **2.5552**
+and blending the parts gives **2.5425** — agreement to 0.013, which is what says the split
+was taken in the right place.
+
+**Where the boundaries come from, and why they are verified.** `prepare_blend` writes
+`val.bin` by concatenating one part per source, each capped at `val_tokens × weight`:
+
+```mermaid
+flowchart LR
+    A["fineweb-edu<br/>0 .. 8,499,999"] --> C["val.bin<br/>10,000,000 tokens"]
+    B["codeparrot-python<br/>8,500,000 .. 9,999,999"] --> C
+```
+
+Nothing recorded those offsets, so for the existing blend they are **derived** from the
+weights — and a derived number nobody checks is how a report becomes confidently wrong. So
+each span's content is read back and asked whether it matches the source it claims to be: a
+span called `codeparrot-python` had better look like code, and one called `fineweb-edu` had
+better not. A span that fails prints **MISMATCH** and the split is declared meaningless
+rather than used, because a prose/Python split with the split in the wrong place produces
+two plausible numbers that are both averages of the same mixture. A source name the check
+has no opinion about prints *unverified*, never *ok*.
+
+Going forward there is nothing to derive: `prepare_blend` now writes `val.manifest.json`
+beside the bin, and the manifest always wins.
+
+```bash
+python -m aksharallm.eval domains small-code --device cpu
+python -m aksharallm.eval contaminate --suite mc --verify
+```
+
+Both are also buttons in the portal's **Eval** tab, under "Is the benchmark trustworthy?",
+and they share that tab's one-job-at-a-time lock — a contamination scan streams ten billion
+tokens and a per-domain split runs the model, and neither wants to be doing that while an
+evaluation is trying to produce a number.
+
 ## The code, in reading order
 
 | # | file | what to look for |
@@ -358,9 +486,14 @@ judge:
 | 6 | [`eval/report.py`](../aksharallm/eval/report.py) | `Results` → `summary_table` / `compare_table` — a folder of JSON, no database, and the trend across steps |
 | 7 | [`eval/__main__.py`](../aksharallm/eval/__main__.py) | `cmd_suites` / `cmd_fetch` / `cmd_run` / `cmd_report` — thin, by design |
 | 8 | [`aksharallm/infer/sandbox.py`](../aksharallm/infer/sandbox.py) | HumanEval's scorer is the same sandbox the Playground and GRPO use. Note who adds the `check(entry_point)` call |
-| 9 | [`aksharallm/portal/evals.py`](../aksharallm/portal/evals.py) | `EvalJobs` — the tab runs the CLI in a subprocess and reads the same result files |
+| 9 | [`eval/contamination.py`](../aksharallm/eval/contamination.py) | `ngram_hashes` (the Horner trick that makes ten billion tokens tractable), `build_probe` (and the trim that makes `answered` mean something), `scan_bin`'s chunk overlap, `clean_score` |
+| 10 | [`eval/domains.py`](../aksharallm/eval/domains.py) | `derive_spans` then `verify_spans` — the derivation and the check on it. `blended()` is the end-to-end test: it has to agree with the run's own val loss |
+| 11 | [`aksharallm/portal/evals.py`](../aksharallm/portal/evals.py) | `EvalJobs` — the tab runs the CLI in a subprocess and reads the same result files; `start_audit` adds the two checks above to the same job lock |
 
-What pins it: `tests/test_eval.py` — the mixed-length batch scored against the same pairs
+What pins it: `tests/test_contamination.py` leads with a **positive control** — a known item
+planted in a fake corpus that the scanner must find — because a checker that reports 0%
+because it is broken looks exactly like a clean corpus, and it is the more comfortable of the
+two answers. Then `tests/test_eval.py` — the mixed-length batch scored against the same pairs
 one at a time (right-padding under a causal mask), `full_logits` returning exactly what the
 training path returns, and the BPE-boundary test written *for*
 [lesson 11](lessons/11-eval.md) after the original one turned out to be unable to fail.

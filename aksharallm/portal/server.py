@@ -251,6 +251,10 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 3 and parts[:2] == ["api", "eval"]:
                 if parts[2] == "start":
                     return self._json(self.evals.start(data))
+                if parts[2] == "audit":
+                    # contamination / per-domain loss: they measure the benchmark and the
+                    # data rather than the model, and share the eval panel's job lock.
+                    return self._json(self.evals.start_audit(data))
                 if parts[2] == "stop":
                     return self._json(self.evals.stop())
                 if parts[2] == "fetch":
@@ -416,6 +420,8 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["eval", "checkpoints"]:
             return self._json({"checkpoints": self.evals.checkpoints(),
                                "adapters": self.evals.adapters()})
+        if parts == ["eval", "audits"]:
+            return self._json(self.evals.audits())
         if parts == ["eval", "compare"]:
             # One suite across every evaluation ever run — the chart the tab leads with,
             # and the whole reason results are kept as files rather than printed and lost.

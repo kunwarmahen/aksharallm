@@ -28,6 +28,7 @@ files in. See also docs/07-scaling.md.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import random
 import sys
@@ -120,10 +121,23 @@ def main():
                         args.n_proc, max_tokens=max(1, int(args.val_tokens * w)),
                         desc=f"val:{name}")
         val_parts.append(part)
+    # The combined file is a plain concatenation, so where one source ends and the next
+    # begins exists only as arithmetic over the weights. Record it instead: a derived
+    # boundary nobody checked is how a per-domain report becomes confidently wrong, and
+    # `eval domains` otherwise has to reconstruct this and then verify its own guess.
+    spans, offset = [], 0
     with open(out_dir / "val.bin", "wb") as f:
-        for p in val_parts:
-            f.write(p.read_bytes())
+        for (name, w), p in zip(sources, val_parts):
+            blob = p.read_bytes()
+            f.write(blob)
             p.unlink()
+            spans.append({"name": name, "start": offset, "end": offset + len(blob) // 2,
+                          "weight": w})
+            offset += len(blob) // 2
+    (out_dir / "val.manifest.json").write_text(json.dumps(
+        {"val_bin": "val.bin", "tokens": offset, "spans": spans}, indent=2))
+    print(f"  val.manifest.json: " + ", ".join(
+        f"{s['name']} {s['start']:,}-{s['end']:,}" for s in spans))
 
     # ---- 3. per-source train bins ------------------------------------------------
     print("\n[3/3] writing per-source train bins")

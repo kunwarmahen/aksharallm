@@ -98,6 +98,53 @@
 
       <div class="scroll-x"><div id="ev-results" class="ev-results"></div></div>
 
+      <div class="ev-audit">
+        <div class="panel-head"><h2>Is the benchmark trustworthy?</h2>
+          <span class="panel-note">these two measure the <em>test</em> and the <em>data</em>, not the model</span>
+        </div>
+        <div class="ev-audit-grid">
+          <div class="ev-audit-card">
+            <h3>Contamination</h3>
+            <p>If a question and its answer already appear in the training data, the model
+              may be remembering rather than reasoning — and the score is a rumour. This
+              looks for any run of 13 tokens shared between each benchmark item and the
+              whole training corpus.</p>
+            <p class="ev-hint"><strong>The question leaking is normal</strong> — benchmark
+              questions are public text. The question <em>with its answer attached</em> is
+              the one that matters, and the two are counted separately.</p>
+            <div class="ev-row">
+              <label class="field"><span class="field-label">training config</span>
+                <select id="ev-con-config"></select></label>
+              <label class="field"><span class="field-label">suites</span>
+                <select id="ev-con-suites">
+                  <option value="mc">multiple choice</option>
+                  <option value="all">everything</option>
+                </select></label>
+            </div>
+            <div class="ev-row">
+              <button id="ev-con-run" class="ghost" type="button">Check for leakage</button>
+              <span class="ev-hint">a full pass over 10B tokens takes ~30 min</span>
+            </div>
+            <div id="ev-con-out" class="ev-audit-out"></div>
+          </div>
+
+          <div class="ev-audit-card">
+            <h3>Per-domain loss</h3>
+            <p>The blended run reports one validation number over 85% prose and 15% Python.
+              That average is mostly prose, so the model's Python ability is nearly
+              invisible in it — and either half can move without the total saying so.</p>
+            <p class="ev-hint">The split is checked, not assumed: each region's content has
+              to match the source it claims to be, and the parts must blend back to the
+              run's own val loss.</p>
+            <div class="ev-row">
+              <button id="ev-dom-run" class="ghost" type="button">Split the val loss</button>
+              <span class="ev-hint">uses the checkpoint selected above</span>
+            </div>
+            <div id="ev-dom-out" class="ev-audit-out"></div>
+          </div>
+        </div>
+      </div>
+
       <div class="ev-logwrap">
         <div class="panel-head"><h2>Job output</h2>
           <span class="panel-note">live, from <code>logs/eval/</code></span></div>

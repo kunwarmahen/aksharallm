@@ -34,8 +34,24 @@ async function openEvalTab() {
     } catch (err) {
       $('#ev-ckpt-note').textContent = `could not list checkpoints — ${err.message}`;
     }
+    wireAudit();
+    fillAuditConfigs();
   }
+  loadAudits();
   pollEval();
+}
+
+/* The contamination check opens whichever training bins a config names, so the choice is a
+ * config from configs/ rather than anything typed — the server re-checks that too. */
+async function fillAuditConfigs() {
+  try {
+    const { runs } = await api('/api/runs');
+    const sel = $('#ev-con-config');
+    sel.innerHTML = (runs || [])
+      .filter((r) => r.has_config !== false)
+      .map((r) => `<option value="configs/${escHtml(r.run)}.yaml"`
+        + `${r.run === 'small-code' ? ' selected' : ''}>${escHtml(r.run)}</option>`).join('');
+  } catch (err) { /* leave it empty; the button will say so */ }
 }
 
 function renderCheckpoints() {
@@ -364,6 +380,77 @@ export function wireEvalTab() {
   $('#ev-trend-suite').addEventListener('change', (e) => {
     ev.trendSuite = e.target.value;
     loadTrend();
+  });
+}
+
+/* ---- the audit panel: is the benchmark trustworthy? ----------------------------------- */
+
+/* Contamination is rendered from the JSON the CLI wrote, never recomputed here — the
+ * terminal and the browser have to be reading the same measurement or one of them is
+ * lying. A rate is shown as "–" when nothing was checkable, because a rate over zero
+ * items is unknown and not zero. */
+function renderContamination(latest) {
+  const box = $('#ev-con-out');
+  if (!latest) { box.innerHTML = '<p class="ev-hint">Not checked yet.</p>'; return; }
+  const rows = (latest.suites || []).flatMap((s) =>
+    Object.entries(s.parts).sort().map(([part, p]) => {
+      const rate = p.rate == null ? '–' : `${(p.rate * 100).toFixed(1)}%`;
+      const cls = p.dirty > 0 && part === 'answered' ? ' class="dirty"' : '';
+      return `<tr><th>${escHtml(s.suite)}</th><td>${escHtml(part)}</td>`
+        + `<td>${fmt.int(p.checkable)}</td><td${cls}>${fmt.int(p.dirty)}</td>`
+        + `<td${cls}>${rate}</td>`
+        + `<td>${p.too_short ? fmt.int(p.too_short) : '–'}</td></tr>`;
+    }));
+  const anyDirty = (latest.suites || []).some((s) =>
+    (s.parts.answered || {}).dirty > 0);
+  box.innerHTML =
+    `<table><thead><tr><th>suite</th><th>part</th><th>checked</th><th>dirty</th>`
+    + `<th>rate</th><th>too short</th></tr></thead><tbody>${rows.join('')}</tbody></table>`
+    + `<p class="ev-hint">${latest.n}-gram overlap, ${fmt.ago(latest.when)}. `
+    + (anyDirty
+      ? '<strong class="dirty">Some answered items appear in the training data.</strong> '
+        + 'Re-score without them before quoting a number.'
+      : '<span class="clean-ok">No answered item was found in the training data.</span> '
+        + 'The scores stand.')
+    + '</p>';
+}
+
+function renderDomains(text) {
+  /* The CLI prints a small table; the job log is the honest source and re-parsing it into
+   * a second format would be one more thing to keep in step. Shown as it was printed. */
+  const box = $('#ev-dom-out');
+  const start = text.lastIndexOf(' on ');
+  box.innerHTML = start === -1 ? '<p class="ev-hint">No split yet.</p>'
+    : `<pre class="ev-log">${escHtml(text.slice(Math.max(0, start - 40)).trim())}</pre>`;
+}
+
+async function loadAudits() {
+  try {
+    const res = await api('/api/eval/audits');
+    renderContamination(res.latest);
+  } catch (err) { /* the panel is optional; the tab still works */ }
+}
+
+function wireAudit() {
+  $('#ev-con-run').addEventListener('click', async () => {
+    try {
+      await post('/api/eval/audit', {
+        kind: 'contaminate',
+        config: $('#ev-con-config').value,
+        suites: $('#ev-con-suites').value,
+        verify: true,
+      });
+      flash('Checking for leakage — a full pass over 10B tokens takes about half an hour.',
+        'ok');
+    } catch (err) { flash(err.message, 'error'); }
+  });
+  $('#ev-dom-run').addEventListener('click', async () => {
+    try {
+      await post('/api/eval/audit', {
+        kind: 'domains', checkpoint: $('#ev-ckpt').value, batches: 16,
+      });
+      flash('Splitting the validation loss by source.', 'ok');
+    } catch (err) { flash(err.message, 'error'); }
   });
 }
 
