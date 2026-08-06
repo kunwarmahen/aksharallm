@@ -25,8 +25,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..config import ModelConfig
-from . import flash
+from . import flash, rope
 from .moe import MoEFeedForward, moe_stats
+from .rope import RopeScaling
 
 # torch >= 2.5 can do grouped-query attention inside SDPA without materialising repeated KV.
 _SDPA_HAS_GQA = "enable_gqa" in F.scaled_dot_product_attention.__doc__
@@ -52,7 +53,8 @@ class RMSNorm(nn.Module):
 
 
 def build_rope_cache(
-    head_dim: int, max_seq_len: int, theta: float, device=None
+    head_dim: int, max_seq_len: int, theta: float, device=None,
+    scaling: RopeScaling | None = None, seq_len: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Precompute the rotation angles for RoPE.
 
@@ -61,13 +63,13 @@ def build_rope_cache(
     geometrically decreasing frequencies, so early channels rotate fast (encoding local
     position) and late channels rotate slowly (encoding global position).
 
+    `scaling` stretches that ladder so the model can address positions past the window it
+    was trained on — see `model/rope.py` and doc 18. Left None, this is exactly the
+    unscaled cache it always was.
+
     Returns (cos, sin), each shaped (max_seq_len, head_dim).
     """
-    inv_freq = 1.0 / (theta ** (torch.arange(0, head_dim, 2, device=device).float() / head_dim))
-    pos = torch.arange(max_seq_len, device=device).float()
-    freqs = torch.outer(pos, inv_freq)  # (T, D/2)
-    emb = torch.cat((freqs, freqs), dim=-1)  # (T, D) -- duplicated to match rotate_half
-    return emb.cos(), emb.sin()
+    return rope.build_cache(head_dim, max_seq_len, theta, scaling, seq_len, device)
 
 
 def _rotate_half(x: torch.Tensor) -> torch.Tensor:
@@ -92,6 +94,40 @@ def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.T
     else:
         cos, sin = cos[None, None, :, :], sin[None, None, :, :]
     return x * cos.to(x.dtype) + _rotate_half(x) * sin.to(x.dtype)
+
+
+#: One built mask per (shape, window) — every layer of one forward wants the same tensor, and
+#: at T=8192 it is 64 MB of bools that nobody should build twice, let alone twenty-four times.
+_MASK_CACHE: dict[tuple, torch.Tensor] = {}
+
+
+def sliding_window_mask(T: int, S: int, window: int, sinks: int, device) -> torch.Tensor:
+    """Bool `(T, S)`: True where query row `j` is allowed to look at key `n`.
+
+    Query `j` sits at absolute position `j + (S - T)` — the same bottom-right alignment
+    everything else in this file uses. Three clauses:
+
+        n <= j + (S - T)                  causal, as always
+        n >  j + (S - T) - window         inside the sliding window
+        n <  sinks                        ...or it is an attention sink
+
+    The third clause is the whole reason a sliding window works. Attention is a softmax: the
+    weights must sum to one whether or not anything in the window deserves them, so a model
+    learns to dump the remainder somewhere harmless — and it picks the first few tokens,
+    because they are the only ones every position can see. Slide the window past them and
+    that overflow has nowhere to go, it lands on real tokens instead, and perplexity
+    explodes. Keeping four keys alive fixes it. See doc 18.
+    """
+    key = (T, S, window, sinks, str(device))
+    mask = _MASK_CACHE.get(key)
+    if mask is None:
+        q = torch.arange(T, device=device)[:, None] + (S - T)
+        k = torch.arange(S, device=device)[None, :]
+        mask = (k <= q) & ((k > q - window) | (k < sinks))
+        if len(_MASK_CACHE) > 16:
+            _MASK_CACHE.clear()
+        _MASK_CACHE[key] = mask
+    return mask
 
 
 class KVCache:
@@ -146,6 +182,8 @@ class Attention(nn.Module):
         self.wo = nn.Linear(self.n_heads * self.head_dim, cfg.d_model, bias=False)
         self.dropout = cfg.dropout
         self.attn_impl = cfg.attn_impl
+        self.window = cfg.attn_window
+        self.sinks = cfg.attn_sinks
 
     def forward(self, x, cos, sin, cache: KVCache | None = None, attn_mask=None):
         B, T, _ = x.shape
@@ -176,7 +214,6 @@ class Attention(nn.Module):
         #
         # A prefill into an *empty* cache gets no mask and `is_causal=True`: query and key
         # lengths are equal there, so the triangle is aligned and the fast kernel is kept.
-        is_causal = attn_mask is None and T > 1
         dropout_p = self.dropout if self.training else 0.0
 
         # Our own kernel, when the config asks for it and the shape is one it handles.
@@ -188,9 +225,24 @@ class Attention(nn.Module):
         # `is_causal` has to say False to, because the kernel aligns its diagonal to the
         # BOTTOM-RIGHT: query j sees keys up to `j + (S - T)`, which for a single query
         # against a warm cache is every key there is.
+        #
+        # A sliding window goes to the kernel as two integers rather than as a mask, which
+        # is the concrete payoff for having written it: the (T, S) bool that SDPA needs is
+        # 64 MB at T=8192, and long context is exactly where that matters.
         if self.attn_impl == "flash" and flash.usable(q, k, dropout_p, attn_mask):
-            out = flash.flash_attention(q, k, v, causal=True)
+            out = flash.flash_attention(q, k, v, causal=True,
+                                        window=self.window, sinks=self.sinks)
             return self.wo(out.transpose(1, 2).contiguous().view(B, T, -1))
+
+        # Anything that did not take the kernel needs the window written out. Built here
+        # rather than in `Transformer.forward` because the routing decision above is
+        # per-call — a T == 1 decode step falls back even when every other call did not,
+        # and a window silently dropped on the decode path is a model that answers
+        # differently from the one that was evaluated.
+        if self.window is not None and attn_mask is None:
+            attn_mask = sliding_window_mask(T, k.shape[2], self.window, self.sinks, x.device)
+
+        is_causal = attn_mask is None and T > 1
 
         if _SDPA_HAS_GQA:
             out = F.scaled_dot_product_attention(
@@ -270,9 +322,16 @@ class Transformer(nn.Module):
             # vocab*d_model params and empirically helps at small scale.
             self.lm_head.weight = self.tok_emb.weight
 
-        cos, sin = build_rope_cache(cfg.head_dim, cfg.max_seq_len, cfg.rope_theta)
+        # `persistent=False` is load-bearing for long context: the cache is *derived* from
+        # the config, so it is never written into a checkpoint and never loaded from one.
+        # That is what lets `longctx extend` change the scaling of a trained model by
+        # editing its config alone — the weights do not know and do not need to.
+        cos, sin = build_rope_cache(cfg.head_dim, cfg.max_seq_len, cfg.rope_theta,
+                                    scaling=cfg.rope_scaling)
         self.register_buffer("rope_cos", cos, persistent=False)
         self.register_buffer("rope_sin", sin, persistent=False)
+        #: The length `dynamic` scaling has been sized for. See `_rope` / `pin_rope`.
+        self._rope_len = cfg.rope_scaling.original_len(cfg.max_seq_len)
 
         self.apply(self._init_weights)
         # Scale down the projections that write into the residual stream. Without this the
@@ -310,6 +369,42 @@ class Transformer(nn.Module):
             if isinstance(module, MoEFeedForward):
                 n -= module.n_total_params() - module.n_active_params()
         return n
+
+    def _rope(self, needed: int):
+        """The RoPE cache to use for a call that reaches position `needed`.
+
+        Only `dynamic` scaling does anything here, and it does it by **growth**: the factor
+        is recomputed the first time a longer sequence appears and then kept. Two things
+        about that are worth knowing before trusting it.
+
+        * **It is stateful.** After one 8k sequence, a later 1k sequence is served by the
+          8k factor, not by unscaled RoPE. That is what every published implementation does
+          and it is still surprising, so `test_longctx.py` pins it.
+        * **Do not let it grow mid-generation.** Keys already in the KV cache were rotated
+          with the old factor; if the cache is rebuilt underneath them, the cached keys and
+          the new queries disagree about what position means. Call `pin_rope(max_len)`
+          before a generation loop, which is what `infer/engine.py` does.
+        """
+        sc = self.cfg.rope_scaling
+        if sc.type != "dynamic" or not sc.enabled or needed <= self._rope_len:
+            return self.rope_cos, self.rope_sin
+        self.pin_rope(needed)
+        return self.rope_cos, self.rope_sin
+
+    def pin_rope(self, length: int) -> None:
+        """Fix `dynamic` scaling at the factor a sequence of `length` needs, once.
+
+        A no-op for every other method. Call it before a generation loop so the cache
+        cannot be rebuilt out from under a warm KV cache.
+        """
+        cfg = self.cfg
+        length = max(int(length), cfg.rope_scaling.original_len(cfg.max_seq_len))
+        cos, sin = build_rope_cache(cfg.head_dim, cfg.max_seq_len, cfg.rope_theta,
+                                    device=self.rope_cos.device,
+                                    scaling=cfg.rope_scaling, seq_len=length)
+        self.rope_cos = cos.to(self.rope_cos.dtype)
+        self.rope_sin = sin.to(self.rope_sin.dtype)
+        self._rope_len = length
 
     def moe_aux_loss(self) -> torch.Tensor | None:
         """The summed auxiliary losses from the last forward, or None if dense."""
@@ -356,11 +451,13 @@ class Transformer(nn.Module):
             assert start + T <= self.cfg.max_seq_len, (
                 f"sequence position {start + T} exceeds max_seq_len {self.cfg.max_seq_len}"
             )
-            cos = self.rope_cos[start : start + T]
-            sin = self.rope_sin[start : start + T]
+            rope_cos, rope_sin = self._rope(start + T)
+            cos = rope_cos[start : start + T]
+            sin = rope_sin[start : start + T]
         else:
-            cos = self.rope_cos[positions]        # (B, T, head_dim)
-            sin = self.rope_sin[positions]
+            rope_cos, rope_sin = self._rope(int(positions.max()) + 1)
+            cos = rope_cos[positions]             # (B, T, head_dim)
+            sin = rope_sin[positions]
 
         # Several tokens against a WARM cache: build the mask once here rather than in each
         # of the 24 attention layers. Query j is at absolute position start+j and may see

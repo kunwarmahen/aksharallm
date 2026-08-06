@@ -136,7 +136,9 @@ aksharallm/
 │   ├── model/
 │   │   ├── transformer.py    the whole architecture, ~300 lines
 │   │   ├── moe.py            mixture of experts: router, sorted dispatch, upcycling — docs/14
-│   │   └── flash.py          FlashAttention in Triton, fwd + bwd (model.attn_impl) — docs/03
+│   │   ├── flash.py          FlashAttention in Triton, fwd + bwd (model.attn_impl) — docs/03
+│   │   └── rope.py           RoPE scaling: linear / NTK / YaRN / dynamic — docs/18
+│   ├── longctx/          extend a context and measure it — see docs/18
 │   ├── quant/            int8/int4/NF4 from scratch — see docs/10
 │   ├── lora/             LoRA + QLoRA adapters from scratch — see docs/11
 │   │   ├── qtensor.py        group scales, zero-points, 4-bit packing
@@ -337,9 +339,27 @@ verifies) → **quantization** ✅ → **LoRA/QLoRA** ✅ → a **real eval harn
 HellaSwag, PIQA, GSM8K, HumanEval and a model-judged suite — [docs/12](docs/12-eval.md)) →
 **synthetic data** ✅ ([docs/13](docs/13-synthetic-data.md)) → **mixture of experts** ✅
 ([docs/14](docs/14-moe.md)) → **distillation** → **diffusion training** → **audio** → export
-and serving ✅, with **speculative decoding** ✅, an **interpretability tab** ✅ and
-**FlashAttention written in Triton** ✅ ([docs/03](docs/03-model.md)), and **long context**
-still to come.
+and serving ✅, with **speculative decoding** ✅, an **interpretability tab** ✅,
+**FlashAttention written in Triton** ✅ ([docs/03](docs/03-model.md)) and
+**long context** ✅ ([docs/18](docs/18-long-context.md)).
+
+**Long context** turned out to be the cheapest big win in the whole list, because RoPE has
+no parameters: extending a trained model's context is arithmetic, not training. Ask our 300M
+about token 4,000 and it does not get vaguer, it falls off a cliff — position is encoded as a
+rotation *angle*, and past the trained window it is being handed angles it has never seen.
+Three one-line fixes exist, and we measured all of them on our own checkpoints. On the 300M,
+**doubling the context with NTK-aware scaling cost nothing measurable** (loss 0.989 against
+an in-window baseline of 0.990); linear interpolation, the obvious approach, nearly doubled
+the in-window loss to buy the same range. At 4x the methods separate and YaRN is the only one
+still close to baseline.
+
+The part worth keeping is the measurement. Perplexity by position says whether the model is
+still *fluent* out there; a from-scratch needle-in-a-haystack says whether it can still
+*retrieve*. They disagree, sharply: a sliding window scores the best perplexity of anything
+we tried and is structurally blind past its window. Our 13.8M scores 16.7% ± 10.8% on the
+needle against a 25% chance line — nothing — and publishing that is the point. Scaling makes
+distant positions legible; being able to use them is a capability, and capabilities come from
+training.
 
 The FlashAttention kernel is the one with the most surprising answer. Forward and backward,
 in Triton, from the online-softmax rescale up — and it reaches **parity with PyTorch's SDPA

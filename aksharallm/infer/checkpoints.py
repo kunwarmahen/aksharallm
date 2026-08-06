@@ -124,14 +124,40 @@ class InferError(Exception):
     """
 
 
+def _mapping(value) -> dict:
+    """A nested config section as a plain dict, whatever form it arrived in.
+
+    `model_config` is read from files written over months by several code paths. Most use
+    `asdict`, which gives dicts all the way down; some older or hand-rolled ones use
+    `vars()`, which does not recurse and leaves a live dataclass in there. This module reads
+    checkpoints it did not write, so it tolerates both rather than raising `AttributeError`
+    from inside a checkpoint *listing* — which is how the whole Finetune tab went dark.
+    """
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    return dict(getattr(value, "__dict__", {}) or {})
+
+
 def _arch_str(mcfg: dict | None) -> str | None:
     """The architecture summary string, shared by Checkpoint and Adapter so the two can be
     compared directly. Changing the format changes both, which is the point."""
     if not mcfg:
         return None
+    # An extended checkpoint's ctx is not the window it was trained on, and every place
+    # this string is shown (the run list, the report, the checkpoint picker) would otherwise
+    # claim it was. See docs/18.
+    scaling = _mapping(mcfg.get("rope_scaling"))
+    ctx = str(mcfg.get("max_seq_len"))
+    if scaling.get("type") not in (None, "none") and scaling.get("original_max_seq_len"):
+        ctx += (f" ({scaling['type']} x{scaling.get('factor', 1):g}"
+                f" from {scaling['original_max_seq_len']})")
+    if mcfg.get("attn_window"):
+        ctx += f" win={mcfg['attn_window']}"
     return (f"d={mcfg.get('d_model')} L={mcfg.get('n_layers')} "
             f"H={mcfg.get('n_heads')} KV={mcfg.get('n_kv_heads')} "
-            f"ctx={mcfg.get('max_seq_len')}")
+            f"ctx={ctx}")
 
 
 def stage_for(name: str) -> str:
@@ -192,11 +218,23 @@ class Checkpoint:
     #: the training curve used, without loading the weights to find out which file that was.
     val_bin: str | None = None
     seq_len: int | None = None
+    #: Long context (docs/18). `max_seq_len` above is what the model can *address*; once a
+    #: checkpoint has been extended that is no longer the window its weights were trained
+    #: on, and `rope_scaling.original_max_seq_len` is the only record of the difference.
+    rope_scaling: dict | None = None
+    attn_window: int | None = None
+    attn_sinks: int = 0
     error: str | None = None
 
     @property
     def modes(self) -> list[str]:
         return STAGE_INFO.get(self.stage, STAGE_INFO["unknown"])["modes"]
+
+    @property
+    def trained_window(self) -> int | None:
+        """The context the *weights* saw, which is `max_seq_len` until someone extends it."""
+        original = _mapping(self.rope_scaling).get("original_max_seq_len")
+        return int(original) if original else self.max_seq_len
 
     def as_dict(self) -> dict:
         info = STAGE_INFO.get(self.stage, STAGE_INFO["unknown"])
@@ -213,6 +251,8 @@ class Checkpoint:
             "tokenizer": self.tokenizer, "tokenizer_ok": self.tokenizer_ok,
             "train_loss": self.train_loss, "val_bin": self.val_bin,
             "seq_len": self.seq_len, "error": self.error,
+            "rope_scaling": self.rope_scaling, "trained_window": self.trained_window,
+            "attn_window": self.attn_window, "attn_sinks": self.attn_sinks,
             "id": f"{self.run}/{self.name}",
         }
 
@@ -407,7 +447,10 @@ class CheckpointStore:
                "tokenizer_ok": bool(tok_path and tok_path.is_file()),
                "train_loss": self._loss_at(path.parent, step),
                "val_bin": dcfg.get("val_bin"),
-               "seq_len": tcfg.get("seq_len")},
+               "seq_len": tcfg.get("seq_len"),
+               "rope_scaling": _mapping(mcfg.get("rope_scaling")) or None,
+               "attn_window": mcfg.get("attn_window"),
+               "attn_sinks": mcfg.get("attn_sinks") or 0},
             error=None)
 
     def _loss_at(self, run_dir: Path, step: int | None) -> float | None:

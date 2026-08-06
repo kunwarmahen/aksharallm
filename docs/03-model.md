@@ -126,6 +126,41 @@ a model that trains fine and generates garbage.
 
 ## FlashAttention, written from scratch
 
+### First, in plain terms
+
+To choose its next word, the model scores **every word against every earlier word**. That is
+a grid. A thousand words is a million scores; eight thousand words is sixty-four million.
+
+```mermaid
+flowchart LR
+    A["1,000 words<br/>1,000,000 scores<br/>4 MB per head"] --> B["4,000 words<br/>16,000,000<br/>64 MB per head"]
+    B --> C["8,000 words<br/>64,000,000<br/>256 MB per head"]
+    C --> D["× 16 heads × batch<br/><b>does not fit</b>"]
+    style D fill:#9d0208,color:#fff
+```
+
+Written the obvious way, that grid is *built in memory* — and it is the reason long contexts
+run out of memory rather than merely running slowly. Multiply by sixteen heads and a batch
+and a 24 GB card is gone.
+
+**FlashAttention's trick is to never build it.** It walks the text in blocks, keeps a small
+running total per row, and rescales that total whenever a block turns out to contain a bigger
+score than anything seen so far. The answer is *exactly* the same — not an approximation —
+and the memory stops growing with length:
+
+```mermaid
+flowchart LR
+    subgraph SRAM["one small running total, kept on-chip"]
+        ST["biggest score so far<br/>running sum<br/>running output"]
+    end
+    B1["block 1"] --> ST
+    B2["block 2"] --> ST
+    B3["block 3"] --> ST
+    B4["…"] --> ST
+    ST --> OUT["the same answer,<br/>in 422 MB instead of OOM"]
+    style OUT fill:#2d6a4f,color:#fff
+```
+
 Calling somebody else's kernel is the right thing for a run and the wrong thing for a repo
 whose claim is that every core piece is hand-written. So there is a second implementation,
 ours, in [`model/flash.py`](../aksharallm/model/flash.py) — the same algorithm in Triton,
@@ -135,6 +170,12 @@ forward *and* backward. Turn it on with one config line:
 model:
   attn_impl: flash      # default is "sdpa"
 ```
+
+The portal's **Context** tab has a panel for this — the explanation above, the measured
+numbers, and a button that reproduces the benchmark on your own card. It sits there rather
+than on a tab of its own because it is the other half of the same question:
+[doc 18](18-long-context.md) is about how far the model can read, and this is what reading
+that far costs.
 
 ### The one idea: online softmax
 
@@ -254,9 +295,11 @@ Two things the sweep taught that were not obvious:
   anything subtle — which is the one nice thing about it. `_blocks()` takes `itemsize` for
   exactly that reason.
 
-There is deliberately **no portal tab** for this, on the same argument as
-[serving](16-serving.md): the portal watches a training run, and this is a kernel with a
-benchmark, not something with state to watch.
+**Sliding windows compose with it.** `attn_window` and `attn_sinks` reach the kernel as two
+integers rather than as a mask, which is the concrete payoff for owning it: the equivalent
+bool tensor is 64 MB at T=8192, and long context is exactly where that matters. The kernel
+still *walks* the skipped key blocks and masks them rather than never loading them, so today
+a window costs no memory and saves no time — see [doc 18](18-long-context.md).
 
 ---
 
@@ -471,6 +514,7 @@ data flow:
 | 8 | `Transformer._init_weights` · `configure_optimizers` · `num_params` · `estimate_mfu` | the `0.02/√(2·n_layers)` scaling for residual writers, the decay/no-decay split, and where the MFU number in the logs comes from |
 | 9 | [`aksharallm/model/moe.py`](../aksharallm/model/moe.py) | optional — the one component that replaces step 6's FFN. [doc 14](14-moe.md) |
 | 10 | [`aksharallm/model/flash.py`](../aksharallm/model/flash.py) | optional — step 4's attention, written out in Triton instead of called. Read the module docstring first (it is the derivation), then `_fwd_kernel`'s four-line online-softmax rescale, then `_bwd_kv_kernel` / `_bwd_q_kernel` and why there are two of them |
+| 11 | [`aksharallm/model/rope.py`](../aksharallm/model/rope.py) | optional — step 5's frequency ladder, and the four ways of stretching it past the trained window. [doc 18](18-long-context.md) |
 
 What pins it: `tests/test_model.py` is the shortest honest summary of this chapter —
 `test_causality`, `test_rope_preserves_norm_and_relative_position`, `test_weight_tying`,

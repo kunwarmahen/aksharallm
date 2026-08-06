@@ -12,6 +12,8 @@ from typing import Any
 
 import yaml
 
+from .model.rope import RopeScaling
+
 
 @dataclass
 class ModelConfig:
@@ -36,6 +38,22 @@ class ModelConfig:
     #: over a six-day run. It is here to be *read*, benchmarked and mutated, and it silently
     #: falls back to SDPA for any shape it does not handle (see `flash.usable`).
     attn_impl: str = "sdpa"
+
+    # ---- long context (see docs/18) ----------------------------------------------------
+    #: How to stretch RoPE past the window the weights were trained on. `type: none` is the
+    #: identity, so a model that has never heard of this is unaffected. Written as a nested
+    #: block in YAML:
+    #:     rope_scaling: {type: yarn, factor: 4.0, original_max_seq_len: 1024}
+    rope_scaling: RopeScaling = field(default_factory=RopeScaling)
+    #: Sliding-window attention: each token sees at most this many keys back (None = all).
+    #: Turns attention from O(T²) into O(T·w) and bounds the KV cache — but on its own it
+    #: makes the model blind past `attn_window`, which is what `attn_sinks` repairs.
+    attn_window: int | None = None
+    #: "Attention sinks" — the first N tokens stay visible no matter how far the window has
+    #: slid. Costs four keys and is the difference between a sliding window that works and
+    #: one whose perplexity explodes; see docs/18 for why the model needs somewhere to park
+    #: attention it does not want to spend.
+    attn_sinks: int = 0
 
     # ---- mixture of experts (0 = dense; everything below is ignored) -------------------
     #: How many experts replace the single SwiGLU in each MoE block.
@@ -64,6 +82,18 @@ class ModelConfig:
         assert self.n_heads % self.n_kv_heads == 0, "n_heads must be a multiple of n_kv_heads"
         if self.attn_impl not in ("sdpa", "flash"):
             raise ValueError(f"attn_impl must be 'sdpa' or 'flash', got {self.attn_impl!r}")
+        # Ten call sites rebuild a model with `ModelConfig(**ckpt["model_config"])`, where
+        # the nested section is a plain dict because that is what `config_to_dict` wrote.
+        # Coercing here is what makes every one of them work without ten edits -- and what
+        # stops a `.type` lookup silently reading a dict attribute that does not exist.
+        if isinstance(self.rope_scaling, dict):
+            self.rope_scaling = RopeScaling(**self.rope_scaling)
+        if self.attn_window is not None and self.attn_window < 1:
+            raise ValueError(f"attn_window must be >= 1 or null, got {self.attn_window}")
+        if self.attn_sinks < 0:
+            raise ValueError(f"attn_sinks must be >= 0, got {self.attn_sinks}")
+        if self.attn_sinks and self.attn_window is None:
+            raise ValueError("attn_sinks only means something with attn_window set")
         if self.d_ff is None:
             hidden = int(8 * self.d_model / 3)
             self.d_ff = self.multiple_of * ((hidden + self.multiple_of - 1) // self.multiple_of)

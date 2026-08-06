@@ -1,0 +1,144 @@
+<!-- The Context tab: how far this model can read, what would extend it, and whether the
+     extension worked. The first panel is free (pure arithmetic, no weights loaded); the
+     measurements below it are real forward passes and run as a background job. -->
+<div id="view-longctx" class="view" hidden>
+
+<section class="panel" aria-label="what context is">
+  <div class="panel-head">
+    <h2>How far can it read?</h2>
+    <span class="panel-note">a model re-reads the whole conversation for every token it writes — the context window is how much of it fits</span>
+  </div>
+  <div class="lc-explain">
+    <p>A language model has no memory. Each time it produces a word it re-reads everything
+      before it, and the <strong>context window</strong> is simply the largest amount it can
+      re-read at once. Ours was trained on windows of about a page and a half.</p>
+    <p>Show it more than that and it does not gradually get vaguer — it <strong>falls off a
+      cliff</strong>. Position is encoded as a <em>rotation angle</em>, and past the trained
+      window the model is being handed angles it has never seen, so every comparison it makes
+      between words becomes noise.</p>
+    <p>The fix is arithmetic, not training: change how positions map to angles.
+      <strong>No weights change</strong> — which is why you can try all of it on a finished
+      checkpoint in an afternoon. <a href="#docs" data-doc="docs/18-long-context.md">The full
+      chapter is in doc 18.</a></p>
+  </div>
+</section>
+
+<section class="panel" aria-label="this checkpoint">
+  <div class="panel-head">
+    <h2>This checkpoint</h2>
+    <span class="panel-note" id="lc-status"></span>
+  </div>
+  <div class="lc-controls">
+    <label class="field field-wide"><span class="field-label">checkpoint</span>
+      <select id="lc-ckpt"></select></label>
+  </div>
+  <div class="lc-window" id="lc-window"></div>
+</section>
+
+<section class="panel" aria-label="plan an extension">
+  <div class="panel-head">
+    <h2>What would extending it do?</h2>
+    <span class="panel-note">free to ask — this is arithmetic, and nothing is loaded or written</span>
+  </div>
+  <div class="lc-controls">
+    <label class="field"><span class="field-label">method</span>
+      <select id="lc-method">
+        <option value="ntk">ntk — best value up to 2x</option>
+        <option value="yarn" selected>yarn — holds up furthest</option>
+        <option value="linear">linear — simple, costs short contexts</option>
+        <option value="dynamic">dynamic — scales per input</option>
+        <option value="none">none — no scaling</option>
+      </select></label>
+    <label class="field"><span class="field-label">factor</span>
+      <select id="lc-factor">
+        <option value="2">2x</option>
+        <option value="4" selected>4x</option>
+        <option value="8">8x</option>
+      </select></label>
+  </div>
+  <div class="lc-plan" id="lc-plan"></div>
+  <p class="hint" id="lc-advice"></p>
+</section>
+
+<section class="panel" aria-label="measure it">
+  <div class="panel-head">
+    <h2>Measure it</h2>
+    <span class="panel-note">two different questions, and the second is the honest one</span>
+    <span class="panel-note" id="lc-job-note"></span>
+  </div>
+  <div class="lc-measures">
+    <div class="lc-measure">
+      <h3>Loss by position</h3>
+      <p>Is it still <em>fluent</em> out there? Runs one long window and reports the loss of
+        every position separately. Flat is healthy; a cliff is a naive extension. Cheap, and
+        it needs no downloads.</p>
+      <div class="lc-controls">
+        <label class="field"><span class="field-label">length</span>
+          <select id="lc-len"></select></label>
+        <label class="field"><span class="field-label">windows</span>
+          <input id="lc-windows" type="number" min="1" max="64" value="8"></label>
+      </div>
+      <div class="lc-btns">
+        <button id="lc-run-curve" class="ghost" type="button">Run one method</button>
+        <button id="lc-run-sweep" class="primary" type="button">Compare all four</button>
+      </div>
+    </div>
+    <div class="lc-measure">
+      <h3>Needle in a haystack</h3>
+      <p>Can it still <em>retrieve</em> out there? Hides a made-up fact at a chosen depth in a
+        lot of ordinary text and asks for it back. A model can be perfectly fluent at position
+        6,000 and completely unable to find anything there — fluency is local, retrieval is
+        not.</p>
+      <div class="lc-controls">
+        <label class="field"><span class="field-label">trials / cell</span>
+          <input id="lc-trials" type="number" min="1" max="20" value="3"></label>
+      </div>
+      <div class="lc-btns">
+        <button id="lc-run-needle" class="ghost" type="button">Run the needle test</button>
+        <button id="lc-stop" class="ghost" type="button" hidden>Stop</button>
+      </div>
+    </div>
+  </div>
+  <pre class="lc-log" id="lc-log" hidden></pre>
+</section>
+
+<section class="panel" aria-label="what reading that far costs">
+  <div class="panel-head">
+    <h2>What reading that far costs</h2>
+    <span class="panel-note">attention compares every word with every earlier word, so doubling the context <em>quadruples</em> the work</span>
+  </div>
+  <div class="lc-explain">
+    <p>To decide what comes next, the model scores every word against every word before it.
+      That is a grid — 1,000 words means a million scores; 8,000 words means
+      <strong>sixty-four million</strong>. Written naively, that grid is built in memory, and
+      it is the reason long contexts run out of it rather than merely running slowly.</p>
+    <p><strong>FlashAttention</strong> never builds the grid. It walks the text in blocks and
+      keeps a running total, rescaling as it goes, so the answer is <em>exactly</em> the same
+      and the memory stops growing. We wrote our own, in Triton, forward and backward —
+      <a href="#docs" data-doc="docs/03-model.md">doc 3 has the derivation</a>.</p>
+  </div>
+  <dl class="lc-facts">
+    <div><dt>at 8,192 tokens, ours</dt><dd>422 MB</dd></div>
+    <div><dt>the naive grid</dt><dd>will not fit</dd></div>
+    <div><dt>vs PyTorch's kernel, forward</dt><dd>1.02× at 2k–4k</dd></div>
+    <div><dt>backward</dt><dd>0.81×</dd></div>
+  </dl>
+  <p class="hint">PyTorch's <code>scaled_dot_product_attention</code> <em>is</em>
+    FlashAttention-2, hand-written in PTX, so parity was the ambition and not victory. The
+    default stays <code>sdpa</code>; ours is here to be read. The benchmark below reproduces
+    every number on this machine.</p>
+  <div class="lc-btns">
+    <button id="lc-run-flash" class="ghost" type="button">Run the kernel benchmark</button>
+  </div>
+</section>
+
+<section class="panel" aria-label="results">
+  <div class="panel-head">
+    <h2>Results</h2>
+    <span class="panel-note">every measurement on disk — the same JSON the terminal writes</span>
+  </div>
+  <div class="scroll-y" id="lc-results"></div>
+  <div class="lc-detail" id="lc-detail"></div>
+</section>
+
+</div>

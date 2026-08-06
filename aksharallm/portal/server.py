@@ -55,6 +55,7 @@ from .pipeline import Pipeline
 from .finetune import FinetuneJobs
 from .quantize import QuantJobs
 from .interp import Interp
+from .longctx import LongContext
 from .serving import ServeJobs
 from .learn import Learn
 from .synth import SynthJobs
@@ -87,7 +88,7 @@ class Handler(BaseHTTPRequestHandler):
                  source: SourceTree, explain: ExplainConfig, playground: Playground,
                  pipeline: Pipeline, quant: QuantJobs, finetune: FinetuneJobs,
                  evals: EvalJobs, synth: SynthJobs, learn: Learn, interp: Interp,
-                 serving: ServeJobs, cost: CostConfig, quiet: bool = True, **kw):
+                 longctx: LongContext, serving: ServeJobs, cost: CostConfig, quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
         self.sampler = sampler
@@ -101,6 +102,7 @@ class Handler(BaseHTTPRequestHandler):
         self.synth = synth
         self.learn = learn
         self.interp = interp
+        self.longctx = longctx
         self.serving = serving
         self.cost = cost
         self.quiet = quiet
@@ -299,6 +301,24 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(self.interp.patch(
                         ckpt, str(data.get("clean") or ""), str(data.get("corrupt") or ""),
                         str(data.get("answer") or ""), str(data.get("other") or "")))
+            # long context measurements: /api/longctx/<start|stop>. Detached, one at a
+            # time — a sweep is four long forward passes over the whole window.
+            if len(parts) == 3 and parts[:2] == ["api", "longctx"]:
+                if parts[2] == "start":
+                    return self._json(self.longctx.start(
+                        str(data.get("kind") or "curve"),
+                        str(data.get("checkpoint") or ""),
+                        length=self._int(data, "length"),
+                        factor=data.get("factor"),
+                        windows=self._int(data, "windows"),
+                        bucket=self._int(data, "bucket"),
+                        trials=self._int(data, "trials"),
+                        window=self._int(data, "window"),
+                        sinks=data.get("sinks"),
+                        methods=data.get("methods"),
+                        lengths=data.get("lengths")))
+                if parts[2] == "stop":
+                    return self._json(self.longctx.stop())
             # the learning path: /api/learn/<check|reset>
             if len(parts) == 3 and parts[:2] == ["api", "learn"]:
                 if parts[2] == "check":
@@ -388,6 +408,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.interp.features(
                 (query.get("checkpoint") or [""])[0],
                 int((query.get("layer") or [12])[0])))
+        # long context: how far this model reads, and every measurement on disk.
+        if parts == ["longctx"]:
+            return self._json(self.longctx.overview(
+                (query.get("checkpoint") or [None])[0]))
+        if parts == ["longctx", "plan"]:
+            # Pure arithmetic, so it is a GET and safe to call on every keystroke: it says
+            # what extending *would* change without loading a weight.
+            return self._json(self.longctx.plan(
+                (query.get("checkpoint") or [""])[0],
+                (query.get("method") or ["yarn"])[0],
+                float((query.get("factor") or [4.0])[0])))
+        if parts == ["longctx", "result"]:
+            return self._json(self.longctx.result((query.get("name") or [""])[0]))
         if parts == ["learn"]:
             return self._json(self.learn.status())
         if parts == ["learn", "lesson"]:
@@ -784,11 +817,13 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
     synth = SynthJobs(store.root)
     learn = Learn(store.root)
     interp = Interp(playground, store.root)
+    longctx = LongContext(playground.store, store, store.root)
     serving = ServeJobs(store.root)
     handler = partial(Handler, store=store, scheduler=scheduler, sampler=sampler,
                       source=source, explain=explain, playground=playground,
                       pipeline=pipeline, quant=quant, finetune=finetune, evals=evals,
-                      synth=synth, learn=learn, interp=interp, serving=serving,
+                      synth=synth, learn=learn, interp=interp, longctx=longctx,
+                      serving=serving,
                       cost=cost,
                       quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True

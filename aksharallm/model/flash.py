@@ -150,11 +150,12 @@ if _HAVE_TRITON:
         stride_vb, stride_vh, stride_vn, stride_vd,
         stride_ob, stride_oh, stride_om, stride_od,
         stride_lb, stride_lh, stride_lm,
-        H, T, S, DIAG, N_REP,
+        H, T, S, DIAG, N_REP, WINDOW, SINKS,
         BLOCK_M: tl.constexpr,
         BLOCK_N: tl.constexpr,
         HEAD_DIM: tl.constexpr,
         CAUSAL: tl.constexpr,
+        WINDOWED: tl.constexpr,
     ):
         """One program owns BLOCK_M query rows of one (batch, head) and streams the keys.
 
@@ -214,6 +215,9 @@ if _HAVE_TRITON:
             keep = mask_n[None, :]
             if CAUSAL:
                 keep = keep & (offs_n[None, :] <= offs_m[:, None] + DIAG)
+            if WINDOWED:
+                keep = keep & ((offs_n[None, :] > offs_m[:, None] + DIAG - WINDOW)
+                               | (offs_n[None, :] < SINKS))
             s = tl.where(keep, s, float("-inf"))
 
             # --- the online softmax rescale, in four lines --------------------------
@@ -248,11 +252,12 @@ if _HAVE_TRITON:
         stride_db, stride_dh, stride_dm, stride_dd,
         stride_gb, stride_gh, stride_gn, stride_gd,
         stride_lb, stride_lh, stride_lm,
-        H, T, S, DIAG, N_REP,
+        H, T, S, DIAG, N_REP, WINDOW, SINKS,
         BLOCK_M: tl.constexpr,
         BLOCK_N: tl.constexpr,
         HEAD_DIM: tl.constexpr,
         CAUSAL: tl.constexpr,
+        WINDOWED: tl.constexpr,
     ):
         """dK and dV for one block of keys, accumulated over the queries that see it.
 
@@ -319,6 +324,9 @@ if _HAVE_TRITON:
             keep = mask_m[None, :] & mask_n[:, None]
             if CAUSAL:
                 keep = keep & (offs_n[:, None] <= offs_m[None, :] + DIAG)
+            if WINDOWED:
+                keep = keep & ((offs_n[:, None] > offs_m[None, :] + DIAG - WINDOW)
+                               | (offs_n[:, None] < SINKS))
             s_t = tl.where(keep, s_t, float("-inf"))
             p_t = tl.exp2(s_t - (lse * 1.4426950408889634)[None, :])
 
@@ -345,11 +353,12 @@ if _HAVE_TRITON:
         stride_db, stride_dh, stride_dm, stride_dd,
         stride_ob, stride_oh, stride_om, stride_od,
         stride_lb, stride_lh, stride_lm,
-        H, T, S, DIAG, N_REP,
+        H, T, S, DIAG, N_REP, WINDOW, SINKS,
         BLOCK_M: tl.constexpr,
         BLOCK_N: tl.constexpr,
         HEAD_DIM: tl.constexpr,
         CAUSAL: tl.constexpr,
+        WINDOWED: tl.constexpr,
     ):
         """dQ for one block of queries, accumulated over the keys it sees.
 
@@ -407,6 +416,9 @@ if _HAVE_TRITON:
             keep = mask_n[None, :]
             if CAUSAL:
                 keep = keep & (offs_n[None, :] <= offs_m[:, None] + DIAG)
+            if WINDOWED:
+                keep = keep & ((offs_n[None, :] > offs_m[:, None] + DIAG - WINDOW)
+                               | (offs_n[None, :] < SINKS))
             s = tl.where(keep, s, float("-inf"))
             p = tl.exp2(s - (lse * 1.4426950408889634)[:, None])
 
@@ -456,7 +468,7 @@ def _blocks(head_dim: int, itemsize: int, forward: bool) -> tuple[int, int, int,
 
 class _FlashAttention(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, q, k, v, causal, sm_scale):
+    def forward(ctx, q, k, v, causal, sm_scale, window, sinks):
         B, H, T, D = q.shape
         Hk, S = k.shape[1], k.shape[2]
         n_rep = H // Hk
@@ -471,13 +483,15 @@ class _FlashAttention(torch.autograd.Function):
             q, k, v, o, lse,
             sm_scale * LOG2E,
             *q.stride(), *k.stride(), *v.stride(), *o.stride(), *lse.stride(),
-            H, T, S, S - T, n_rep,
-            BLOCK_M=block_m, BLOCK_N=block_n, HEAD_DIM=D, CAUSAL=causal,
+            H, T, S, S - T, n_rep, window or 0, sinks,
+            BLOCK_M=block_m, BLOCK_N=block_n, HEAD_DIM=D,
+            CAUSAL=causal, WINDOWED=window is not None,
             num_warps=warps, num_stages=stages,
         )
 
         ctx.save_for_backward(q, k, v, o, lse)
         ctx.causal, ctx.sm_scale = causal, sm_scale
+        ctx.window, ctx.sinks = window, sinks
         return o
 
     @staticmethod
@@ -511,8 +525,9 @@ class _FlashAttention(torch.autograd.Function):
             *common,
             *q.stride(), *k.stride(), *v.stride(), *do.stride(),
             *dk_buf.stride(), *lse.stride(),
-            H, T, S, S - T, n_rep,
-            BLOCK_M=block_m, BLOCK_N=block_n, HEAD_DIM=D, CAUSAL=ctx.causal,
+            H, T, S, S - T, n_rep, ctx.window or 0, ctx.sinks,
+            BLOCK_M=block_m, BLOCK_N=block_n, HEAD_DIM=D,
+            CAUSAL=ctx.causal, WINDOWED=ctx.window is not None,
             num_warps=warps, num_stages=stages,
         )
         _bwd_q_kernel[(triton.cdiv(T, block_m), B * H)](
@@ -520,18 +535,20 @@ class _FlashAttention(torch.autograd.Function):
             *common,
             *q.stride(), *k.stride(), *v.stride(), *do.stride(),
             *dq.stride(), *lse.stride(),
-            H, T, S, S - T, n_rep,
-            BLOCK_M=block_m, BLOCK_N=block_n, HEAD_DIM=D, CAUSAL=ctx.causal,
+            H, T, S, S - T, n_rep, ctx.window or 0, ctx.sinks,
+            BLOCK_M=block_m, BLOCK_N=block_n, HEAD_DIM=D,
+            CAUSAL=ctx.causal, WINDOWED=ctx.window is not None,
             num_warps=warps, num_stages=stages,
         )
 
         dk = dk_buf.view(B, Hk, n_rep, S, D).sum(2).to(k.dtype)
         dv = dv_buf.view(B, Hk, n_rep, S, D).sum(2).to(v.dtype)
-        return dq, dk, dv, None, None
+        return dq, dk, dv, None, None, None, None
 
 
 def flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
-                    causal: bool = True, sm_scale: float | None = None) -> torch.Tensor:
+                    causal: bool = True, sm_scale: float | None = None,
+                    window: int | None = None, sinks: int = 0) -> torch.Tensor:
     """Causal (or full) scaled dot-product attention, ours.
 
     q: (B, H, T, D). k, v: (B, Hk, S, D) with H a multiple of Hk (GQA is handled inside
@@ -539,15 +556,20 @@ def flash_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor,
     at the END of the key sequence, so `causal=True` with T < S means "these T new tokens,
     against S-T already cached ones".
 
+    `window` restricts each query to the last `window` keys, and `sinks` keeps the first
+    few keys visible regardless (see `transformer.sliding_window_mask` for why that second
+    number is not optional). Passing them as integers rather than as a mask is the point:
+    the equivalent bool tensor is 64 MB at T=8192, and long context is where it matters.
+
     Differentiable. Falls back to nothing: call `usable()` first if the shape might not be
     one the kernel handles.
     """
     if sm_scale is None:
         sm_scale = 1.0 / math.sqrt(q.shape[-1])
-    return _FlashAttention.apply(q, k, v, causal, sm_scale)
+    return _FlashAttention.apply(q, k, v, causal, sm_scale, window, sinks)
 
 
-def reference_attention(q, k, v, causal=True, sm_scale=None):
+def reference_attention(q, k, v, causal=True, sm_scale=None, window=None, sinks=0):
     """The (T, S) matrix version, written out, in fp32. Slow and memory-hungry on purpose.
 
     This is the definition the kernel is tested against and the thing it exists to avoid:
@@ -562,11 +584,13 @@ def reference_attention(q, k, v, causal=True, sm_scale=None):
         k = k.repeat_interleave(H // Hk, dim=1)
         v = v.repeat_interleave(H // Hk, dim=1)
     s = (q.float() @ k.float().transpose(-2, -1)) * sm_scale
+    # Bottom-right alignment: query m of T is at absolute position m + (S - T).
+    qi = torch.arange(T, device=q.device)[:, None] + (S - T)
+    ki = torch.arange(S, device=q.device)[None, :]
     if causal:
-        # Bottom-right alignment: query m of T is at absolute position m + (S - T).
-        qi = torch.arange(T, device=q.device)[:, None] + (S - T)
-        ki = torch.arange(S, device=q.device)[None, :]
         s = s.masked_fill(ki > qi, float("-inf"))
+    if window is not None:
+        s = s.masked_fill(~((ki > qi - window) | (ki < sinks)), float("-inf"))
     return (torch.softmax(s, dim=-1) @ v.float()).to(q.dtype)
 
 

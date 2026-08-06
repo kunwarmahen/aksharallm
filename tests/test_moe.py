@@ -11,6 +11,8 @@ themselves:
   dense baseline's 1.472.
 """
 
+from dataclasses import asdict
+
 import pytest
 import torch
 
@@ -279,7 +281,10 @@ def test_an_moe_checkpoint_round_trips(tmp_path):
     torch.manual_seed(0)
     c = cfg(n_experts=4)
     model = Transformer(c)
-    torch.save({"model": model.state_dict(), "model_config": c.__dict__}, tmp_path / "m.pt")
+    # `asdict`, not `c.__dict__`: the latter does not recurse, so a nested config section
+    # would be pickled as a live dataclass and `torch.load`'s weights_only default refuses
+    # it. This is what `train/pretrain.py` writes.
+    torch.save({"model": model.state_dict(), "model_config": asdict(c)}, tmp_path / "m.pt")
     loaded = Transformer(ModelConfig(**{k: v for k, v in c.__dict__.items()
                                         if k in ModelConfig.__dataclass_fields__}))
     loaded.load_state_dict(torch.load(tmp_path / "m.pt")["model"], strict=True)
