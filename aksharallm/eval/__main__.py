@@ -31,7 +31,8 @@ from .runner import Harness, Options, describe
 from .sources import EvalError, SOURCES, fetch, load, status
 from .suites import ALL_SUITES, DEFAULT_SUITES, SUITES, build, catalogue, resolve
 
-SUBCOMMANDS = ("run", "fetch", "suites", "report", "contaminate", "domains")
+SUBCOMMANDS = ("run", "fetch", "suites", "report", "contaminate", "domains",
+                "calibrate")
 
 
 def cmd_suites(args) -> int:
@@ -304,6 +305,51 @@ def cmd_domains(args) -> int:
     return 0
 
 
+def cmd_calibrate(args) -> int:
+    """Is the model's confidence honest? Accuracy asks a different question."""
+    from ..data.loader import TokenDataset
+    from ..infer.checkpoints import CheckpointStore
+    from ..infer.cli import load_model
+    from . import calibration as cal
+
+    store = CheckpointStore(args.root)
+    path = store.resolve(*store.identify(args.checkpoint).split("/"))
+    model, ckpt = load_model(str(path), device=args.device)
+
+    data_cfg = (ckpt.get("config") or {}).get("data", {})
+    val_bin = args.val_bin or data_cfg.get("val_bin")
+    if not val_bin:
+        print("error: this checkpoint does not record a val_bin; pass --val-bin")
+        return 1
+    seq_len = args.seq_len or ckpt["model_config"].get("max_seq_len", 1024)
+    ds = TokenDataset(val_bin, seq_len, args.device)
+
+    print(f"{args.checkpoint} on {val_bin}, {seq_len}-token windows, on the {args.device}")
+    print(f"collecting {args.batches} x {args.batch} batches, "
+          f"subsampled to {args.positions:,} positions...")
+    logits, targets = cal.collect(model, ds, args.batches, args.batch,
+                                  max_positions=args.positions)
+    res = cal.report(logits, targets)
+    res["checkpoint"] = args.checkpoint
+    res["val_bin"] = val_bin
+    res["step"] = ckpt.get("step")
+    # The familiar number beside the unfamiliar ones: if this disagrees with the run's own
+    # recorded val loss, the calibration numbers are computed on something else.
+    res["perplexity"] = cal.perplexity(logits.float(), targets)
+
+    print()
+    print(cal.format_report(res))
+    print(f"\nperplexity on the same positions: {res['perplexity']:.3f}  "
+          f"(cross-check against the run's own val loss)")
+
+    out = Path("logs/eval")
+    out.mkdir(parents=True, exist_ok=True)
+    dest = out / f"calibration-{Path(args.checkpoint).name}-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    dest.write_text(json.dumps(res, indent=1))
+    print(f"written to {dest}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="python -m aksharallm.eval",
@@ -380,6 +426,21 @@ def build_parser() -> argparse.ArgumentParser:
     dom_p.add_argument("--device", default="cpu", choices=("cuda", "cpu"))
     dom_p.add_argument("--root", default=None)
     dom_p.set_defaults(fn=cmd_domains)
+
+    cal_p = sub.add_parser("calibrate",
+                           help="is the model's confidence honest? (ECE + temperature)")
+    cal_p.add_argument("checkpoint")
+    cal_p.add_argument("--val-bin", default=None)
+    cal_p.add_argument("--seq-len", type=int, default=None)
+    # Deliberately small. Calibration keeps the FULL logit vector per position, because
+    # temperature scaling needs the whole distribution — see `calibration.collect`.
+    cal_p.add_argument("--batches", type=int, default=8)
+    cal_p.add_argument("--batch", type=int, default=4)
+    cal_p.add_argument("--positions", type=int, default=20_000,
+                       help="positions to keep logits for (memory is the constraint)")
+    cal_p.add_argument("--device", default="cpu", choices=("cuda", "cpu"))
+    cal_p.add_argument("--root", default=None)
+    cal_p.set_defaults(fn=cmd_calibrate)
 
     return ap
 

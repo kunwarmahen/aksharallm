@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -72,6 +73,11 @@ class Manifest:
     sources: list[dict]  # per clip: original sr, channels, peak
     seconds: float
     built: str
+    #: Where the WAVs came from. Recorded because a packed corpus usually lives somewhere
+    #: else entirely (`data/audio/lj` from `data/audio/ljspeech/LJSpeech-1.1/wavs`), and the
+    #: transcripts stay with the originals — so without this, `load_transcripts` has nowhere
+    #: to look. Defaulted so manifests written before this existed still load.
+    source_dir: str = ""
 
     @property
     def n_clips(self) -> int:
@@ -138,6 +144,9 @@ def pack(
         sources=sources,
         seconds=total / sr,
         built=time.strftime("%Y-%m-%d %H:%M:%S"),
+        # The common parent of the inputs, so transcripts can be found later.
+        source_dir=str(Path(os.path.commonpath([str(w) for w in wavs])).resolve())
+        if wavs else "",
     )
     man.save(out_dir / "manifest.json")
     if progress:

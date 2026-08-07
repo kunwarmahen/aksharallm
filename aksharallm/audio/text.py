@@ -81,11 +81,21 @@ def load_transcripts(corpus: str | Path) -> dict[str, str]:
     if direct.is_file():
         return json.loads(direct.read_text())
 
-    meta = next((p for p in (corpus / "metadata.csv", corpus.parent / "metadata.csv")
-                 if p.is_file()), None)
+    # A packed corpus usually lives somewhere else entirely — `data/audio/lj` built from
+    # `data/audio/ljspeech/LJSpeech-1.1/wavs` — and the transcripts stay with the originals.
+    # `pack` records where they came from for exactly this reason.
+    candidates = [corpus / "metadata.csv", corpus.parent / "metadata.csv"]
+    manifest = corpus / "manifest.json"
+    if manifest.is_file():
+        src = (json.loads(manifest.read_text()) or {}).get("source_dir")
+        if src:
+            candidates += [Path(src) / "metadata.csv", Path(src).parent / "metadata.csv"]
+
+    meta = next((p for p in candidates if p.is_file()), None)
     if meta is None:
         raise FileNotFoundError(
-            f"no transcripts for {corpus}: expected {direct} or a metadata.csv beside it"
+            f"no transcripts for {corpus}. Looked for {direct}, and for a metadata.csv in: "
+            + ", ".join(str(c.parent) for c in candidates)
         )
     out = {}
     for line in meta.read_text(encoding="utf-8").splitlines():

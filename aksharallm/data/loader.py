@@ -18,7 +18,8 @@ import torch
 
 
 class TokenDataset:
-    def __init__(self, bin_path: str | Path, seq_len: int, device: str = "cuda"):
+    def __init__(self, bin_path: str | Path, seq_len: int, device: str = "cuda",
+                 seed: int | None = None):
         self.path = Path(bin_path)
         if not self.path.exists():
             raise FileNotFoundError(
@@ -26,12 +27,35 @@ class TokenDataset:
             )
         self.seq_len = seq_len
         self.device = device
-        # Default RNG for training batches. `np.random` (the module) has no .integers --
-        # only Generator does -- so we always hold a real Generator.
-        self.rng = np.random.default_rng()
+        # RNG for training batches. `np.random` (the module) has no .integers -- only
+        # Generator does -- so we always hold a real Generator.
+        #
+        # `seed=None` draws from OS entropy, which is what this used to do unconditionally.
+        # That made `train.seed` a lie: it seeded torch, so the initial weights and dropout
+        # were reproducible, while the DATA ORDER was not -- and the data order is most of
+        # what a training run is. Every "same seed and same data" comparison in this repo
+        # (the MoE experiment, the diffusion experiment, the LoRA-vs-full table) was
+        # therefore comparing runs that saw different batches. Callers pass the seed now;
+        # `rng_state` below is the other half, for resume.
+        self.rng = np.random.default_rng(seed)
         self.n_tokens = self.path.stat().st_size // 2  # uint16
         if self.n_tokens < seq_len + 1:
             raise ValueError(f"{self.path} has only {self.n_tokens} tokens, need > {seq_len}")
+
+    @property
+    def rng_state(self) -> dict:
+        """The generator's internal state, for a checkpoint.
+
+        Saving the *seed* is not enough: a resume would restart the stream from the
+        beginning and re-show the batches the run already trained on. Saving the state means
+        a stopped-and-resumed run draws exactly the batches the uninterrupted one would,
+        which is what makes `tests/test_determinism.py` able to assert bitwise equality.
+        """
+        return self.rng.bit_generator.state
+
+    @rng_state.setter
+    def rng_state(self, state: dict) -> None:
+        self.rng.bit_generator.state = state
 
     def _data(self) -> np.memmap:
         # Re-opened per call. np.memmap leaks virtual address space if kept alive across
@@ -85,18 +109,38 @@ class MixedTokenDataset:
     weights.
     """
 
-    def __init__(self, sources: list[dict], seq_len: int, device: str = "cuda"):
+    def __init__(self, sources: list[dict], seq_len: int, device: str = "cuda",
+                 seed: int | None = None):
         # sources: [{"bin": path, "weight": float}, ...]
         if not sources:
             raise ValueError("MixedTokenDataset needs at least one source")
-        self.datasets = [TokenDataset(s["bin"], seq_len, device) for s in sources]
+        # Sub-datasets get a derived seed as well. `get_batch` passes this object's generator
+        # down, so theirs is normally unused -- but anything that reaches for
+        # `mixed.datasets[i]` directly (a measurement, a notebook) should be reproducible too.
+        self.datasets = [
+            TokenDataset(s["bin"], seq_len, device,
+                         seed=None if seed is None else seed + 1 + i)
+            for i, s in enumerate(sources)
+        ]
         w = np.array([float(s.get("weight", 1.0)) for s in sources], dtype=np.float64)
         if not (w > 0).all():
             raise ValueError("all source weights must be positive")
         self.weights = w / w.sum()
         self.seq_len = seq_len
         self.device = device
-        self.rng = np.random.default_rng()
+        self.rng = np.random.default_rng(seed)
+
+    @property
+    def rng_state(self) -> dict:
+        """This generator's state plus every source's -- see `TokenDataset.rng_state`."""
+        return {"top": self.rng.bit_generator.state,
+                "sources": [d.rng_state for d in self.datasets]}
+
+    @rng_state.setter
+    def rng_state(self, state: dict) -> None:
+        self.rng.bit_generator.state = state["top"]
+        for d, s in zip(self.datasets, state.get("sources", [])):
+            d.rng_state = s
 
     @property
     def n_tokens(self) -> int:

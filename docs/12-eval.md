@@ -516,6 +516,82 @@ and they share that tab's one-job-at-a-time lock — a contamination scan stream
 tokens and a per-domain split runs the model, and neither wants to be doing that while an
 evaluation is trying to produce a number.
 
+### 3. Is the model's confidence honest?
+
+Everything above asks whether the model is **right**. This asks something different, and for
+anything that has to be *trusted* rather than benchmarked it is the more useful question:
+when it says it is 80% sure, is it right 80% of the time?
+
+```mermaid
+flowchart LR
+    L["logits at every<br/>position"] --> C["confidence =<br/>max softmax prob"]
+    L --> A["correct? =<br/>argmax == target"]
+    C --> B["bucket by confidence"]
+    A --> B
+    B --> R["for each bucket:<br/>mean confidence<br/>vs mean accuracy"]
+    R --> E["ECE = weighted mean<br/>of the gaps"]
+```
+
+A model can be accurate and badly calibrated — right often, and wildly overconfident about
+the cases it gets wrong — or inaccurate and well calibrated, which is far more useful in a
+system that can defer, retry or ask a human. Accuracy cannot tell those apart.
+
+```bash
+python -m aksharallm.eval calibrate small-code --device cpu
+```
+
+**Measured on our own models.** Both are well calibrated, which was not a foregone
+conclusion — nothing in the training objective asks for it:
+
+| model | positions | accuracy | confidence | gap | ECE (10 bins) | fitted T |
+|---|---|---|---|---|---|---|
+| 13.8M TinyStories | 6,000 | 0.6327 | 0.6354 | +0.0027 | **0.0135** | 0.986 |
+| 300M blend, step 37.8k | 9,996 | 0.4548 | 0.4607 | +0.0060 | **0.0104** | 1.004 |
+
+Both are barely overconfident, and the worst single bucket on the 300M is out by 0.026 —
+which for a model nobody asked to be calibrated is a better result than it had any right to
+be. On the 300M, temperature scaling still helps a little (0.0104 → 0.0087); on the 13.8M it
+does not, for the reason in the note below.
+
+**Four ways this measurement lies, all handled:**
+
+1. **The bin count changes the answer**, and there is no canonical choice. So it is reported
+   at 10, 15 and 30 bins, and every number carries the count that produced it. An ECE quoted
+   without its bin count is not reproducible.
+2. **Equal-width bins are nearly empty at the top.** Over a 32k vocabulary most predictions
+   sit below 0.5 confidence, so the high-confidence buckets — the ones that matter for
+   trusting an answer — can hold a handful of samples whose accuracy is noise. Equal-mass
+   (quantile) bins are reported beside them.
+3. **A degenerate model scores beautifully.** Something that always predicts the base rate
+   with the base rate's confidence has an ECE near zero and is useless. ECE is a *companion*
+   to accuracy, never a substitute, and `tests/test_calibration.py` asserts exactly this so
+   that it cannot be quietly forgotten.
+4. **The temperature must be fitted on data it is not scored on.** `report()` splits its
+   positions in half; fitting and scoring on the same tokens measures a model that has seen
+   the answers.
+
+**Temperature scaling** is the standard fix: divide the logits by one scalar before the
+softmax. It **cannot change accuracy at all** — dividing by a positive constant does not move
+the argmax — so it is free of the usual trade-off.
+
+> **And on an already-calibrated model it can make ECE slightly worse.** Measured here: the
+> 13.8M starts at ECE 0.0135, the fit returns T = 0.986, and ECE moves to 0.0149. That is not
+> a bug in either number. The fit minimises *negative log likelihood*, not ECE, and when the
+> gap being corrected is smaller than the noise in the estimate, fitting to one objective
+> chases the noise in the other. If ECE is what you care about, fit ECE.
+
+**A cross-check that caught a real mistake while writing this.** The command also reports
+perplexity on the same positions, precisely so it can be compared with the run's own val
+loss. The first 300M attempt used 8 windows and reported perplexity **15.994** — almost
+exactly the *prose-only* number from the per-domain split (15.95) rather than the blended one
+(≈12.7). `val.bin` is 85% prose followed by 15% Python, and eight 1,024-token windows drawn
+uniformly from it have a **27% chance of containing no Python at all**. Its ECE came out at
+0.0190; with 48 windows the same model scores **0.0104**.
+
+The number was not wrong. It was measuring something narrower than it claimed, and only the
+cross-check said so — which is the argument for reporting a familiar quantity beside every
+unfamiliar one, even when nothing depends on it.
+
 ## The code, in reading order
 
 | # | file | what to look for |
@@ -530,12 +606,13 @@ evaluation is trying to produce a number.
 | 8 | [`aksharallm/infer/sandbox.py`](../aksharallm/infer/sandbox.py) | HumanEval's scorer is the same sandbox the Playground and GRPO use. Note who adds the `check(entry_point)` call |
 | 9 | [`eval/contamination.py`](../aksharallm/eval/contamination.py) | `ngram_hashes` (the Horner trick that makes ten billion tokens tractable), `build_probe` (and the trim that makes `answered` mean something), `scan_bin`'s chunk overlap, `clean_score` |
 | 10 | [`eval/domains.py`](../aksharallm/eval/domains.py) | `derive_spans` then `verify_spans` — the derivation and the check on it. `blended()` is the end-to-end test: it has to agree with the run's own val loss |
-| 11 | [`aksharallm/portal/evals.py`](../aksharallm/portal/evals.py) | `EvalJobs` — the tab runs the CLI in a subprocess and reads the same result files; `start_audit` adds the two checks above to the same job lock |
+| 11 | [`eval/calibration.py`](../aksharallm/eval/calibration.py) | the docstring's four ways ECE lies, then `collect` — where the memory goes, and why positions are subsampled. `fit_temperature` last, and read why NLL-optimal is not ECE-optimal |
+| 12 | [`aksharallm/portal/evals.py`](../aksharallm/portal/evals.py) | `EvalJobs` — the tab runs the CLI in a subprocess and reads the same result files; `start_audit` adds the two checks above to the same job lock |
 
 What pins it: `tests/test_contamination.py` leads with a **positive control** — a known item
 planted in a fake corpus that the scanner must find — because a checker that reports 0%
 because it is broken looks exactly like a clean corpus, and it is the more comfortable of the
-two answers. Then `tests/test_eval.py` — the mixed-length batch scored against the same pairs
+two answers. `tests/test_calibration.py` is built the same way: models constructed to be miscalibrated by a *known* amount, so the metric has to report that amount — plus `test_a_degenerate_model_scores_perfectly`, which exists so the caveat can never be quietly dropped. Then `tests/test_eval.py` — the mixed-length batch scored against the same pairs
 one at a time (right-padding under a causal mask), `full_logits` returning exactly what the
 training path returns, and the BPE-boundary test written *for*
 [lesson 11](lessons/11-eval.md) after the original one turned out to be unable to fail.

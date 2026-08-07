@@ -27,6 +27,7 @@ PURE=${PURE:-0}
 STOP_AFTER=${STOP_AFTER:-}
 STOP_IN=${STOP_IN:-}
 SKIP_SMOKE=${SKIP_SMOKE:-0}
+SKIP_TESTS=${SKIP_TESTS:-0}
 
 # Seconds from "30m" / "90s" / "2h" / "1h30m", or a bare number read as minutes. Same
 # grammar as scripts/stop.sh --in, because they are the same idea at two different moments.
@@ -111,7 +112,18 @@ if [ "$FREE_GB" -lt "$NEED_GB" ]; then
     echo "    ERROR: not enough disk. Free space or lower --max-train-tokens." >&2
     exit 1
 fi
-$PY -m pytest tests/ -q || { echo "tests failed -- fix before a 6-day run" >&2; exit 1; }
+# The suite is the launch gate: a six-day run should not start on code that fails its own
+# tests, and it has caught real breakage. `preflight_tests.py` runs exactly that suite and
+# prints ONE LINE PER FILE — `pytest -q` prints 1,250 bare dots over 90 silent seconds,
+# which reads as a hang, and the reasonable response to a hang is to cancel the launch.
+if [ "$SKIP_TESTS" = "1" ] && [ -s "$RUN_DIR/ckpt_last.pt" ]; then
+    echo "    SKIP_TESTS=1 and $RUN_DIR/ckpt_last.pt exists -- skipping the suite"
+    echo "    (only defensible when RESUMING a config that has already trained for real)"
+else
+    [ "$SKIP_TESTS" = "1" ] && echo "    SKIP_TESTS=1 ignored: nothing to resume, so this is a first launch."
+    echo "=== tests ($(ls tests/test_*.py | wc -l) files) ==="
+    $PY scripts/preflight_tests.py tests/ || { echo "tests failed -- fix before a 6-day run" >&2; exit 1; }
+fi
 
 echo
 echo "=== 1/3  building token files (~20 GB) ==="

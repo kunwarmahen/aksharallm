@@ -133,7 +133,8 @@ def stop_file_target(path: Path) -> int | None:
     return req.step if req else None
 
 
-def save_checkpoint(path: Path, model, optimizer, cfg: Config, step: int, best_val: float, extra=None):
+def save_checkpoint(path: Path, model, optimizer, cfg: Config, step: int, best_val: float,
+                    extra=None, dataset=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     raw = model._orig_mod if hasattr(model, "_orig_mod") else model  # unwrap torch.compile
     payload = {
@@ -144,6 +145,11 @@ def save_checkpoint(path: Path, model, optimizer, cfg: Config, step: int, best_v
         "step": step,
         "best_val": best_val,
     }
+    if dataset is not None:
+        # The data stream's position, so a resume draws the batches the uninterrupted run
+        # would have drawn next rather than restarting the stream. Without this, "stop and
+        # resume" quietly means "train on some of the same data twice".
+        payload["data_rng"] = dataset.rng_state
     if extra:
         payload.update(extra)
     tmp = path.with_suffix(".tmp")
@@ -276,11 +282,17 @@ def main():
     claim_pid_file(out_dir)
 
     # ---- data --------------------------------------------------------------------
+    # The data order is seeded from `train.seed`, like the weights. It did not used to be:
+    # `torch.manual_seed` made the initialisation and dropout reproducible while the batches
+    # came from OS entropy, so every "same seed, same data" comparison in this repo was
+    # comparing runs that saw different batches. See loader.py's note.
     if cfg.data.train_sources:
-        train_ds = MixedTokenDataset(cfg.data.train_sources, cfg.train.seq_len, device)
+        train_ds = MixedTokenDataset(cfg.data.train_sources, cfg.train.seq_len, device,
+                                     seed=cfg.train.seed)
         print(f"blended training: {train_ds}")
     else:
-        train_ds = TokenDataset(cfg.data.train_bin, cfg.train.seq_len, device)
+        train_ds = TokenDataset(cfg.data.train_bin, cfg.train.seq_len, device,
+                                seed=cfg.train.seed)
     val_ds = TokenDataset(cfg.data.val_bin, cfg.train.seq_len, device)
     tok = Tokenizer(cfg.data.tokenizer)
     # What this run is training *for*. `check` is each objective's own vocabulary rule --
@@ -302,6 +314,15 @@ def main():
         resume = str(cand) if cand.exists() else None
     if resume:
         ckpt = load_checkpoint(resume, model, optimizer, device)
+        if ckpt.get("data_rng") is not None:
+            # Continue the data stream where it stopped. A checkpoint written before this
+            # existed has no state to restore, and falls back to the seeded start -- which
+            # is not wrong, just not identical to an uninterrupted run.
+            try:
+                train_ds.rng_state = ckpt["data_rng"]
+            except (KeyError, TypeError, ValueError) as e:
+                print(f"  note: could not restore the data stream position ({e}); "
+                      "starting it from the seed")
         start_step = ckpt["step"] + 1
         best_val = ckpt.get("best_val", float("inf"))
         print(f"resumed from {resume} at step {start_step}")
@@ -579,7 +600,8 @@ def main():
 
         if step > 0 and cfg.train.ckpt_every and step % cfg.train.ckpt_every == 0:
             tc = time.time()
-            save_checkpoint(out_dir / "ckpt_last.pt", model, optimizer, cfg, step, best_val)
+            save_checkpoint(out_dir / "ckpt_last.pt", model, optimizer, cfg, step, best_val,
+                            dataset=train_ds)
             print(f"  >> saved ckpt_last.pt at step {step}  ({fmt_dur(time.time() - tc)})")
             t0 = time.time()
 
@@ -588,7 +610,8 @@ def main():
         # save at the exact current step, then exit 0.
         if why:
             print(f"[stop] {why} -- saving ckpt_last.pt at step {step} and exiting")
-            save_checkpoint(out_dir / "ckpt_last.pt", model, optimizer, cfg, step, best_val)
+            save_checkpoint(out_dir / "ckpt_last.pt", model, optimizer, cfg, step, best_val,
+                            dataset=train_ds)
             if stop_file.exists():
                 stop_file.unlink()  # so the next run doesn't stop immediately
             log_session("session_end", reason=why, last_step=step,
@@ -613,7 +636,7 @@ def main():
           f"{'ppl' if objective.comparable_to_ar else 'ppl <='} "
           f"{math.exp(min(val_loss, 20)):.2f}")
     save_checkpoint(out_dir / "ckpt_last.pt", model, optimizer, cfg,
-                    cfg.train.max_steps - 1, min(best_val, val_loss))
+                    cfg.train.max_steps - 1, min(best_val, val_loss), dataset=train_ds)
     if val_loss < best_val:
         save_checkpoint(out_dir / "ckpt_best.pt", model, optimizer, cfg,
                         cfg.train.max_steps - 1, val_loss)

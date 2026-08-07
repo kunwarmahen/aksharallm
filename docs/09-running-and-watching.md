@@ -54,6 +54,48 @@ stateDiagram-v2
 - **training** — the real run, writing a checkpoint every so often.
 - **stopping** — you asked it to stop; it finishes the current step, saves, and exits.
 
+### The pre-flight gate, and why it says so much
+
+Every launcher runs the whole test suite before it will start a trainer. That gate is not
+negotiable — a six-day run should not begin on code that fails its own tests, and it has
+caught real breakage — but it was *displayed* badly, and that turned out to matter as much.
+
+`pytest -q` prints one dot per test. With 1,250 tests that is 1,250 bare dots over ninety
+silent seconds: no file names, no counts, no sense of progress. It reads exactly like a
+hang, and the reasonable response to a hang is to cancel it. Which is what happened here,
+twice in one evening, to a launch that was working perfectly.
+
+So `scripts/preflight_tests.py` runs the same suite and prints **one line per file**:
+
+```
+=== tests (38 files) ===
+    tests/test_audio.py                         29 passed             [  2%]
+    tests/test_audiolm.py                       29 passed             [  5%]
+    tests/test_codec.py                         41 passed             [  8%]
+    ...
+    1,247 passed
+```
+
+Quiet when green, and **loud when red**: on any failure the raw pytest output is replayed
+in full, tracebacks and all, followed by the list of failing node ids. The summarising
+exists to make a *passing* run legible; a failing one is the case where you want everything.
+
+There is an escape, and it is guarded the same way `SKIP_SMOKE` is:
+
+```bash
+SKIP_TESTS=1 scripts/phase2.sh        # only honoured when ckpt_last.pt exists
+```
+
+Only honoured when there is something to resume — on a first launch it prints that it is
+ignoring you and runs the suite anyway. Skipping the gate is defensible when you are
+resuming a config that has already trained for real and you changed nothing; it is not
+defensible on a config that has never run.
+
+> **The general lesson, which is not about pytest.** A gate that looks like a hang gets
+> cancelled, and then it is not a gate. Any check that holds a user for more than a few
+> seconds has to show that it is moving — otherwise the check trains people to work around
+> it, which is strictly worse than not having it.
+
 ### Start, stop, resume
 
 ```bash
@@ -75,6 +117,43 @@ steps since the last periodic save (~20 min). Full detail: [doc 4](04-pretrainin
 dialog) queue one deadline for the run that is going right now; the Schedule panel is for
 rules that repeat, night after night. Reach for a schedule when you would otherwise have to
 remember something tomorrow.
+
+### Stopping is not supposed to change the run
+
+This chapter says a run is trained "over evenings using stop/resume", and every controlled
+experiment in the repo rests on two runs seeing **the same data in the same order**. Neither
+was true until it was tested.
+
+```python
+self.rng = np.random.default_rng()        # loader.py, before
+```
+
+`torch.manual_seed(cfg.train.seed)` seeded torch, so the initial weights and the dropout
+were reproducible and a run *looked* seeded. The **data order** came from OS entropy. Two
+runs of one config saw different batches, and a resume drew from a fresh stream rather than
+continuing the old one — so a stopped-and-resumed run trained on some data twice and skipped
+some entirely. Nothing about the loss curve would say so, and every "same seed, same data"
+comparison in these docs was comparing runs that saw different batches.
+
+Two changes, both small:
+
+- the loaders take a `seed`, and `pretrain.py` passes `cfg.train.seed`;
+- `ckpt_last.pt` carries the generator's **state**, not just the seed, so a resume continues
+  the stream where it stopped. Saving the seed alone would restart it, and the run would
+  re-see the batches it had just trained on.
+
+`tests/test_determinism.py` asserts the whole claim end to end: train 8 steps; then train 4,
+stop, and train 4 more; the two final checkpoints must be **bit-for-bit identical**. With the
+restore removed, the embedding table diverges by 2.5e-3 — which is small enough to look like
+noise, and is exactly why this needed a test rather than an inspection.
+
+`ckpt_best.pt` deliberately does **not** carry the data position. It is for evaluation, not
+for resuming, and a checkpoint that can be resumed from two different places is a checkpoint
+nobody can reason about.
+
+> A resumed run that is slightly worse than an uninterrupted one is indistinguishable from
+> noise, so it never gets investigated. That is the shape of failure worth building a test
+> for: not the one that breaks, the one that quietly costs a little every time.
 
 ### Training over evenings
 
@@ -600,6 +679,7 @@ page.
 | 12 | [`evals.py`](../aksharallm/portal/evals.py) · [`quantize.py`](../aksharallm/portal/quantize.py) · [`finetune.py`](../aksharallm/portal/finetune.py) · [`synth.py`](../aksharallm/portal/synth.py) | one job runner per tab. Read any *one* of them — they are the same shape: start a subprocess of the CLI, stream its output, write a JSON result. [`learn.py`](../aksharallm/portal/learn.py) is the exception, and says why |
 | 13 | [`aksharallm/portal/static/js/router.js`](../aksharallm/portal/static/js/router.js) | `registerTab` — the router knows nothing about any tab; each module registers itself with `open` / `leave`. This is why a tab is inert until you open it |
 | 14 | `static/js/core.js` → `state.js` → `charts.js` → `dashboard.js` → one tab file | the DAG in the diagram above, bottom to top. `main.js` last: it only wires and boots |
+| 15 | [`scripts/preflight_tests.py`](../scripts/preflight_tests.py) | the launch gate's display. Short, and the docstring is the argument: a gate that looks like a hang gets cancelled, and then it is not a gate |
 
 What pins it: `tests/test_report.py` (the findings, and the two ways a report could quietly
 lie), `tests/test_portal.py` and its siblings (`test_portal_cost.py`,
