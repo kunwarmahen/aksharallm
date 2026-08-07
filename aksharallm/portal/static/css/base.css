@@ -123,6 +123,40 @@ main > *,
 .ev-layout > * {
   min-width: 0;
 }
+/* A column that scrolls must LOOK like a column that scrolls.
+ *
+ * The working tabs put their content in fixed-height panels — `calc(100vh - 150px)` — that
+ * scroll internally, so the page itself never moves. When the platform hides overlay
+ * scrollbars until you are already scrolling (GNOME, macOS, Windows 11), that leaves no
+ * affordance at all: the Eval tab's right column holds ~2,300px in a ~660px box, so the
+ * duplicates scan and the job output simply are not there as far as the reader is
+ * concerned. Reported as "cannot click Scan for duplicates" — the button was fine and
+ * 1,200px below the fold of a region nothing suggested could move.
+ *
+ * `scrollbar-gutter: stable` also reserves the track, so content does not reflow by a
+ * scrollbar's width the moment a panel grows past its box. */
+.ev-form, .ev-main, .quant-form, .quant-main, .lora-form, .lora-main,
+.sy-form, .sy-main, .ln-lessons, .ln-body, .docs-nav {
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+.ev-form::-webkit-scrollbar, .ev-main::-webkit-scrollbar,
+.quant-form::-webkit-scrollbar, .quant-main::-webkit-scrollbar,
+.lora-form::-webkit-scrollbar, .lora-main::-webkit-scrollbar,
+.sy-form::-webkit-scrollbar, .sy-main::-webkit-scrollbar,
+.ln-lessons::-webkit-scrollbar, .ln-body::-webkit-scrollbar,
+.docs-nav::-webkit-scrollbar { width: 10px; }
+.ev-form::-webkit-scrollbar-thumb, .ev-main::-webkit-scrollbar-thumb,
+.quant-form::-webkit-scrollbar-thumb, .quant-main::-webkit-scrollbar-thumb,
+.lora-form::-webkit-scrollbar-thumb, .lora-main::-webkit-scrollbar-thumb,
+.sy-form::-webkit-scrollbar-thumb, .sy-main::-webkit-scrollbar-thumb,
+.ln-lessons::-webkit-scrollbar-thumb, .ln-body::-webkit-scrollbar-thumb,
+.docs-nav::-webkit-scrollbar-thumb {
+  background: var(--border); border-radius: 999px;
+  border: 2px solid transparent; background-clip: content-box;
+}
+
 .panel-head {
   display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 12px;
 }
