@@ -15,9 +15,14 @@
   height: calc(100vh - 150px); min-height: 420px;
   display: flex; flex-direction: column; overflow: hidden;
 }
-.quant-form { overflow-y: auto; gap: 10px; }
+/* `.quant-layout >` is here to outrank `.quant-layout > .panel { overflow: hidden }` above:
+   two classes beat one, so the plain `.quant-form` version lost and the column was clipped
+   rather than scrolled. See learn.css and evals.css — same bug, three tabs. `.quant-main`
+   had no overflow-y at all, which in a `height: calc(100vh - 150px)` panel is the same
+   thing: anything past the fold is unreachable. */
+.quant-layout > .quant-form { overflow-y: auto; gap: 10px; }
 .quant-form .field { margin-top: 4px; }
-.quant-main { gap: 10px; }
+.quant-layout > .quant-main { gap: 10px; overflow-y: auto; }
 
 .q-hint {
   font-size: 12px; color: var(--ink-muted); line-height: 1.45;

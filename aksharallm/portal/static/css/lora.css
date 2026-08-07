@@ -61,9 +61,12 @@
   height: calc(100vh - 210px); min-height: 380px;
   display: flex; flex-direction: column; overflow: hidden;
 }
-.lora-form { overflow-y: auto; gap: 10px; }
+/* `.lora-layout >` outranks `.lora-layout > .panel { overflow: hidden }` above. One class
+   loses to two, and the column is then clipped instead of scrolled — see learn.css and
+   evals.css for the same bug in the same shape. */
+.lora-layout > .lora-form { overflow-y: auto; gap: 10px; }
 .lora-form .field { margin-top: 4px; }
-.lora-main { gap: 10px; overflow-y: auto; }
+.lora-layout > .lora-main { gap: 10px; overflow-y: auto; }
 /* Every block in the results column sizes to its own content and the *panel* scrolls.
  * Without this the flex children shrink below their content and the budget note lands on
  * top of the heading beneath it. */

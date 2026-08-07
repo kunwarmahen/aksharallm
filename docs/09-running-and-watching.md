@@ -651,6 +651,45 @@ python -m aksharallm.portal.runs archive tiny-moe  # set it aside, keep everythi
 python -m aksharallm.portal.runs delete  tiny-moe  # prompts for the name before removing
 ```
 
+### The column that looks scrollable and is not
+
+Every working tab is the same two-column shape: a fixed-height flex panel per column, with
+exactly one thing inside each that scrolls.
+
+```css
+.ev-layout > .panel { height: calc(100vh - 150px); overflow: hidden; }
+.ev-form            { overflow-y: auto; }          /* does nothing */
+```
+
+The second rule reads as "this column scrolls". It does not. `.ev-layout > .panel` is two
+classes and `.ev-form` is one, so the panel's `overflow: hidden` wins the cascade and the
+column is **clipped** — content past the fold is not merely below the viewport, it is
+unreachable by any amount of scrolling. The Eval tab was hiding 1,514px of its own form:
+the item limit, the device picker and the Evaluate button.
+
+What makes it worth a section is how well it hides. The page renders. There are no console
+errors. `document.body.scrollWidth` is clean, so the phone check from
+[On a phone](#on-a-phone) passes. A screenshot of the top of the tab looks perfect. It only
+becomes visible when a column's content grows past the panel, which is always months after
+the CSS was written — the Learn tab broke the day the curriculum went from thirteen lessons
+to nineteen, and the fix there left a comment that did not stop the same bug appearing in
+four more tabs, because a comment is only read by someone already in that file.
+
+The fix is to name the layout, so the intent outranks the clip:
+
+```css
+.ev-layout > .ev-form { overflow-y: auto; }        /* two classes, wins */
+```
+
+`tests/test_portal_css.py` parses the stylesheets and fails on any bare
+`.<x>-form { overflow-y: auto }` that a clipping panel rule outranks. It cannot do the whole
+job — statically, a stylesheet does not say which panel a descendant rule lands in, so
+binding `.md { overflow-y: auto }` to the Code tab's explain panel needs a real cascade —
+but it catches the exact shape that has now recurred five times.
+
+**Verify portal CSS against the running portal, with real data.** A static copy with a dead
+API renders empty panels that fit comfortably and measure perfectly clean.
+
 ## The report a run leaves behind
 
 A finished run has told you a great deal and summarised none of it: forty thousand step

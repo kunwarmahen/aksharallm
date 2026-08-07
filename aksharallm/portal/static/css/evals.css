@@ -15,9 +15,16 @@
   height: calc(100vh - 150px); min-height: 420px;
   display: flex; flex-direction: column; overflow: hidden;
 }
-.ev-form { overflow-y: auto; gap: 10px; }
+/* These two selectors name `.ev-layout >` for one reason only: to outrank the rule above.
+   `.ev-form { overflow-y: auto }` is one class and `.ev-layout > .panel { overflow: hidden }`
+   is two, so the plain version loses the cascade and the column is silently CLIPPED instead
+   of scrolled — the form was 2,143px of content in a 661px box, so the limit field, the
+   device picker and the Evaluate button were all simply unreachable. Exactly the bug
+   learn.css § "Both columns are fixed-height flex panels" documents; it is written down
+   there and it still happened three more times. tests/test_portal_css.py now fails on it. */
+.ev-layout > .ev-form { overflow-y: auto; gap: 10px; }
 .ev-form .field { margin-top: 4px; }
-.ev-main { gap: 12px; overflow-y: auto; }
+.ev-layout > .ev-main { gap: 12px; overflow-y: auto; }
 
 .ev-hint {
   font-size: 12px; color: var(--ink-muted); line-height: 1.45;
