@@ -723,6 +723,15 @@ python -m aksharallm.train.report small-code --stdout   # print it instead (ssh)
 python -m aksharallm.train.report tiny-moe --json       # the same numbers, unrendered
 ```
 
+**In the browser it is the Report panel on the Dashboard**, below the charts and the session
+table. For a run that is **not training it renders itself** as soon as the run is selected —
+once per selection, never on a poll. That last distinction is the whole reason building is a
+button at all: a report is a full parse of the log, and rebuilding it every three seconds
+would be indefensible. But a run that has stopped is not going to change between polls, and a
+panel headed *Report* that says "Build it here to read one" reads as *there is no report* —
+which is how a finished run's summary goes unread by the person it was written for. While a
+run **is** live the button stays, because then the report really does change under you.
+
 Six sections, in the order a person asks for them: **at a glance** (steps, tokens,
 parameters, best val, wall clock, throughput, energy), **what it learned** (a sparkline plus
 the loss at six points along the run), **sessions**, **expert routing** if it is a mixture of

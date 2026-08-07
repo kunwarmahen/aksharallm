@@ -851,6 +851,7 @@ export async function refresh() {
     renderSessions(status);
     renderConfig(status);
     renderLog(log);
+    maybeShowReport(status);
     renderGpu(gpu);
     renderCost(cost, gpu);
     renderSchedule(sched);
@@ -1150,12 +1151,32 @@ export function wireReport() {
   $('#btn-report-save').addEventListener('click', () => buildReport(true));
 }
 
+/* A run that has stopped gets its report shown without being asked.
+ *
+ * Building is a full parse of the log, so it stays a button *while a run is live* — the
+ * docstring above is right that doing it every three seconds would be terrible. But a run
+ * that is not training is not going to change between polls, and the report is the whole
+ * point of having finished: leaving the panel showing "Build it here to read one" under a
+ * heading that says "Report" reads as "there is no report", which is how a finished run's
+ * summary went unread. Once per run selection, never while training. */
+function maybeShowReport(status) {
+  const body = $('#report-body');
+  if (!body || !state.run) return;
+  const live = !!(status && (status.running || status.pid));
+  if (live || body.dataset.run === state.run || body.dataset.building === state.run) return;
+  body.dataset.building = state.run;
+  buildReport(false).finally(() => {
+    if (body.dataset.building === state.run) body.dataset.building = '';
+  });
+}
+
 /** Another run's report must not sit under this run's heading, so it is cleared rather than
  *  left to be replaced on the next click. */
 function clearReport() {
   const body = $('#report-body');
   if (!body || !body.dataset.run) return;
   body.dataset.run = '';
+  body.dataset.building = '';
   body.innerHTML = '<p class="docs-hint">The trainers write this file when they exit. '
     + 'Build it here to read one for a run that is still going.</p>';
   $('#report-note').textContent = '';
