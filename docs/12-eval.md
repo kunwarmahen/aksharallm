@@ -514,6 +514,16 @@ wrong in:
   hit and drops the ones that do not hold up.
 - **A partial scan says so.** Every report carries a `coverage` block, and both ways of
   going faster set `partial: true`. See below.
+- **The re-score reads each suite's own verdict, and refuses the ones it cannot.** Every task
+  family records its outcome differently — multiple choice and generation write `correct`,
+  HumanEval writes `passed`, the judge writes a 1-5 `score` that maps to 0-1 as `(s - 1) / 4`.
+  `clean_score` originally knew only the first, so HumanEval and the judge re-scored to
+  **0.000 with zero items dropped**: arithmetically impossible, and printed to three decimals
+  beside real numbers. An unknown schema is now refused *with a reason* rather than averaged
+  as all-false, and a row that cannot be computed still appears — a suite that quietly
+  vanishes from the table looks like a suite that was clean. The invariant that catches this
+  in any schema is in `tests/test_contamination.py`: **drop nothing and the clean score must
+  equal the reported one exactly.**
 
 #### Going faster, and why only one of the two knobs is in the portal
 

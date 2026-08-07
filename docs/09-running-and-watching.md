@@ -326,7 +326,7 @@ The panels, in plain terms:
   teacher is loaded by Ollama in another process — so it reports the contention and leaves
   the choice to you. Shells out to `python -m aksharallm.synth`. See
   [doc 13](13-synthetic-data.md).
-- **Learn** — the repo as a course ([doc 15](15-learning-path.md)). Thirteen lessons, each
+- **Learn** — the repo as a course ([doc 15](15-learning-path.md)). Twenty-one lessons, each
   one *read the doc → open the file → break it → watch a real pytest node go red*. Lessons
   unlock as their prerequisites are finished, a locked one says what is missing, and a lesson
   completes only once its check has been **red and then green** — the check passes on clean
@@ -671,7 +671,7 @@ What makes it worth a section is how well it hides. The page renders. There are 
 errors. `document.body.scrollWidth` is clean, so the phone check from
 [On a phone](#on-a-phone) passes. A screenshot of the top of the tab looks perfect. It only
 becomes visible when a column's content grows past the panel, which is always months after
-the CSS was written — the Learn tab broke the day the curriculum went from thirteen lessons
+the CSS was written — the Learn tab broke the day the curriculum grew from thirteen
 to nineteen, and the fix there left a comment that did not stop the same bug appearing in
 four more tabs, because a comment is only read by someone already in that file.
 
@@ -689,6 +689,25 @@ but it catches the exact shape that has now recurred five times.
 
 **Verify portal CSS against the running portal, with real data.** A static copy with a dead
 API renders empty panels that fit comfortably and measure perfectly clean.
+
+### And a column that scrolls has to look like one
+
+The same shape has a second, milder failure. Once the column really does scroll, the content
+below the fold is *reachable* — but on any platform that hides overlay scrollbars until you
+are already scrolling (GNOME, macOS, Windows 11), nothing on screen says so. The Eval tab's
+right column holds ~2,300px in a ~660px box, and the page itself never moves, so a reader who
+scrolls the window sees nothing happen and concludes that is the whole panel.
+
+Reported as *"cannot click Scan for duplicates"*. The button was enabled, had its corpora
+loaded and threw nothing — it was 1,200px below the fold of a region that gave no sign it
+could move. So `scrollbar-gutter: stable` plus a permanently visible thin scrollbar is set on
+every internally-scrolling column in `base.css`. The gutter also stops content shifting
+sideways by a scrollbar's width the moment a panel outgrows its box.
+
+**The general lesson for this layout:** a fixed-height panel that scrolls internally hides
+its own content twice over — once from the reader, and once from anyone testing it, because
+neither a screenshot of the top nor a clean `scrollWidth` says anything about what is below.
+When a panel grows, check `scrollHeight` against `clientHeight`, not the picture.
 
 ## The report a run leaves behind
 

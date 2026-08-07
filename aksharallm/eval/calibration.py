@@ -256,7 +256,7 @@ MAX_POSITIONS = 20_000
 @torch.no_grad()
 def collect(model, dataset, batches: int, batch_size: int, *,
             max_positions: int = MAX_POSITIONS,
-            seed: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
+            seed: int = 0, progress=None) -> tuple[torch.Tensor, torch.Tensor]:
     """Run the model over `batches` batches and return `(logits, targets)` on the CPU.
 
     **The binding constraint here is memory, and it is worth stating.** Calibration needs the
@@ -279,7 +279,10 @@ def collect(model, dataset, batches: int, batch_size: int, *,
     per_batch = max(1, max_positions // max(batches, 1))
 
     all_logits, all_targets = [], []
-    for _ in range(batches):
+    for done in range(batches):
+        # This loop is the whole wall-clock cost, so it is what a progress bar has to watch.
+        if progress:
+            progress(done, batches, "collecting logits")
         x, y = dataset.get_batch(batch_size)
         logits, _ = model(x, full_logits=True)
         flat = logits.reshape(-1, logits.shape[-1])
@@ -289,6 +292,8 @@ def collect(model, dataset, batches: int, batch_size: int, *,
             flat, flat_y = flat[pick.to(flat.device)], flat_y[pick.to(flat_y.device)]
         all_logits.append(flat.to(torch.float16).cpu())
         all_targets.append(flat_y.cpu())
+    if progress:
+        progress(batches, batches, "collecting logits")
     model.train(was)
     return torch.cat(all_logits), torch.cat(all_targets)
 

@@ -160,9 +160,9 @@ function renderStatus(st) {
   if (cur) {
     const label = st.running ? 'running' : cur.state;
     const started = cur.started ? new Date(cur.started * 1000).toLocaleTimeString() : '';
-    $('#ev-state').textContent = cur.kind === 'fetch'
-      ? `${label} — downloading ${(cur.datasets || []).length} datasets, started ${started}`
-      : `${label} — ${(cur.suites || []).join(', ')} on ${cur.checkpoint} (${cur.device}), started ${started}`;
+    const where = cur.source === 'terminal' ? ' (from a terminal)' : '';
+    $('#ev-state').textContent =
+      `${label} — ${describeJob(cur)}${where}, started ${started}`;
   } else {
     $('#ev-state').textContent = 'nothing running';
   }
@@ -389,6 +389,34 @@ export function wireEvalTab() {
  * terminal and the browser have to be reading the same measurement or one of them is
  * lying. A rate is shown as "–" when nothing was checkable, because a rate over zero
  * items is unknown and not zero. */
+/* Five kinds of job share this panel and they do not have the same fields.
+ *
+ * This line used to be written for a benchmark run and special-cased only `fetch`, so a
+ * contamination scan — which has a config and no checkpoint and no device — rendered as
+ * "running — mmlu, arc-easy, … on undefined (undefined)". Two literal `undefined`s in the
+ * one sentence telling you what the machine is doing. Each kind now says what it actually
+ * is, and every field has a fallback, because a job description is exactly the wrong place
+ * to be reporting the absence of a field. */
+function describeJob(cur) {
+  const suites = (cur.suites || []).join(', ');
+  const ckpt = cur.checkpoint || 'the selected checkpoint';
+  const on = cur.device ? ` (${cur.device})` : '';
+  switch (cur.kind) {
+    case 'fetch':
+      return `downloading ${(cur.datasets || []).length} datasets`;
+    case 'contaminate':
+      return `checking ${suites || 'the suites'} against ${cur.config || 'the training data'}`;
+    case 'domains':
+      return `splitting the held-out loss of ${ckpt} by source${on}`;
+    case 'calibrate':
+      return `measuring how honest ${ckpt} is about its confidence${on}`;
+    case 'dedup':
+      return `scanning ${cur.source || 'the corpus'} for near-duplicates`;
+    default:
+      return `${suites || 'the default suites'} on ${ckpt}${on}`;
+  }
+}
+
 function renderContamination(latest) {
   const box = $('#ev-con-out');
   if (!latest) { box.innerHTML = '<p class="ev-hint">Not checked yet.</p>'; return; }

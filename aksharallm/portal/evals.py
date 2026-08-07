@@ -178,14 +178,24 @@ class EvalJobs:
 
     #: The CLI's progress line. Parsed rather than invented, so the bar in the browser can
     #: only ever show what the job itself printed.
-    _PROGRESS_RE = re.compile(r"^\[eval\] (\S+) (\d+)/(\d+) \((\d+)%\)")
+    #: Any job's progress line, not just `run`'s. The tag differs per command and the
+    #: contamination scan prints thousands separators, so a regex written for
+    #: `[eval] mmlu 40/160 (25%)` silently matched nothing in
+    #: `[contam] fineweb-edu-10bt.bin 416,000,000/8,500,000,000 (5%)` -- leaving the one job
+    #: that takes half an hour as the only one with no progress bar, which is backwards.
+#: The label is lazy rather than `\S+` because a label may be a phrase — `collecting
+#: logits` is two words, and one space was enough to silence the bar again.
+    _PROGRESS_RE = re.compile(
+        r"^\[(?:eval|contam|domains|calib|dedup)\] (.+?) ([\d,]+)/([\d,]+) \((\d+)%\)")
 
     def _progress(self, log: list[str]) -> dict | None:
         for line in reversed(log):
             found = self._PROGRESS_RE.match(line)
             if found:
-                return {"label": found.group(1), "done": int(found.group(2)),
-                        "total": int(found.group(3)), "pct": int(found.group(4))}
+                return {"label": found.group(1),
+                        "done": int(found.group(2).replace(",", "")),
+                        "total": int(found.group(3).replace(",", "")),
+                        "pct": int(found.group(4))}
         return None
 
     def compare(self, suite: str, run: str | None = None) -> dict:

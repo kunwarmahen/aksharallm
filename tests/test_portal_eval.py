@@ -367,3 +367,19 @@ def test_progress_is_parsed_from_the_jobs_own_output(repo):
     assert jobs._progress(["[eval] mmlu 40/160 (25%)", "[eval] mmlu 80/160 (50%)"]) == {
         "label": "mmlu", "done": 80, "total": 160, "pct": 50}
     assert jobs._progress(["nothing useful"]) is None
+
+
+def test_progress_is_read_from_every_job_not_only_the_benchmarks(repo):
+    """Each command tags its own progress lines, and the contamination scan prints thousands
+    separators. A regex written for `[eval] mmlu 40/160` matched none of it, so the ONE job
+    that runs for half an hour was the only one without a progress bar."""
+    jobs = EvalJobs(repo)
+    assert jobs._progress(
+        ["[contam] fineweb-edu-10bt.bin 416,000,000/8,500,000,000 (5%)"]) == {
+        "label": "fineweb-edu-10bt.bin", "done": 416_000_000,
+        "total": 8_500_000_000, "pct": 5}
+    assert jobs._progress(["[dedup] shingling 60,000/60,000 (100%)"])["pct"] == 100
+    # A label may be a phrase. One space was enough to silence the bar again, because the
+    # first version of this regex matched the label with `\S+`.
+    assert jobs._progress(["[calib] collecting logits 3/8 (38%)"]) == {
+        "label": "collecting logits", "done": 3, "total": 8, "pct": 38}

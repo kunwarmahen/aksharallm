@@ -311,7 +311,8 @@ def cmd_domains(args) -> int:
 
     seq_len = args.seq_len or ckpt["model_config"].get("max_seq_len", 1024)
     rows = dom.per_domain_loss(model, val_bin, spans, seq_len, batches=args.batches,
-                               batch_size=args.batch, device=args.device)
+                               batch_size=args.batch, device=args.device,
+                               progress=_ticker("domains"))
 
     print(f"\n{args.checkpoint} on {val_bin}, {seq_len}-token windows\n")
     print(f"{'source':>22} {'tokens':>12} {'weight':>7} {'loss':>8} {'ppl':>9}  check")
@@ -354,7 +355,8 @@ def cmd_calibrate(args) -> int:
     print(f"collecting {args.batches} x {args.batch} batches, "
           f"subsampled to {args.positions:,} positions...")
     logits, targets = cal.collect(model, ds, args.batches, args.batch,
-                                  max_positions=args.positions)
+                                  max_positions=args.positions,
+                                  progress=_ticker("calib"))
     res = cal.report(logits, targets)
     res["checkpoint"] = args.checkpoint
     res["val_bin"] = val_bin
@@ -469,6 +471,27 @@ def build_parser() -> argparse.ArgumentParser:
     cal_p.set_defaults(fn=cmd_calibrate)
 
     return ap
+
+
+def _ticker(tag: str, every: float = 1.0):
+    """A progress callback in the one shape the portal can read.
+
+    `[<tag>] <label> <done>/<total> (<pct>%)` is what `EvalJobs._PROGRESS_RE` matches, and
+    matching it is the entire contract — a job whose lines do not is a job with no progress
+    bar, which on a half-hour scan reads as a hang. Rate-limited so a fast inner loop does
+    not turn the log into a flood.
+    """
+    last = [0.0]
+
+    def tick(done: int, total: int, label: str = "") -> None:
+        now = time.monotonic()
+        if now - last[0] < every and done < total:
+            return
+        last[0] = now
+        print(f"[{tag}] {label or tag} {done}/{total} "
+              f"({done / max(1, total) * 100:.0f}%)", flush=True)
+
+    return tick
 
 
 #: Commands worth publishing to the portal. The rest finish before it could poll.
