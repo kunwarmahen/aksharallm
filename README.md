@@ -115,6 +115,7 @@ grep is one line away from the prose. `tests/test_docs.py` fails if either point
 | 18 | [Long context](docs/18-long-context.md) | Reading further than the weights were trained for, without retraining anything: RoPE scaling (linear/NTK/YaRN), sliding windows and why they need attention sinks, and the two measurements — loss by position and needle-in-a-haystack — that disagree |
 | 19 | [Diffusion](docs/19-diffusion.md) | The *other* way to build a language model: fill in blanks with attention running both ways, and generate by unmasking what you are surest about. Infilling, a compute dial, no KV cache — and the ELBO you must never compare with a cross-entropy |
 | 20 | [Audio](docs/20-audio.md) | The same transformer, on sound: an RVQ-VAE codec that turns speech into fifty integers a second, the delay pattern that keeps eight codebooks honest in one stream, and TTS/ASR as one model with the sequence written in two orders — plus the bitrate ladder you judge with your ears |
+| 21 | [Vision](docs/21-vision.md) | A picture into a model that has never seen one: patches instead of a codec, a two-layer projector that is the whole of LLaVA, and a corpus whose captions are known exactly so the answer can be *scored* rather than admired — plus the double shift that trained to a loss of 0.003 and captioned everything `'w green'` |
 
 ---
 
@@ -158,6 +159,10 @@ aksharallm/
 │   │   ├── delay.py          the shift that turns 8 codebooks into one stream
 │   │   ├── lm.py             the SAME Transformer, 8 embeddings in and 8 heads out
 │   │   └── speech.py         TTS and ASR: one model, one flag apart
+│   ├── vision/           a second modality that needs no codec — see docs/21
+│   │   ├── image.py          a shapes corpus whose captions are known exactly
+│   │   ├── encoder.py        patches, a small ViT, and the LLaVA projector
+│   │   └── lm.py             a FROZEN language model with a picture on its input
 │   ├── quant/            int8/int4/NF4 from scratch — see docs/10
 │   ├── lora/             LoRA + QLoRA adapters from scratch — see docs/11
 │   │   ├── qtensor.py        group scales, zero-points, 4-bit packing
@@ -683,6 +688,44 @@ The transformer needed two optional arguments for all of this and nothing else.
 mean opinion score needs people. So what gets reported is mel-cepstral distortion plus *our
 own ASR model's error rate on our own TTS output*, labelled **intelligibility**, because that
 is what it measures. A synthesiser with a flat robotic monotone can score perfectly on it.
+
+### Showing it a picture
+
+```bash
+python -m aksharallm.vision corpus --out data/vision/shapes --images 8000
+python -m aksharallm.vision.train configs/vision-shapes.yaml     # minutes
+```
+
+Audio needed a codec to turn a waveform into integers. An image needs nothing of the sort —
+it is already a grid of numbers, so cutting it into 8×8 patches produces a sequence
+directly. What is left is a **bridge**, and the bridge is two matrices.
+
+That is LLaVA, and its contribution was not an architecture. It was noticing that a *frozen*
+language model will accept vectors from a vision encoder if you train a small MLP to put them
+in the right place — because the model's input space is not a code to be cracked, it is a
+space the model has already learned to read. Here: **0.82M trainable parameters against
+13.77M frozen ones**, and the run is minutes rather than hours.
+
+The corpus is rendered from descriptions we chose, so the caption is known *exactly*
+("three red circles"). That is what makes the result a score rather than an impression:
+
+| step | count | colour | shape | all three | held-out combination |
+|---|---|---|---|---|---|
+| 400 | 78% | 100% | 59% | 47% | 0% |
+| 1,200 | 100% | 100% | 97% | 97% | 38% |
+| 1,600 | 100% | 100% | 100% | **100%** | 31% |
+
+Colour is learned almost at once, shape takes longer, and counting — which needs attention to
+aggregate across patches rather than read one — comes last. The final column is the
+interesting one: one (colour, shape) pair is deliberately never shown during training, and the
+model describes it correctly about a third of the time. Not solved, and not zero.
+
+**And the bug is the reason the phase is worth reading.** The first version reached a training
+loss of **0.0027** — essentially perfect — and captioned every image `'w green'`. Two shifts
+had stacked: the model already shifts by slicing the text hidden states one position early,
+and the batch builder shifted the targets again the ordinary way. It learned, perfectly, to
+emit the token *after* next. Nothing in the loss curve could say so; what caught it was
+scoring the actual captions every 400 steps.
 
 ### Serving it: many conversations at once
 

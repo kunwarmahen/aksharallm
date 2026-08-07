@@ -1,0 +1,53 @@
+# Vision, LLaVA-style: a frozen language model with a picture bolted onto its input.
+#
+# Nothing here trains a language model or a vision encoder from scratch. Stage one trains
+# the PROJECTOR -- two matrices -- so this is minutes, not hours. Prerequisites:
+#
+#     .venv/bin/python -m aksharallm.vision corpus --out data/vision/shapes --images 8000
+#     .venv/bin/python -m aksharallm.vision.train configs/vision-shapes.yaml
+#
+# The step-0 loss lands near or a little ABOVE ln(8192) = 9.011 (measured: 11.27) -- an
+# untrained projector hands the frozen model vectors from nowhere in its input distribution,
+# so it is briefly worse than uniform. What matters is that it falls at once.
+#
+# Then stop watching the loss entirely and watch ALL -- did it name the count, the colour AND
+# the shape. A loss of 0.003 with a garbage caption is a real thing that happened here.
+# See docs/21-vision.md.
+name: vision-shapes
+
+vision:
+  image_size: 64
+  patch: 8                  # -> 8x8 = 64 patches
+  d_vision: 256
+  n_layers: 6
+  n_heads: 4
+  n_tokens: 16              # pool 64 patches to 16: an image costs 16 positions of context
+
+data:
+  corpus: data/vision/shapes
+  holdout: data/vision/shapes-holdout
+  tokenizer: data/tinystories/tokenizer.json
+  max_caption_tokens: 16
+
+optim:
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 200
+  weight_decay: 0.01
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/vision-shapes
+  base: checkpoints/tiny/ckpt_best.pt
+  freeze_language_model: true      # stage one. `false` is a different, much bigger run.
+  freeze_encoder: false
+  batch_size: 32
+  max_steps: 3000
+  eval_every: 250
+  eval_batches: 8
+  sample_every: 500
+  sample_images: 32
+  ckpt_every: 1000
+  log_every: 25
