@@ -276,8 +276,13 @@ def main(argv=None) -> int:
         if cfg.train.log_every and (step % cfg.train.log_every == 0
                                     or step == cfg.train.max_steps - 1):
             dt = time.time() - t0
+            n_steps = max(cfg.train.log_every, 1)
             rec = {"step": step, "loss": float(loss), "ema": ema, "lr": lr,
-                   "grad_norm": float(grad_norm), "s_per_step": dt / cfg.train.log_every,
+                   "grad_norm": float(grad_norm), "s_per_step": dt / n_steps,
+                   # The key the portal's throughput chart reads. A caption token is the
+                   # unit here; the images are the prompt.
+                   "tok_per_sec": n_steps * cfg.train.batch_size
+                   * cfg.data.max_caption_tokens / max(dt, 1e-9),
                    "time": time.time(), "elapsed": time.time() - run_t0}
             logf.write(json.dumps(rec) + "\n")
             logf.flush()

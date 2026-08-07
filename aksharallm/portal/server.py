@@ -55,6 +55,7 @@ from .pipeline import Pipeline
 from .finetune import FinetuneJobs
 from .quantize import QuantJobs
 from .audio import Audio, AudioError
+from .vision import Vision, VisionError
 from .diffusion import Diffusion
 from .interp import Interp
 from .longctx import LongContext
@@ -91,7 +92,7 @@ class Handler(BaseHTTPRequestHandler):
                  pipeline: Pipeline, quant: QuantJobs, finetune: FinetuneJobs,
                  evals: EvalJobs, synth: SynthJobs, learn: Learn, interp: Interp,
                  longctx: LongContext, diffusion: Diffusion, serving: ServeJobs,
-                 audio: Audio,
+                 audio: Audio, vision: Vision,
                  cost: CostConfig, quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
@@ -110,6 +111,7 @@ class Handler(BaseHTTPRequestHandler):
         self.diffusion = diffusion
         self.serving = serving
         self.audio = audio
+        self.vision = vision
         self.cost = cost
         self.quiet = quiet
         super().__init__(*args, **kw)
@@ -384,6 +386,22 @@ class Handler(BaseHTTPRequestHandler):
                     # A message, not a stack trace: every one of these is something the
                     # reader can act on (wrong checkpoint family, mismatched sample rate).
                     return self._json({"error": str(e)}, code=400)
+            # vision: /api/vision/<caption|samples>. Inline like audio and interp — a
+            # caption is a handful of forward passes over a 14M model.
+            if len(parts) == 3 and parts[:2] == ["api", "vision"]:
+                try:
+                    if parts[2] == "samples":
+                        return self._json(self.vision.samples(
+                            str(data.get("corpus") or ""), int(data.get("n") or 12),
+                            str(data.get("split") or "val")))
+                    if parts[2] == "caption":
+                        return self._json(self.vision.caption(
+                            str(data.get("checkpoint") or ""),
+                            str(data.get("corpus") or ""),
+                            int(data.get("n") or 12),
+                            str(data.get("split") or "val")))
+                except VisionError as e:
+                    return self._json({"error": str(e)}, code=400)
             # the learning path: /api/learn/<check|reset>
             if len(parts) == 3 and parts[:2] == ["api", "learn"]:
                 if parts[2] == "check":
@@ -448,6 +466,12 @@ class Handler(BaseHTTPRequestHandler):
                                "adapters": self.evals.adapters()})
         if parts == ["eval", "audits"]:
             return self._json(self.evals.audits())
+        # Two more measurements of the *data and the confidence* rather than the score:
+        # docs/12 § "Is the model's confidence honest?" and docs/01 § dedup.
+        if parts == ["eval", "calibration"]:
+            return self._json(self.evals.calibration())
+        if parts == ["eval", "dedup"]:
+            return self._json({**self.evals.dedup(), "corpora": self.evals.corpora()})
         if parts == ["eval", "compare"]:
             # One suite across every evaluation ever run — the chart the tab leads with,
             # and the whole reason results are kept as files rather than printed and lost.
@@ -488,6 +512,11 @@ class Handler(BaseHTTPRequestHandler):
                 float((query.get("factor") or [4.0])[0])))
         if parts == ["longctx", "result"]:
             return self._json(self.longctx.result((query.get("name") or [""])[0]))
+        # vision: which towers and corpora exist.
+        if parts == ["vision"]:
+            return self._json(self.vision.overview())
+        if parts == ["vision", "runs"]:
+            return self._json({"runs": self.vision.runs()})
         # audio: which codecs and corpora exist, and where a codec run has got to.
         if parts == ["audio"]:
             return self._json(self.audio.overview())
@@ -897,6 +926,8 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
     diffusion = Diffusion(playground, store.root)
     # Shares the Playground's device plan rather than forming a second opinion about
     # who owns the card: the CPU while a run is training, which is the standing policy.
+    vision = Vision(store.root,
+                    device_for=lambda: (lambda p: (p.device, p.reason))(playground.engine.plan()))
     audio = Audio(store.root,
                   device_for=lambda: (lambda p: (p.device, p.reason))(playground.engine.plan()))
     serving = ServeJobs(store.root)
@@ -905,6 +936,7 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
                       pipeline=pipeline, quant=quant, finetune=finetune, evals=evals,
                       synth=synth, learn=learn, interp=interp, longctx=longctx,
                       diffusion=diffusion, serving=serving, audio=audio,
+                      vision=vision,
                       cost=cost,
                       quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True

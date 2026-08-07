@@ -18,6 +18,7 @@ import './interp.js';   /* registers itself; nothing here needs its exports */
 import './longctx.js';  /* likewise */
 import './diffusion.js'; /* likewise */
 import './audio.js';     /* likewise */
+import './vision.js';    /* likewise */
 
 function wire() {
   wireGpu();

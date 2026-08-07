@@ -592,6 +592,31 @@ The number was not wrong. It was measuring something narrower than it claimed, a
 cross-check said so — which is the argument for reporting a familiar quantity beside every
 unfamiliar one, even when nothing depends on it.
 
+### All four in the portal
+
+The Eval tab's **"Is the benchmark trustworthy?"** panel now holds four cards, and they share
+the tab's one-job-at-a-time lock on purpose — a contamination scan streams ten billion tokens
+and a calibration pass keeps full logit vectors; neither wants to be doing that while an
+evaluation is trying to produce a number.
+
+| card | asks |
+|---|---|
+| contamination | did the test leak into the training data? |
+| per-domain loss | is one validation number hiding two? |
+| **calibration** | when it says 80%, is it right 80% of the time? |
+| **duplicates** | how much of the corpus is the same thing twice? |
+
+Every one of them renders **from the JSON the CLI wrote**, never recomputed in the browser —
+the terminal and the portal have to be reading the same measurement or one of them is lying.
+Each carries its own caveat in the panel rather than in a tooltip: the ECE table prints one
+row per bin count because the count changes the answer, and the duplicates card prints the
+whole LSH detection curve because its misses are otherwise invisible.
+
+One rendering detail that is not a detail: **a clean corpus is a result, not an empty state.**
+Scanning TinyStories finds *no* near-duplicates in 20,000 documents, and the card says so in
+those words. The first version read `largest_clusters[0]` on an empty list and printed the
+word `undefined` — exactly where a reader most needs to trust the number.
+
 ## The code, in reading order
 
 | # | file | what to look for |

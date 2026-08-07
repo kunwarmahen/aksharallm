@@ -277,10 +277,17 @@ def main(argv=None) -> int:
             n_steps = max(1, step - prev_log_step)
             audio_s = n_steps * cfg.train.batch_size * cfg.window / cfg.codec.sample_rate
             book = codebook_report(stats, cfg.codec.codebook_size)
+            frames = n_steps * cfg.train.batch_size * cfg.window // cfg.codec.hop
             rec = {
                 "step": step, "loss": float(total), "recon": float(loss),
                 "vq": float(vq_loss), "ema": ema, "lr": lr,
                 "grad_norm": float(grad_norm), "s_per_step": dt / n_steps,
+                # `tok_per_sec` under that exact name, because the portal's throughput chart
+                # and `runlog.SERIES_KEYS` read that key and nothing else -- a codec logging
+                # only its own natural unit drew an empty chart. A codec "token" is one
+                # codebook entry for one frame, which is what `tokens_per_step` in the
+                # session record already declares, so the two agree.
+                "tok_per_sec": frames * cfg.codec.n_codebooks / max(dt, 1e-9),
                 # Audio-seconds reconstructed per wall-clock second. The codec's equivalent
                 # of tok/s, and the only throughput number that means anything here — MFU
                 # would be a fiction over a stack of strided convolutions.

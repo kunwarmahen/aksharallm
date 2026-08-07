@@ -424,11 +424,84 @@ function renderDomains(text) {
     : `<pre class="ev-log">${escHtml(text.slice(Math.max(0, start - 40)).trim())}</pre>`;
 }
 
+
+/* Calibration is rendered from the JSON the CLI wrote, like contamination. Every ECE carries
+ * the bin count that produced it, because the count changes the answer and an ECE quoted
+ * without one is not reproducible. */
+function renderCalibration(latest) {
+  const box = $('#ev-cal-out');
+  if (!latest) { box.innerHTML = '<p class="ev-hint">Not measured yet.</p>'; return; }
+  const b = latest.before;
+  const a = latest.after;
+  const bins = Object.keys(b.ece).sort((x, y) => Number(x) - Number(y));
+  const rows = bins.map((n) =>
+    `<tr><th>${n}</th><td>${Number(b.ece[n]).toFixed(4)}</td>`
+    + `<td>${Number(a.ece[n]).toFixed(4)}</td>`
+    + `<td>${Number(b.ece_equal_mass[n]).toFixed(4)}</td></tr>`).join('');
+  const gap = b.confidence - b.accuracy;
+  box.innerHTML =
+    `<p><b>accuracy ${b.accuracy.toFixed(4)}</b> vs <b>confidence ${b.confidence.toFixed(4)}</b>`
+    + ` — ${gap >= 0 ? 'over' : 'under'}confident by ${Math.abs(gap).toFixed(4)}</p>`
+    + '<table><thead><tr><th>bins</th><th>ECE</th><th>ECE (T)</th><th>equal-mass</th>'
+    + `</tr></thead><tbody>${rows}</tbody></table>`
+    + `<p class="ev-hint">${escHtml(latest.reading)} `
+    + `Scored on ${fmt.int(latest.n_scored)} predictions, temperature fitted on a held-out `
+    + `${fmt.int(latest.n_fit)}. ${fmt.ago(latest.when)}.</p>`
+    + `<p class="ev-hint">${escHtml(latest.caveat)}</p>`;
+}
+
+/* Dedup shows the TOKEN share first and the history beside it, because a dedup number is
+ * quoted per offset and the honest way to read one is next to another taken elsewhere in
+ * the file. */
+function renderDedup(res) {
+  const box = $('#ev-dd-out');
+  const latest = res.latest;
+  const sel = $('#ev-dd-source');
+  if (sel && !sel.options.length) {
+    sel.innerHTML = (res.corpora || []).map((c) =>
+      `<option value="${escHtml(c.rel)}">${escHtml(c.rel)} — ${fmt.int(c.tokens)} tokens`
+      + `</option>`).join('');
+  }
+  if (!latest) { box.innerHTML = '<p class="ev-hint">Not scanned yet.</p>'; return; }
+  const curve = (latest.curve || []).map((r) =>
+    `<td>${Math.round(r.detected * 100)}%</td>`).join('');
+  const heads = (latest.curve || []).map((r) => `<th>${r.similarity}</th>`).join('');
+  /* A clean corpus is a RESULT, not an empty state. `largest_clusters[0]` on an empty list
+   * is `undefined`, which renders as the word "undefined" and reads as a broken panel —
+   * exactly where the reader most needs to trust the number. */
+  const clusters = latest.largest_clusters || [];
+  const headline = clusters.length
+    ? `<p><b>${(latest.duplicate_token_share * 100).toFixed(2)}% of tokens</b> are a repeat `
+      + `(${(latest.duplicate_document_share * 100).toFixed(2)}% of documents) — `
+      + `${fmt.int(latest.clusters)} clusters, largest ${clusters[0]} copies</p>`
+    : '<p><b class="clean-ok">No near-duplicates found</b> at this threshold — every '
+      + 'document in the sample is distinct from every other.</p>';
+  box.innerHTML =
+    headline
+    + `<p class="ev-hint">${fmt.int(latest.documents)} documents `
+    + `(${(latest.tokens / 1e6).toFixed(1)}M tokens) from `
+    + `${escHtml(latest.source || '')}${latest.sampled ? ', SAMPLED' : ', full pass'}`
+    + `${latest.start_token ? ` from token ${fmt.int(latest.start_token)}` : ''}. `
+    + `${fmt.ago(latest.when)}.</p>`
+    + `<table><thead><tr><th>true similarity</th>${heads}</tr></thead>`
+    + `<tbody><tr><th>chance LSH sees it</th>${curve}</tr></tbody></table>`
+    + `<p class="ev-hint">${escHtml(latest.caveat)}</p>`
+    + (res.history.length > 1
+      ? `<p class="ev-hint">${res.history.length} scans on file — compare two offsets before `
+        + 'quoting a number.</p>' : '');
+}
+
 async function loadAudits() {
   try {
     const res = await api('/api/eval/audits');
     renderContamination(res.latest);
   } catch (err) { /* the panel is optional; the tab still works */ }
+  try {
+    renderCalibration((await api('/api/eval/calibration')).latest);
+  } catch (err) { /* likewise */ }
+  try {
+    renderDedup(await api('/api/eval/dedup'));
+  } catch (err) { /* likewise */ }
 }
 
 function wireAudit() {
@@ -450,6 +523,27 @@ function wireAudit() {
         kind: 'domains', checkpoint: $('#ev-ckpt').value, batches: 16,
       });
       flash('Splitting the validation loss by source.', 'ok');
+    } catch (err) { flash(err.message, 'error'); }
+  });
+  $('#ev-cal-run').addEventListener('click', async () => {
+    try {
+      await post('/api/eval/audit', {
+        kind: 'calibrate', checkpoint: $('#ev-ckpt').value, batches: 24,
+      });
+      flash('Measuring calibration. It keeps the full logits, so this is deliberately '
+        + 'a small sample.', 'ok');
+    } catch (err) { flash(err.message, 'error'); }
+  });
+  $('#ev-dd-run').addEventListener('click', async () => {
+    try {
+      await post('/api/eval/audit', {
+        kind: 'dedup',
+        source: $('#ev-dd-source').value,
+        start_token: Number($('#ev-dd-start').value) || 0,
+        limit: 60000,
+      });
+      flash('Scanning for near-duplicates. Run it again from a different offset before '
+        + 'quoting the number.', 'ok');
     } catch (err) { flash(err.message, 'error'); }
   });
 }

@@ -142,6 +142,28 @@ every 400 steps, which said `count 0% colour 50% shape 44%` while the loss said 
 
 ---
 
+## In the portal
+
+The **Vision** tab is a tab of pictures rather than a chart, and deliberately: a caption is
+only interesting *beside the image it describes*, and the judgement is immediate in a way no
+number is.
+
+Three things it shows that the CLI cannot:
+
+- **the images and what the model said about them**, side by side, with a border that is green
+  when all three attributes are right;
+- **three chips per caption** — count, colour, shape — so the *pattern* of failure is visible
+  at a glance. A row of cards that are all "colour, shape" and never "count" is a diagnosis;
+- **the held-out combination**, by picking `data/vision/shapes-holdout` as the corpus. The
+  corpus picker computes which (colour, shape) pairs never occur *from the corpus itself*
+  rather than trusting a config that could have drifted.
+
+Measured through the tab on the 2,000-step tower: **8/8 correct** on held-out images, and on
+never-seen purple triangles it gets the **count right every time** while swapping exactly one
+of colour or shape — "two **yellow** triangles", "two purple **circles**" — and never both.
+That is a more interesting failure than a wrong caption: it is binding two attributes and
+falling back to a *seen* pair for the third.
+
 ## What is not here
 
 - **Real images.** `read_image` handles any file Pillow can open, and the tower does not care,
@@ -162,7 +184,8 @@ reuses.
 | 3 | [`vision/lm.py`](../aksharallm/vision/lm.py) | `trainable_parameters` (why `requires_grad` alone is not "frozen"), then `forward` — and read the comment on the `n_img - 1` slice twice |
 | 4 | [`vision/train.py`](../aksharallm/vision/train.py) | `make_batch` — the unshifted targets, and why. Then the docstring's "what to watch", which is `all_three` and not the loss |
 | 5 | [`configs/vision-shapes.yaml`](../configs/vision-shapes.yaml) | `n_tokens`: how much of the language model's context one picture costs |
-| 6 | [`aksharallm/vision/__main__.py`](../aksharallm/vision/__main__.py) | `caption` — the three attributes scored separately, because a model that never counts is a specific failure a single accuracy would average away |
+| 6 | [`portal/vision.py`](../aksharallm/portal/vision.py) | `caption` — the same three booleans the CLI reports, and `corpora`, which derives the held-out pairs from the corpus rather than from a config |
+| 7 | [`aksharallm/vision/__main__.py`](../aksharallm/vision/__main__.py) | `caption` — the three attributes scored separately, because a model that never counts is a specific failure a single accuracy would average away |
 
 What pins it: [`tests/test_vision.py`](../tests/test_vision.py) — `patchify` against the
 convolution, the frozen language model asserted bit-identical after an optimizer step, and

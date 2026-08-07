@@ -1,0 +1,45 @@
+/* The Vision tab. Reuses `.au-flow` / `.au-step` / `.au-cmd` from audio.css deliberately:
+ * the two tabs make the same argument and looking alike is the point.
+ *
+ * `.vs-grid` items get `min-width: 0` for the reason AGENTS.md gotcha #8 records -- a grid
+ * item's automatic minimum size is its contents' min-content width, so without it a wide
+ * caption pushes the page sideways on a phone instead of scrolling inside `.scroll-x`. */
+
+.vs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+.vs-card {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.vs-card img {
+  width: 100%;
+  height: auto;
+  border-radius: 4px;
+  image-rendering: pixelated;   /* hard-edged shapes; smoothing blurs the boundary */
+  background: #111;
+}
+.vs-card .vs-truth { font-size: 0.8rem; color: var(--dim); }
+.vs-card .vs-said { font-size: 0.9rem; font-weight: 600; }
+.vs-card.vs-right { border-color: var(--ok, #4a8); }
+.vs-card.vs-wrong { border-color: var(--warn, #c86); }
+
+/* Which of the three attributes it got. Three chips beat one tick: the pattern of failure
+ * is the diagnosis. */
+.vs-marks { display: flex; gap: 0.25rem; flex-wrap: wrap; }
+.vs-mark {
+  font-size: 0.7rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--dim);
+}
+.vs-mark.on { border-color: var(--ok, #4a8); color: var(--fg); }

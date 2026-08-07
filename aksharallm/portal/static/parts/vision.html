@@ -1,0 +1,82 @@
+<!-- The Vision tab. A caption is only interesting beside the image it describes, which is
+     why this is a tab of pictures rather than a chart. -->
+<section class="view" id="view-vision" hidden>
+  <div class="page">
+
+    <div class="panel">
+      <h2>Vision — a picture, into a model that has never seen one</h2>
+      <p class="panel-note">
+        Audio needed a codec to turn a waveform into integers. An image needs nothing of the
+        sort: it is <strong>already</strong> a grid of numbers, so cutting it into patches
+        makes a sequence directly. What is left is a bridge — and the bridge is two matrices.
+        <a href="#docs?doc=21-vision.md">Read chapter 21</a>.
+      </p>
+      <div class="au-flow" aria-hidden="true">
+        <span class="au-step">image<small>3 × 64 × 64</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">8×8 patches<small>64 of them</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">ViT<small>bidirectional</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step au-step-key">projector<small>2-layer MLP</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">the FROZEN<br>language model</span>
+      </div>
+      <p id="vs-params" class="panel-note dim"></p>
+      <div id="vs-empty" class="panel-note warn" hidden>
+        No vision checkpoint yet. Render the corpus and train the projector — minutes, and no
+        download:
+        <pre class="au-cmd">.venv/bin/python -m aksharallm.vision corpus --out data/vision/shapes --images 8000
+.venv/bin/python -m aksharallm.vision.train configs/vision-shapes.yaml</pre>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="row">
+        <label class="field">Tower
+          <select id="vs-ckpt"></select>
+        </label>
+        <label class="field">Corpus
+          <select id="vs-corpus"></select>
+        </label>
+        <label class="field">Images
+          <input id="vs-n" type="number" min="1" max="32" value="12">
+        </label>
+        <button id="vs-samples" type="button">Just show me the corpus</button>
+        <button id="vs-run" class="primary" type="button">Caption them</button>
+      </div>
+      <p id="vs-status" class="panel-note"></p>
+    </div>
+
+    <!-- the score -->
+    <div class="panel" id="vs-score-panel" hidden>
+      <h3>Did it get the count, the colour and the shape?</h3>
+      <p class="panel-note">
+        Three attributes, scored <strong>separately</strong>. That is the whole reason the
+        corpus is synthetic: the caption is known exactly, so this is a score rather than an
+        impression — and a model that names the colour and the shape while never counting is
+        a specific failure that one accuracy would average away.
+      </p>
+      <div class="scroll-x"><table id="vs-score" class="grid"></table></div>
+      <p id="vs-note" class="panel-note dim"></p>
+    </div>
+
+    <!-- the images -->
+    <div class="panel">
+      <h3 id="vs-grid-title">The corpus</h3>
+      <div class="scroll-x"><div id="vs-grid" class="vs-grid"></div></div>
+    </div>
+
+    <!-- runs -->
+    <div class="panel">
+      <h3>Vision runs</h3>
+      <p class="panel-note">
+        Stage one trains the projector against a frozen language model, so this is the
+        cheapest training run here — minutes, not hours. Watch the <em>score</em>, not the
+        loss: a loss of 0.003 with a garbage caption is a real thing that happened.
+      </p>
+      <div class="scroll-x"><table id="vs-runs" class="grid"></table></div>
+    </div>
+
+  </div>
+</section>

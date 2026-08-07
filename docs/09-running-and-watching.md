@@ -54,6 +54,44 @@ stateDiagram-v2
 - **training** — the real run, writing a checkpoint every so often.
 - **stopping** — you asked it to stop; it finishes the current step, saves, and exits.
 
+### Which processes the portal thinks are ours
+
+The portal decides three things about a run from the filesystem: is a *launcher* pre-flighting
+it, is a *trainer* alive in its directory, and has a stop been requested. Two of those checks
+were single hardcoded strings, and both caused an incident on the same evening.
+
+| check | was | is |
+|---|---|---|
+| a live trainer | `"aksharallm.train" in cmdline` | `TRAINERS` — pretrain, sft, dpo, grpo, train_codec, train_lm, vision.train |
+| a live launcher | `"phase2.sh" in cmdline` | `LAUNCH_SCRIPTS` — phase2.sh, experiment.sh, audio.sh |
+
+**What the first one did.** A codec run's command line is `aksharallm.audio.train_codec`, so
+its `train.pid` was read, the process confirmed alive, and then **rejected as somebody
+else's**. The run reported `idle` with no Stop button *while its log tail advanced* — the most
+confusing combination available. `scripts/stop.sh` shared the check and went further: it
+refused to stop the live process and then **deleted its pid file as stale**, removing the only
+handle anything had on it. "Refusing to touch it" and "removing it" were contradictory, and
+the destructive half is gone: **a pid file naming a live process is not stale.**
+
+**What the second one did.** A run pre-flighting under `experiment.sh` or `audio.sh` reported
+`idle` for its whole pre-flight — with **Start still enabled**, inviting a second launch on
+top of the first.
+
+The fix in both cases is a tuple and the discipline that goes with it: a new trainer goes in
+`TRAINERS`, a new launcher in `LAUNCH_SCRIPTS`, and `tests/test_portal_launchers.py`
+parametrises over both so every entry has to be recognised.
+
+> **The general shape.** A single-string membership test *looks* like a check and behaves
+> like an allowlist of one. When the thing it excludes is a peer of the thing it includes, the
+> failure is not an error — it is a confident wrong answer about something that is plainly
+> visible on the screen.
+
+**And one that was purely cosmetic until it was not:** the throughput chart reads
+`tok_per_sec` and nothing else. The codec trainer logged `audio_s_per_s` — its own natural
+unit, and a better one for a codec — so its chart was **empty**, which reads as "the run is
+producing nothing". Every trainer now emits the shared key as well as whatever else it wants
+to say.
+
 ### The pre-flight gate, and why it says so much
 
 Every launcher runs the whole test suite before it will start a trainer. That gate is not

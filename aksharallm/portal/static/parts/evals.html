@@ -142,6 +142,42 @@
             </div>
             <div id="ev-dom-out" class="ev-audit-out"></div>
           </div>
+
+          <div class="ev-audit-card">
+            <h3>Is its confidence honest?</h3>
+            <p>Everything above asks whether the model is <em>right</em>. This asks whether,
+              when it says it is 80% sure, it is right 80% of the time — which is the more
+              useful question for anything that has to be trusted rather than benchmarked.</p>
+            <p class="ev-hint">A model can be accurate and badly calibrated, or inaccurate
+              and well calibrated. Accuracy cannot tell those apart. Temperature scaling
+              cannot change accuracy at all, so it is free.</p>
+            <div class="ev-row">
+              <button id="ev-cal-run" class="ghost" type="button">Measure calibration</button>
+              <span class="ev-hint">uses the checkpoint selected above</span>
+            </div>
+            <div id="ev-cal-out" class="ev-audit-out"></div>
+          </div>
+
+          <div class="ev-audit-card">
+            <h3>How much of the corpus is the same thing twice?</h3>
+            <p>A duplicated document is trained on twice — a silent, unrequested extra epoch
+              on whatever happened to be popular. Exact matching cannot see near-duplicates
+              and all-pairs cannot be computed, so: MinHash signatures, LSH banding,
+              union-find.</p>
+            <p class="ev-hint">Read the <strong>token</strong> share, not the document share:
+              dropping 200,000 forty-token stubs changes nothing. And take two offsets — a
+              sample from the front of a file is a sample of how the file was ordered.</p>
+            <div class="ev-row">
+              <label class="field">Corpus
+                <select id="ev-dd-source"></select>
+              </label>
+              <label class="field">From token
+                <input id="ev-dd-start" type="number" min="0" step="100000000" value="0">
+              </label>
+              <button id="ev-dd-run" class="ghost" type="button">Scan for duplicates</button>
+            </div>
+            <div id="ev-dd-out" class="ev-audit-out"></div>
+          </div>
         </div>
       </div>
 

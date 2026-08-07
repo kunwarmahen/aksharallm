@@ -53,6 +53,11 @@ TRAINERS: tuple[str, ...] = (
     "aksharallm.vision.train",
 )
 
+#: Every shell script that pre-flights a run and publishes `launch.pid` / `launch.meta`.
+#: A launcher missing from this tuple makes its run read as **idle while it is pre-flighting**,
+#: with the Start button still enabled -- which invites a second launch on top of the first.
+LAUNCH_SCRIPTS: tuple[str, ...] = ("phase2.sh", "experiment.sh", "audio.sh")
+
 LAUNCHERS: dict[str, dict] = {
     "small-code": {},                                        # blended 85/15 base (default)
     "small": {"env": {"PURE": "1"}},                         # FineWeb-Edu only fallback
@@ -286,15 +291,21 @@ class RunStore:
         return pid
 
     def launcher(self, run: str) -> dict | None:
-        """A live `phase2.sh` for this run — pre-flight, before any trainer exists.
+        """A live launch script for this run — pre-flight, before any trainer exists.
 
-        Read from the files `phase2.sh` itself writes (`launch.pid` + `launch.meta`), not
+        Read from the files the script itself writes (`launch.pid` + `launch.meta`), not
         from anything the portal remembers. So a pre-flight started in a terminal shows up
         here as `pre-flight` too, and the portal's own launches are visible to
         `scripts/stop.sh --status`. One record, both directions.
+
+        **`LAUNCH_SCRIPTS`, not `"phase2.sh"`.** This check used to name one script, so a run
+        launched by `experiment.sh` or `audio.sh` reported **idle during its whole pre-flight**
+        — with the Start button still enabled, inviting a second launch on top of the first.
+        Same shape of mistake as `TRAINERS` above, and it needs the same discipline: a new
+        launcher goes in this tuple.
         """
         pid = _read_int(self.run_dir(run) / "launch.pid")
-        if not pid or not _alive(pid) or "phase2.sh" not in _cmdline(pid):
+        if not pid or not _alive(pid) or not any(s in _cmdline(pid) for s in LAUNCH_SCRIPTS):
             return None
         meta = _read_meta(self.run_dir(run) / "launch.meta")
         return {"pid": pid, "stage": meta.get("stage"), "started": meta.get("started"),

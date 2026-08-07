@@ -42,7 +42,8 @@ import time
 from pathlib import Path
 
 from ..eval import report as report_mod
-from ..eval import sources, suites as suites_mod
+from ..eval import sources
+from ..eval import suites as suites_mod
 from ..infer.checkpoints import CheckpointStore, InferError
 from ..infer.engine import InferConfig, plan_device
 from .runs import RunError, _alive, _cmdline, _read_int, repo_root
@@ -282,7 +283,7 @@ class EvalJobs:
         wants to be doing that while an evaluation is trying to produce a number.
         """
         kind = str(spec.get("kind") or "")
-        if kind not in ("contaminate", "domains"):
+        if kind not in ("contaminate", "domains", "calibrate", "dedup"):
             raise RunError(f"unknown audit {kind!r}")
         if self._pid():
             raise RunError("a job is already running — wait for it to finish.")
@@ -319,6 +320,39 @@ class EvalJobs:
                 cmd += ["--batches", str(int(spec["batches"]))]
             meta = {"kind": "domains", "checkpoint": info.rel}
 
+        if kind == "calibrate":
+            ref = str(spec.get("checkpoint") or "").strip()
+            if not ref:
+                raise RunError("pick a checkpoint")
+            info = self.store.get(self.store.identify(ref))
+            if info.error:
+                raise RunError(f"{info.rel} cannot be loaded: {info.error}")
+            cmd = [sys.executable, "-u", "-m", "aksharallm.eval", "calibrate", str(info.path),
+                   "--device", self.device().get("device", "cpu"),
+                   # Deliberately modest. Calibration keeps the FULL logit vector per
+                   # position, because temperature scaling needs the whole distribution --
+                   # see eval/calibration.py's `collect`.
+                   "--batches", str(int(spec.get("batches") or 24)),
+                   "--batch", str(int(spec.get("batch") or 2))]
+            meta = {"kind": "calibrate", "checkpoint": info.rel}
+
+        if kind == "dedup":
+            source = str(spec.get("source") or "")
+            # A path into `data/`, resolved and contained: this opens a file on disk.
+            path = (self.root / source).resolve()
+            if not source.endswith(".bin") or not str(path).startswith(
+                    str((self.root / "data").resolve())):
+                raise RunError("pick a tokenized .bin under data/")
+            if not path.is_file():
+                raise RunError(f"{source} does not exist")
+            out = self.dir / f"dedup-{Path(source).stem}-{job}.json"
+            cmd = [sys.executable, "-u", "-m", "aksharallm.data.dedup", str(path),
+                   "--limit", str(int(spec.get("limit") or 60_000)),
+                   "--start-token", str(int(spec.get("start_token") or 0)),
+                   "--out", str(out)]
+            meta = {"kind": "dedup", "source": source,
+                    "start_token": int(spec.get("start_token") or 0)}
+
         return self._launch(cmd, job, meta)
 
     def audits(self, limit: int = 10) -> dict:
@@ -337,6 +371,49 @@ class EvalJobs:
             except (json.JSONDecodeError, OSError):
                 latest = None
         return {"latest": latest, "history": [f.name for f in files]}
+
+    def _latest(self, pattern: str, limit: int) -> dict:
+        """The newest JSON matching a glob, read from disk and never recomputed.
+
+        The terminal and the browser have to be looking at the same measurement, or one of
+        them is lying — the same rule `audits` follows for contamination.
+        """
+        files = sorted(self.dir.glob(pattern), key=lambda p: p.stat().st_mtime,
+                       reverse=True)[:limit]
+        latest = None
+        if files:
+            try:
+                latest = {**json.loads(files[0].read_text()),
+                          "name": files[0].name, "when": files[0].stat().st_mtime}
+            except (json.JSONDecodeError, OSError):
+                latest = None
+        return {"latest": latest, "history": [f.name for f in files]}
+
+    def calibration(self, limit: int = 10) -> dict:
+        """Is the model's confidence honest? See `eval/calibration.py`."""
+        return self._latest("calibration-*.json", limit)
+
+    def dedup(self, limit: int = 10) -> dict:
+        """How much of the corpus is a near-duplicate of the rest of it. See `data/dedup.py`.
+
+        `history` matters more here than elsewhere: a dedup number is quoted per *offset*,
+        and the honest way to read one is beside another taken somewhere else in the file.
+        """
+        return self._latest("dedup-*.json", limit)
+
+    def corpora(self) -> list[dict]:
+        """Tokenized `.bin` files worth scanning, with their size — the picker's contents."""
+        out = []
+        for path in sorted((self.root / "data").rglob("*.bin")):
+            if path.name in ("val.bin",) or "audio" in path.parts or "vision" in path.parts:
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError:
+                continue
+            out.append({"rel": str(path.relative_to(self.root)),
+                        "tokens": size // 2, "gb": round(size / 1e9, 2)})
+        return out
 
     def _launch(self, cmd: list[str], job: str, meta: dict) -> dict:
         log = self.log_path(job)
