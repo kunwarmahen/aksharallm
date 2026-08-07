@@ -146,13 +146,9 @@ class EvalJobs:
         running = pid is not None
         log = self._tail(self.log_path(cur["job"]), tail) if cur.get("job") else []
         if not running and cur and cur.get("state") == "running":
-            # The process is gone and nobody wrote the ending. A fetch job leaves no JSON,
-            # so it is judged by its exit rather than by an artifact.
-            if cur.get("kind") == "fetch":
-                cur = {**cur, "state": "done"}
-            else:
-                cur = {**cur, "state": "done" if self.json_path(cur["job"]).exists()
-                       else "failed"}
+            # The process is gone and nobody wrote the ending, so the job is judged by
+            # whether its artifact turned up.
+            cur = {**cur, "state": "done" if self._finished(cur) else "failed"}
         return {
             "running": running,
             "pid": pid,
@@ -167,6 +163,38 @@ class EvalJobs:
             "datasets": self.datasets(),
             "results": self.results.rows(limit=results),
         }
+
+    #: What each kind of job leaves behind when it works, as a glob over `logs/eval/`.
+    #: Only `run` writes `<job>.json`; every audit names its file after what it measured,
+    #: because those files are *read back* by name-independent globs and kept forever.
+    #: `fetch` produces datasets under `data/`, not a JSON here, so it has no entry.
+    ARTIFACTS = {
+        "contaminate": "contamination-*.json",
+        "domains": "domains-*.json",
+        "calibrate": "calibration-*.json",
+        "dedup": "dedup-*.json",
+    }
+
+    def _finished(self, cur: dict) -> bool:
+        """Did this job produce what it was supposed to produce?
+
+        This used to be `logs/eval/<job>.json exists`, which is true only for `run`. Every
+        audit writes a differently-named file, so **all four reported "failed" on success** —
+        a per-domain split that had just printed a perfect table came back as
+        "Results failed", and the same was true of contamination, calibration and dedup.
+
+        An audit's file is matched by glob rather than by name, so it also has to be *newer
+        than this job* — otherwise the report from last Tuesday would mark today's crash a
+        success, which is the worse failure of the two.
+        """
+        kind = str(cur.get("kind") or "")
+        if kind == "fetch":
+            return True          # leaves datasets under data/, nothing in logs/eval/
+        pattern = self.ARTIFACTS.get(kind)
+        if pattern is None:
+            return self.json_path(cur["job"]).exists()
+        started = float(cur.get("started") or 0)
+        return any(p.stat().st_mtime >= started - 1 for p in self.dir.glob(pattern))
 
     @staticmethod
     def _tail(path: Path, lines: int) -> list[str]:
@@ -409,6 +437,10 @@ class EvalJobs:
             except (json.JSONDecodeError, OSError):
                 latest = None
         return {"latest": latest, "history": [f.name for f in files]}
+
+    def domains(self, limit: int = 10) -> dict:
+        """The held-out loss split by training source. See `eval/domains.py`."""
+        return self._latest("domains-*.json", limit)
 
     def calibration(self, limit: int = 10) -> dict:
         """Is the model's confidence honest? See `eval/calibration.py`."""

@@ -425,6 +425,10 @@ def main(argv=None) -> int:
     import json
     import time
 
+    # Imported here rather than at module scope: this module is a leaf of the data package
+    # and nothing but its CLI needs to know where the portal reads reports from.
+    from ..eval.report import results_dir
+
     ap = argparse.ArgumentParser(
         prog="python -m aksharallm.data.dedup",
         description="How much of this corpus is a near-duplicate of the rest of it?")
@@ -438,7 +442,11 @@ def main(argv=None) -> int:
     ap.add_argument("--start-token", type=int, default=0,
                     help="begin the sample here rather than at the front of the file — "
                          "run it twice at different offsets to check the number is stable")
-    ap.add_argument("--out", default=None, help="write the full report as JSON")
+    ap.add_argument("--out", default=None,
+                    help="write the report here instead of the default "
+                         "logs/eval/dedup-<corpus>-<when>.json")
+    ap.add_argument("--no-write", action="store_true",
+                    help="print only; do not keep the report")
     args = ap.parse_args(argv)
 
     params = LSHParams(bands=args.bands, rows=args.rows)
@@ -462,9 +470,19 @@ def main(argv=None) -> int:
     for row in rep["curve"]:
         print(f"  {row['similarity']:>10.2f} {row['detected'] * 100:>19.1f}%")
     print(f"\n  {rep['caveat']}")
-    if args.out:
-        Path(args.out).write_text(json.dumps(rep, indent=1))
-        print(f"\n  written to {args.out}")
+    # Written by default, not only when asked. A dedup number is quoted *per offset* and is
+    # only honest read beside another one taken elsewhere in the file — which is impossible
+    # if the first one scrolled out of a terminal. The portal was passing `--out` and so had
+    # a card; the same command typed by hand left no trace and showed up nowhere.
+    if not args.no_write:
+        dest = (Path(args.out) if args.out else
+                results_dir() / f"dedup-{Path(args.bin).stem}-"
+                                f"{time.strftime('%Y%m%d-%H%M%S')}.json")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps({**rep, "source": str(args.bin),
+                                    "start_token": args.start_token,
+                                    "limit": args.limit}, indent=1))
+        print(f"\n  written to {dest}")
     return 0
 
 

@@ -277,6 +277,13 @@ near `(1/B)^(1/R)`. Choosing B and R is choosing where it turns.
 .venv/bin/python -m aksharallm.data.dedup data/blend/codeparrot-python.bin --limit 60000
 ```
 
+Every scan is **kept** — `logs/eval/dedup-<corpus>-<when>.json`, beside the evaluations, and
+it is what the portal's duplicates card reads. That is not tidiness: a dedup number is a
+number *at one offset*, and the only honest way to read one is beside another taken somewhere
+else in the file, which is impossible if the first scrolled out of a terminal. `--out` picks a
+different destination and `--no-write` turns it off; it used to be the other way round, so a
+scan you did not explicitly ask to keep kept nothing and never reached the browser.
+
 ### What our own blend contains
 
 **The two halves of the corpus are two hundred times apart.** Sampled twice at different

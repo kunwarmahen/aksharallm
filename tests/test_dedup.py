@@ -16,6 +16,8 @@ Two failure modes matter more than the arithmetic:
 
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 
@@ -287,3 +289,60 @@ def test_the_sample_flag_is_recorded(tmp_path):
     np.concatenate(parts).astype("<u2").tofile(path)
     assert scan_bin(path, eos_id=EOS, limit=5, min_doc_tokens=50)["sampled"] is True
     assert scan_bin(path, eos_id=EOS, min_doc_tokens=50)["sampled"] is False
+
+
+# ---------------------------------------------------------------------------------------
+# the report has to survive the terminal
+# ---------------------------------------------------------------------------------------
+
+def _corpus(tmp_path, n: int = 20):
+    parts = [np.concatenate([doc(200, i), np.array([EOS], dtype=np.uint16)]) for i in range(n)]
+    path = tmp_path / "tinystories.bin"
+    np.concatenate(parts).astype("<u2").tofile(path)
+    return path
+
+
+def test_a_scan_is_written_without_being_asked(tmp_path, monkeypatch):
+    """It used to write JSON only when handed `--out`. The portal passed `--out` and so had
+    a card; the same command typed by hand printed a table and kept nothing — so a dedup
+    number could not be compared with one taken at another offset, which is the only honest
+    way to read one, and the portal never saw a terminal scan at all.
+
+    The name has to match what the portal globs for (`dedup-*.json`), or it is written and
+    still invisible.
+    """
+    from aksharallm.data.dedup import main
+    from aksharallm.portal.evals import EvalJobs
+
+    # The destination is `report.results_dir()`, which resolves from the package rather than
+    # from the shell's cwd — deliberately, so a scan run from anywhere lands where the portal
+    # reads. Redirected here so the test does not write into the real logs/eval/.
+    monkeypatch.setattr("aksharallm.eval.report.results_dir",
+                        lambda root=None: tmp_path / "logs" / "eval")
+    path = _corpus(tmp_path)
+    assert main([str(path), "--limit", "10"]) == 0
+
+    written = list((tmp_path / "logs" / "eval").glob("dedup-*.json"))
+    assert len(written) == 1, "a scan run from a terminal left nothing behind"
+    assert written[0].name.startswith("dedup-tinystories-")
+
+    latest = EvalJobs(tmp_path).dedup()["latest"]
+    assert latest["documents"] == 10
+    assert latest["source"].endswith("tinystories.bin")
+
+
+def test_out_still_chooses_the_destination(tmp_path):
+    from aksharallm.data.dedup import main
+
+    dest = tmp_path / "elsewhere" / "report.json"
+    assert main([str(_corpus(tmp_path)), "--limit", "10", "--out", str(dest)]) == 0
+    assert json.loads(dest.read_text())["documents"] == 10
+
+
+def test_no_write_prints_only(tmp_path, monkeypatch):
+    from aksharallm.data.dedup import main
+
+    monkeypatch.setattr("aksharallm.eval.report.results_dir",
+                        lambda root=None: tmp_path / "logs" / "eval")
+    assert main([str(_corpus(tmp_path)), "--limit", "10", "--no-write"]) == 0
+    assert not (tmp_path / "logs" / "eval").exists()

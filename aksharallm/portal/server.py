@@ -468,6 +468,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.evals.audits())
         # Two more measurements of the *data and the confidence* rather than the score:
         # docs/12 § "Is the model's confidence honest?" and docs/01 § dedup.
+        if parts == ["eval", "domains"]:
+            return self._json(self.evals.domains())
         if parts == ["eval", "calibration"]:
             return self._json(self.evals.calibration())
         if parts == ["eval", "dedup"]:

@@ -607,6 +607,12 @@ python -m aksharallm.eval domains small-code --device cpu
 python -m aksharallm.eval contaminate --suite mc --verify
 ```
 
+The split is **written as well as printed** — `logs/eval/domains-<run>-<ckpt>-<when>.json`,
+beside every other measurement — so it can be read back next month and so the portal's card
+shows the same numbers the terminal did. The filename comes from the checkpoint's *identity*,
+not from what you typed, so `small-code` and the absolute path the portal passes produce the
+same name for the same checkpoint.
+
 Both are also buttons in the portal's **Eval** tab, under "Is the benchmark trustworthy?",
 and they share that tab's one-job-at-a-time lock — a contamination scan streams ten billion
 tokens and a per-domain split runs the model, and neither wants to be doing that while an
@@ -705,8 +711,36 @@ evaluation is trying to produce a number.
 Every one of them renders **from the JSON the CLI wrote**, never recomputed in the browser —
 the terminal and the portal have to be reading the same measurement or one of them is lying.
 Each carries its own caveat in the panel rather than in a tooltip: the ECE table prints one
-row per bin count because the count changes the answer, and the duplicates card prints the
+row per bin count because the count changes the answer, the calibration card prints the whole
+reliability table (which bucket, how many predictions in it, and the gap there) because that
+is the only part that says *where* the miscalibration is, and the duplicates card prints the
 whole LSH detection curve because its misses are otherwise invisible.
+
+**That rule was written before it was true, and the per-domain split was the exception.** It
+printed a table and wrote nothing, so:
+
+- a split run from the terminal left no trace at all — nothing to compare against the one
+  you took ten thousand steps ago, which is the entire point of taking it;
+- the portal's card scraped the *job log* instead, which exists only for a run the browser
+  launched and only until the next job replaces it — and the function that did the scraping
+  was never called by anything, so the card was empty either way;
+- and the job came back **"failed"** in the browser every time it succeeded.
+
+`dedup` had the same shape of bug from the other side: it wrote a report only when handed
+`--out`, and the portal was the only caller passing it. Typed by hand it printed a table and
+kept nothing. It now writes by default, with `--no-write` to opt out.
+
+That last one was not about domains. `status()` decided done-vs-failed by looking for
+`logs/eval/<job>.json` — a file only `run` writes. Every audit names its file after *what it
+measured*, because those files are kept forever and read back by glob, so **all four audits
+reported failure on success**. The fix is a small map from job kind to the artifact it
+leaves behind, plus the requirement that the artifact be *newer than the job*: found by
+glob, last week's report would otherwise mark this week's crash a success, which is the
+worse direction of the two. `tests/test_portal_eval.py` pins both directions for every kind.
+
+The general rule, which is cheap to state and was expensive to find: **a measurement that is
+only printed does not exist**, and *whoever judges a job must be looking for the thing that
+job actually writes*.
 
 One rendering detail that is not a detail: **a clean corpus is a result, not an empty state.**
 Scanning TinyStories finds *no* near-duplicates in 20,000 documents, and the card says so in

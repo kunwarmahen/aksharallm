@@ -28,7 +28,7 @@ import time
 from pathlib import Path
 
 from .jobs import announced
-from .report import Results, compare_table, summary_table
+from .report import Results, compare_table, results_dir, summary_table
 from .runner import Harness, Options, describe
 from .sources import EvalError, SOURCES, fetch, load, status
 from .suites import ALL_SUITES, DEFAULT_SUITES, SUITES, build, catalogue, resolve
@@ -297,7 +297,8 @@ def cmd_domains(args) -> int:
 
     harness = Harness(args.root)
     store = CheckpointStore(args.root)
-    path = store.resolve(*store.identify(args.checkpoint).split("/"))
+    ident = store.identify(args.checkpoint)
+    path = store.resolve(*ident.split("/"))
     model, ckpt = load_model(str(path), device=args.device)
     tok = Tokenizer(resolve_tokenizer(ckpt, None))
 
@@ -329,6 +330,32 @@ def cmd_domains(args) -> int:
     if b is not None:
         print(f"\nweight-blended: {b:.4f}  (compare with the run's own val loss; a big "
               f"disagreement means the spans are wrong)")
+
+    # Written, not just printed. A split that only exists in a terminal cannot be compared
+    # with the one you took ten thousand steps ago, and the portal has nothing to show —
+    # which is exactly what happened: the Domains card stayed empty after a real run, from
+    # the browser as well as from the CLI. The name is derived from the checkpoint's
+    # *identity* rather than from whatever was typed, so `small-code` and the absolute path
+    # the portal passes produce the same filename for the same checkpoint.
+    slug = ident.replace("/", "-").removesuffix(".pt")
+    out = {
+        "checkpoint": ident,
+        "val_bin": str(val_bin),
+        "seq_len": seq_len,
+        "batches": args.batches,
+        "batch": args.batch,
+        "device": args.device,
+        "step": ckpt.get("step"),
+        "rows": rows,
+        "blended": b,
+        "reading": "Sampled the same way inside every span, so these are comparable with "
+                   "each other — but NOT with the trainer's val loss, which averages over "
+                   "the whole file.",
+    }
+    dest = results_dir(args.root) / f"domains-{slug}-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(out, indent=1))
+    print(f"written to {dest}")
     return 0
 
 
@@ -370,7 +397,10 @@ def cmd_calibrate(args) -> int:
     print(f"\nperplexity on the same positions: {res['perplexity']:.3f}  "
           f"(cross-check against the run's own val loss)")
 
-    out = Path("logs/eval")
+    # `results_dir`, not a bare relative "logs/eval": run from anywhere but the repo root
+    # this wrote a logs/eval/ beside the shell's cwd, and the portal — which reads the
+    # repo's — never saw the measurement.
+    out = results_dir(args.root)
     out.mkdir(parents=True, exist_ok=True)
     dest = out / f"calibration-{Path(args.checkpoint).name}-{time.strftime('%Y%m%d-%H%M%S')}.json"
     dest.write_text(json.dumps(res, indent=1))

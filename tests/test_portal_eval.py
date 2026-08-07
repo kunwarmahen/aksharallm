@@ -432,3 +432,112 @@ def test_the_gate_says_why_rather_than_only_greying_out():
     assert "describeJob" in gate, "the reason should name the job that holds the lock"
     assert "title" in gate and "ev-audit-note" in gate, (
         "the reason must reach both the button's title and the visible note")
+
+
+# ---- did the job work? -----------------------------------------------------------------
+#
+# `status()` decides done-vs-failed by looking for what the job left behind. It used to look
+# for `logs/eval/<job>.json`, which ONLY `run` writes: every audit names its file after what
+# it measured, so all four came back "failed" the moment they succeeded. A per-domain split
+# that had just printed a clean table was reported as "Results failed" in the browser.
+
+def _finished_job(repo: Path, kind: str, started: float = 1_000_000.0):
+    """A job whose process is gone and which never got an ending written."""
+    d = repo / "logs" / "eval"
+    d.mkdir(parents=True, exist_ok=True)
+    job = f"20260101-000000-{kind}"
+    (d / f"{job}.log").write_text("it printed a perfectly good table\n")
+    (d / "current.json").write_text(json.dumps(
+        {"job": job, "state": "running", "pid": 4_000_000, "started": started, "kind": kind}))
+    return d
+
+
+@pytest.mark.parametrize("kind,artifact", [
+    ("domains", "domains-tiny-ckpt_best-20260101-000000.json"),
+    ("calibrate", "calibration-tiny-20260101-000000.json"),
+    ("contaminate", "contamination-1786042785.json"),
+    ("dedup", "dedup-tinystories-20260101-000000.json"),
+    ("run", "20260101-000000-run.json"),
+])
+def test_a_job_that_wrote_its_artifact_is_done(repo, kind, artifact):
+    d = _finished_job(repo, kind)
+    (d / artifact).write_text("{}")
+    assert EvalJobs(repo).status()["current"]["state"] == "done"
+
+
+@pytest.mark.parametrize("kind", ["domains", "calibrate", "contaminate", "dedup", "run"])
+def test_a_job_that_wrote_nothing_is_failed(repo, kind):
+    _finished_job(repo, kind)
+    assert EvalJobs(repo).status()["current"]["state"] == "failed"
+
+
+def test_last_weeks_report_does_not_rescue_todays_crash(repo):
+    """An audit's file is found by glob, not by name, so the check has to be time-aware.
+    Without it the contamination report from last Tuesday marks every later crash a
+    success — the worse direction of the two, because nothing then looks wrong."""
+    d = _finished_job(repo, "domains", started=2_000_000.0)
+    stale = d / "domains-tiny-ckpt_best-20250101-000000.json"
+    stale.write_text("{}")
+    import os
+    os.utime(stale, (1_000_000, 1_000_000))
+    assert EvalJobs(repo).status()["current"]["state"] == "failed"
+
+
+def test_fetch_is_judged_by_its_exit_because_it_writes_nothing_here(repo):
+    """`fetch` downloads into `data/eval/`; there is no JSON in `logs/eval/` to look for."""
+    _finished_job(repo, "fetch")
+    assert EvalJobs(repo).status()["current"]["state"] == "done"
+
+
+def test_every_audit_the_panel_can_start_declares_what_it_leaves_behind(repo):
+    """The two lists are written in different places — `start_audit` refuses an unknown
+    kind, `ARTIFACTS` says how to tell whether it worked. An audit added to the first and
+    forgotten in the second reports "failed" forever while working perfectly."""
+    src = Path(EvalJobs.__module__.replace(".", "/") + ".py")
+    text = (Path(__file__).resolve().parents[1] / src).read_text()
+    kinds = set(re.search(r'if kind not in \(([^)]*)\)', text).group(1).replace('"', '')
+                .replace(" ", "").split(","))
+    assert kinds - {""} == set(EvalJobs.ARTIFACTS), (
+        "start_audit and ARTIFACTS disagree about which audits exist")
+
+
+# ---- the per-domain split reaches the browser ------------------------------------------
+
+def _domains(repo: Path, name: str = "domains-tiny-ckpt_best-20260101-000000.json"):
+    d = repo / "logs" / "eval"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / name).write_text(json.dumps({
+        "checkpoint": "tiny/ckpt_best.pt", "val_bin": "data/blend/val.bin",
+        "seq_len": 1024, "batches": 20, "batch": 4, "device": "cuda", "step": 39_999,
+        "rows": [{"name": "fineweb-edu-10bt", "tokens": 8_500_000, "weight": 0.85,
+                  "loss": 2.7666, "perplexity": 15.91, "verified": True},
+                 {"name": "codeparrot-python", "tokens": 1_500_000, "weight": 0.15,
+                  "loss": 1.5463, "perplexity": 4.69, "verified": True}],
+        "blended": 2.5836, "reading": "not comparable with the trainer's val loss",
+    }))
+
+
+def test_the_per_domain_split_is_readable_after_the_terminal_has_scrolled(repo):
+    """It used to be printed and nothing else, so the only copy was the job log — which
+    exists only for a run the portal launched, and only until the next one. The browser's
+    card was empty after a real run from either side."""
+    _domains(repo)
+    latest = EvalJobs(repo).domains()["latest"]
+    assert latest["blended"] == 2.5836
+    assert [r["name"] for r in latest["rows"]] == ["fineweb-edu-10bt", "codeparrot-python"]
+    assert latest["checkpoint"] == "tiny/ckpt_best.pt"
+
+
+def test_the_newest_split_wins_and_the_rest_stay_readable(repo):
+    _domains(repo, "domains-tiny-ckpt_best-20250101-000000.json")
+    _domains(repo, "domains-tiny-ckpt_best-20260101-000000.json")
+    res = EvalJobs(repo).domains()
+    assert len(res["history"]) == 2
+
+
+def test_a_split_is_not_a_phantom_evaluation(repo):
+    """The same trap as calibration and dedup: no `suites` key, so it sails into `rows()`
+    as an evaluation with no score, no checkpoint and no step."""
+    _result(repo, "20260101-000000-tiny-eval.json", 100, {"piqa": 0.6})
+    _domains(repo)
+    assert [r["step"] for r in EvalJobs(repo).status()["results"]] == [100]

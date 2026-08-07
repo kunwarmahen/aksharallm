@@ -352,8 +352,10 @@ async function pollEval() {
     const wasRunning = ev.status && ev.status.running;
     renderStatus(st);
     /* A finished job means a new row and a new point — refresh the trend once, on the
-     * transition, rather than refetching it every two seconds forever. */
-    if (wasRunning && !st.running) loadTrend();
+     * transition, rather than refetching it every two seconds forever. The audit cards read
+     * files too, and an audit that has just finished is precisely the one you are waiting to
+     * see: without this its card kept the previous measurement until the tab was reopened. */
+    if (wasRunning && !st.running) { loadTrend(); loadAudits(); }
     ev.timer = setTimeout(pollEval, st.running ? 2000 : 10000);
   } catch (err) {
     $('#ev-state').textContent = `no answer — ${err.message}`;
@@ -490,13 +492,40 @@ function renderContamination(latest) {
     + '</p>';
 }
 
-function renderDomains(text) {
-  /* The CLI prints a small table; the job log is the honest source and re-parsing it into
-   * a second format would be one more thing to keep in step. Shown as it was printed. */
+/* Rendered from the JSON the CLI wrote, like every other audit here — never from the job
+ * log. This scraped the log instead, and was never called by anything, so the card was
+ * empty after a real run from either the browser or the terminal. A log is also the wrong
+ * source: it only exists for a job the portal launched, and only until the next one.
+ *
+ * A span whose content does not match its name is marked MISMATCH and the whole split is
+ * declared meaningless underneath it, exactly as the CLI does: two plausible numbers that
+ * are both averages of the same mixture are worse than no split at all. A missing verdict
+ * reads as "unverified", never as "ok" — see eval/domains.py. */
+function renderDomains(latest) {
   const box = $('#ev-dom-out');
-  const start = text.lastIndexOf(' on ');
-  box.innerHTML = start === -1 ? '<p class="ev-hint">No split yet.</p>'
-    : `<pre class="ev-log">${escHtml(text.slice(Math.max(0, start - 40)).trim())}</pre>`;
+  if (!latest) { box.innerHTML = '<p class="ev-hint">Not split yet.</p>'; return; }
+  const bad = (latest.rows || []).some((r) => r.verified === false);
+  const rows = (latest.rows || []).map((r) => {
+    const mark = r.verified === false ? '<b class="dirty">MISMATCH</b>'
+      : r.verified === true ? 'ok' : '<span class="ev-hint">unverified</span>';
+    return `<tr><th>${escHtml(r.name)}</th><td>${fmt.int(r.tokens)}</td>`
+      + `<td>${(r.weight || 0).toFixed(2)}</td>`
+      + `<td>${r.loss == null ? '–' : Number(r.loss).toFixed(4)}</td>`
+      + `<td>${r.loss == null ? '–' : Number(r.perplexity).toFixed(2)}</td>`
+      + `<td>${mark}</td></tr>`;
+  }).join('');
+  box.innerHTML =
+    '<table><thead><tr><th>source</th><th>tokens</th><th>weight</th><th>loss</th>'
+    + `<th>ppl</th><th>check</th></tr></thead><tbody>${rows}</tbody></table>`
+    + (bad ? '<p><b class="dirty">A span does not match its name</b>, so these boundaries '
+      + 'are derived wrongly and the split is meaningless.</p>' : '')
+    + (latest.blended == null ? ''
+      : `<p>weight-blended <b>${Number(latest.blended).toFixed(4)}</b> — compare with the `
+        + 'run\'s own val loss; a big disagreement means the spans are wrong.</p>')
+    + `<p class="ev-hint">${escHtml(latest.checkpoint || '')} on `
+      + `${escHtml(latest.val_bin || '')}, ${fmt.int(latest.seq_len)}-token windows`
+      + `${latest.device ? ` (${escHtml(latest.device)})` : ''}. ${fmt.ago(latest.when)}.</p>`
+    + `<p class="ev-hint">${escHtml(latest.reading || '')}</p>`;
 }
 
 
@@ -514,11 +543,27 @@ function renderCalibration(latest) {
     + `<td>${Number(a.ece[n]).toFixed(4)}</td>`
     + `<td>${Number(b.ece_equal_mass[n]).toFixed(4)}</td></tr>`).join('');
   const gap = b.confidence - b.accuracy;
+  /* The reliability table — the CLI prints it and the portal did not, so the browser was
+   * showing a strictly smaller measurement than the terminal from the same file. It is also
+   * the only part that says *where* the model is miscalibrated; every ECE above is a
+   * one-number summary of exactly these rows. `count` is what stops a 0.06 gap in a bucket
+   * holding 40 predictions being read as a finding. */
+  const buckets = (b.buckets || []).map((k) =>
+    `<tr><th>${k.lo.toFixed(2)}–${k.hi.toFixed(2)}</th><td>${fmt.int(k.count)}</td>`
+    + `<td>${k.confidence.toFixed(3)}</td><td>${k.accuracy.toFixed(3)}</td>`
+    + `<td>${k.gap >= 0 ? '+' : '−'}${Math.abs(k.gap).toFixed(3)}</td></tr>`).join('');
+
   box.innerHTML =
     `<p><b>accuracy ${b.accuracy.toFixed(4)}</b> vs <b>confidence ${b.confidence.toFixed(4)}</b>`
     + ` — ${gap >= 0 ? 'over' : 'under'}confident by ${Math.abs(gap).toFixed(4)}</p>`
     + '<table><thead><tr><th>bins</th><th>ECE</th><th>ECE (T)</th><th>equal-mass</th>'
     + `</tr></thead><tbody>${rows}</tbody></table>`
+    + (buckets
+      ? '<p class="ev-hint">Reliability, as trained — confidence against what actually '
+        + 'happened, per bucket.</p>'
+        + '<table><thead><tr><th>range</th><th>count</th><th>conf</th><th>acc</th>'
+        + `<th>gap</th></tr></thead><tbody>${buckets}</tbody></table>`
+      : '')
     + `<p class="ev-hint">${escHtml(latest.reading)} `
     + `Scored on ${fmt.int(latest.n_scored)} predictions, temperature fitted on a held-out `
     + `${fmt.int(latest.n_fit)}. ${fmt.ago(latest.when)}.</p>`
@@ -571,6 +616,9 @@ async function loadAudits() {
     const res = await api('/api/eval/audits');
     renderContamination(res.latest);
   } catch (err) { /* the panel is optional; the tab still works */ }
+  try {
+    renderDomains((await api('/api/eval/domains')).latest);
+  } catch (err) { /* likewise */ }
   try {
     renderCalibration((await api('/api/eval/calibration')).latest);
   } catch (err) { /* likewise */ }
