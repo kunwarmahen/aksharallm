@@ -366,6 +366,51 @@ sampler now looks for any live `checkpoints/*/train.pid`, and the portal's own d
 (eval, quantize, fine-tune) are tagged `job` rather than `run`, so they are billed without
 being drawn as training bands on the charts.
 
+#### And what a served token cost
+
+Training divides energy by **steps**. Serving has to divide it by **tokens**, and doing that
+honestly needs three separations that a single "cost per token" figure loses:
+
+```mermaid
+flowchart LR
+    S["GPU sampler<br/>watts every 5 s"] --> L["energy ledger<br/>tagged 'serve'"]
+    R["every request<br/>logs/serve/usage.jsonl"] --> B["merged busy spans"]
+    L --> X["split by busy"]
+    B --> X
+    X --> C["Wh per million<br/>COMPLETION tokens"]
+    X --> I["idle-but-loaded<br/>share"]
+```
+
+1. **Prompt tokens are not completion tokens.** Prefill runs the whole prompt through in one
+   batched pass; decode runs the model once per token produced. They differ by orders of
+   magnitude per token and their mix changes with every request. The headline is per million
+   **completion** tokens — the number comparable to a price list, and the one that moves when
+   the decode path improves.
+2. **Generating is not waiting.** A server holding the weights at idle still draws power, and
+   "should I leave this up?" is usually the real question. Busy spans are **merged, not
+   summed** — thirty concurrent requests over ten seconds are ten seconds of card time, and
+   summing would make a busy server look like it ran longer than the day contains.
+3. **Measured is not total**, exactly as above.
+
+Measured here on the 13.8M model, 318 requests at batch 8:
+
+```
+serving: 318 requests, 54,586 completion tokens (1,626 prompt), 2m44s generating
+         $0.0377 per million COMPLETION tokens
+         14 Wh generating, 3 Wh idle-but-loaded (33% of the server's energy produced nothing)
+         331.3 tok/s of card time (batched — not per-request throughput)
+```
+
+Two things that had to be fixed to get that:
+
+- **the server was not tagged at all**, so every watt it drew landed in the *idle* column.
+  Same class of mistake as the SFT stages, which had the same fix;
+- **a bucket's `start` is a ten-minute boundary and its `seconds` is coverage scattered
+  inside it**, not a contiguous span. Reading `[start, start + seconds)` as the window
+  reported **zero** busy energy for a server that had been flat out — and the tests passed,
+  because they built ledger rows by hand instead of folding real samples through the real
+  `Ledger`. They now do the latter, which is the only reason the bug was findable.
+
 ### How the client is put together
 
 There is no build step, no bundler and no framework — the browser loads the source as

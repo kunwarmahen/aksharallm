@@ -105,6 +105,10 @@ JOB_PIDS = (
     ("eval", "eval/eval.pid", "aksharallm.eval"),
     ("quantize", "quant/quant.pid", "aksharallm.quant"),
     ("finetune", "finetune/finetune.pid", "aksharallm.train.sft"),
+    # A server is not a bounded job — it sits there for hours holding the weights — but it
+    # is unambiguously using the card, and leaving it out put every watt it drew in the
+    # *idle* column. Same class of mistake as the SFT stages above, found the same way.
+    ("serve", "serve/serve.pid", "aksharallm.serve"),
 )
 
 

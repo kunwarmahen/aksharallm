@@ -586,6 +586,26 @@ function renderCost(c, gpu) {
         d.day, fmt.dur(d.seconds), wh(d.wh), money(c, d.money)])));
   }
 
+  /* Serving is billed per MILLION COMPLETION tokens, and idle energy is reported beside
+   * the rate rather than folded into it — a server that was mostly not serving is a
+   * different problem from one whose tokens are expensive. */
+  const s = c.serving || {};
+  const hasServing = !!s.requests;
+  $('#cost-serving').hidden = !hasServing;
+  if (hasServing) {
+    const rate = s.money_per_million_completion != null
+      ? money(c, s.money_per_million_completion)
+      : wh(s.wh_per_million_completion);
+    $('#cost-serving-table').textContent = '';
+    $('#cost-serving-table').appendChild(table(
+      ['requests', 'completion tokens', 'prompt tokens', 'generating', 'per 1M completion',
+       'idle share'],
+      [[fmt.int(s.requests), fmt.int(s.completion_tokens), fmt.int(s.prompt_tokens),
+        fmt.dur(s.busy_seconds), rate,
+        s.idle_share == null ? '–' : `${Math.round(s.idle_share * 100)}%`]]));
+    $('#cost-serving-note').textContent = s.caveat || '';
+  }
+
   $('#cost-basis').textContent = `Measures the ${c.basis}. `
     + 'Coverage is how much of a run the sampler actually saw — the portal only records '
     + 'while it is up, so “whole run” and “per 1M tokens” scale the measured part up on the '

@@ -39,10 +39,12 @@ from urllib.parse import urlparse
 
 import torch
 
-from ..infer.checkpoints import CheckpointStore, InferError
+from ..infer.checkpoints import CheckpointStore
 from ..infer.engine import InferConfig, plan_device, training_runs
 from ..tokenizer.tokenizer import Tokenizer
 from .batch import BatchEngine, Request
+from .usage import Request as UsageRequest
+from .usage import UsageLog
 from .paged import BLOCK_SIZE, BlockPool
 
 MAX_BODY = 1 << 20
@@ -170,6 +172,20 @@ class ModelServer:
         self.worker.join(timeout=2.0)
 
     # ---- what the endpoints report -------------------------------------------------------
+    @property
+    def usage(self) -> UsageLog:
+        """Where served requests are recorded, so `portal/cost.py` can divide the
+        electricity by something. See `serve/usage.py` for why prompt and completion tokens
+        are never added together.
+
+        Lazy rather than set in `__init__` because tests construct a server with
+        `object.__new__` to skip loading a checkpoint from disk, and accounting is not a
+        reason for that to stop working.
+        """
+        if getattr(self, "_usage", None) is None:
+            self._usage = UsageLog()
+        return self._usage
+
     def health(self) -> dict:
         stats = self.engine.stats
         return {
@@ -286,12 +302,14 @@ class Handler(BaseHTTPRequestHandler):
         if data.get("stream"):
             return self._stream(job, rid, stamp, chat)
 
+        t0 = time.time()
         try:
             out_ids = list(srv.stream(job))
         except (BrokenPipeError, ConnectionResetError):
             srv.cancel(job)
             raise
         produced = len(out_ids)
+        srv.usage.record(UsageRequest(t0, time.time(), len(ids), produced, srv.ckpt_id))
         text = srv.tokenizer.decode(out_ids)
         payload = {
             "id": rid, "object": "chat.completion" if chat else "text_completion",
@@ -328,8 +346,11 @@ class Handler(BaseHTTPRequestHandler):
                                     else {"text": delta})}]}
             return f"data: {json.dumps(body)}\n\n".encode()
 
+        produced = 0
+        t0 = time.time()
         try:
             for token in srv.stream(job):
+                produced += 1
                 piece = decoder.push(token)
                 if piece:
                     self.wfile.write(chunk(piece))
@@ -345,6 +366,12 @@ class Handler(BaseHTTPRequestHandler):
             # point goes into a socket nobody is reading while holding a slot in the batch and
             # blocks in the pool that a waiting request could have had.
             srv.cancel(job)
+        finally:
+            # Recorded even when the client hung up: those tokens were generated, the card
+            # spent the energy, and leaving them out would flatter every cost-per-token
+            # number by exactly the requests that were abandoned.
+            srv.usage.record(UsageRequest(t0, time.time(), len(job.req.prompt_ids), produced,
+                                          srv.ckpt_id, stream=True))
 
 
 def serve(ckpt: str, host: str = "127.0.0.1", port: int = DEFAULT_PORT,

@@ -212,6 +212,35 @@ contract `phase2.sh` and the training dashboard have always had.
 * **Authentication.** Loopback is the boundary. Exposing this on a network is your decision,
   and it should be behind something that does auth properly.
 
+## What a token cost
+
+The server records every completed request to `logs/serve/usage.jsonl` — start, end, prompt
+tokens, completion tokens — and the GPU sampler tags its power draw `serve`. Between them,
+`python -m aksharallm.portal.cost` can answer the question a benchmark cannot:
+
+```
+serving: 318 requests, 54,586 completion tokens (1,626 prompt), 2m44s generating
+         $0.0377 per million COMPLETION tokens
+         14 Wh generating, 3 Wh idle-but-loaded (33% of the server's energy produced nothing)
+         331.3 tok/s of card time (batched — not per-request throughput)
+```
+
+Three separations make that honest, and each one is a way the number goes wrong without it:
+
+| separation | what collapses without it |
+|---|---|
+| prompt vs completion tokens | prefill and decode differ by orders of magnitude per token, and their mix changes per request — the sum is an average over two different things |
+| generating vs idle-but-loaded | an under-used server looks like one whose *tokens* are expensive, which is a different problem with a different fix |
+| merged vs summed busy spans | the server batches: 30 concurrent requests over 10 s are 10 s of card time, not 300 |
+
+The idle share is usually the interesting number. A server left up overnight for occasional
+use spends almost all of its electricity being available, and no amount of decode
+optimisation touches that — the fix is to stop leaving it up, which is a decision the
+per-token rate alone would never prompt.
+
+See [doc 9](09-running-and-watching.md) § "What a run cost" for the training side of the same
+ledger, and for the two bugs this uncovered.
+
 ## The code, in reading order
 
 | # | file | what to look for |
@@ -220,7 +249,8 @@ contract `phase2.sh` and the training dashboard have always had.
 | 2 | [`aksharallm/serve/batch.py`](../aksharallm/serve/batch.py) | `BatchEngine._forward` — positions, the two-job mask, the padded rows — then `step` (sampling and finishing), `_admit` (FIFO, checked against free blocks) and `_share_prefix` |
 | 3 | [`aksharallm/serve/server.py`](../aksharallm/serve/server.py) | `ModelServer._loop` — one worker thread owns the model, HTTP threads only put requests in and take tokens out — then `Handler._generate` and `_stream` |
 | 4 | [`scripts/serve.sh`](../scripts/serve.sh) · [`aksharallm/portal/serving.py`](../aksharallm/portal/serving.py) | the lifecycle: a pid file, a log, and a panel that shells out to the script rather than holding a second way to start a server |
-| 5 | [`aksharallm/model/transformer.py`](../aksharallm/model/transformer.py) | `apply_rope`'s two shapes and the `positions` / `attn_mask` parameters of `forward`: the only changes serving needed in the model itself |
+| 5 | [`aksharallm/serve/usage.py`](../aksharallm/serve/usage.py) | `busy_intervals` — merged, not summed — and the docstring's three decisions. Then `portal/cost.py`'s `serving_report` |
+| 6 | [`aksharallm/model/transformer.py`](../aksharallm/model/transformer.py) | `apply_rope`'s two shapes and the `positions` / `attn_mask` parameters of `forward`: the only changes serving needed in the model itself |
 
 What pins it: `tests/test_serve.py`, and the one to read first is
 `test_a_batch_gives_each_sequence_what_it_would_have_got_alone` — three prompts of different

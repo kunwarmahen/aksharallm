@@ -310,14 +310,14 @@ class CostConfig:
     _mtime: float = field(default=0.0, repr=False)
 
     @classmethod
-    def load(cls, root: Path | None = None) -> "CostConfig":
+    def load(cls, root: Path | None = None) -> CostConfig:
         from .runs import repo_root
         root = Path(root).resolve() if root else repo_root()
         cfg = cls(path=root / "configs" / "portal.yaml")
         cfg.reload()
         return cfg
 
-    def refresh(self) -> "CostConfig":
+    def refresh(self) -> CostConfig:
         """Re-read if the file changed, so editing the rate does not need a restart."""
         try:
             if self.path and self.path.stat().st_mtime != self._mtime:
@@ -326,7 +326,7 @@ class CostConfig:
             pass
         return self
 
-    def reload(self) -> "CostConfig":
+    def reload(self) -> CostConfig:
         data: dict = {}
         self.note = None
         if self.path and self.path.is_file():
@@ -415,6 +415,99 @@ def _bundle(cfg: CostConfig, rows: list[dict], **extra) -> dict:
     return out
 
 
+def serving_report(ledger: Ledger, cfg: CostConfig, usage_path=None,
+                   since: float | None = None) -> dict:
+    """What an hour of serving costs, and what it bought — cost per million tokens.
+
+    The training side of this ledger divides energy by *steps*. Serving has to divide it by
+    **tokens**, and doing that honestly needs three separations that a single
+    "cost per token" figure quietly loses:
+
+    **1. Prompt tokens are not completion tokens.** Prefill runs the whole prompt through the
+    model in one batched pass; decode runs the model once per token produced. They differ by
+    orders of magnitude per token, and their *mix* changes with every request. Providers
+    price them separately, and the headline here is per million **completion** tokens —
+    which is also the number that moves when the decode path improves.
+
+    **2. Generating is not waiting.** A server holding the weights at idle still draws
+    power, and "should I leave this up?" is usually the real question. `busy_intervals`
+    merges the spans when at least one request was generating, so the energy splits into
+    what was spent producing tokens and what was spent being available. **Merged, not
+    summed** — thirty concurrent requests over ten seconds are ten seconds of card time.
+
+    **3. Measured is not total.** Same rule the rest of this module obeys: a sampling gap is
+    reported as uncovered rather than bridged, and rates are computed over the *measured*
+    part only.
+    """
+    from ..serve import usage as usage_mod
+
+    requests = usage_mod.load(usage_path or usage_mod.USAGE_LOG, since=since)
+    stats = usage_mod.summarise(requests)
+    busy = usage_mod.busy_intervals(requests)
+
+    rows = [e for e in ledger.entries()
+            if e.get("kind") == "job" and e.get("label") == "serve"
+            and (since is None or (e.get("start") or 0) + (e.get("seconds") or 0) >= since)]
+    total = _bundle(cfg, rows)
+
+    # Split the server's energy by whether anything was generating at the time.
+    #
+    # **The bucket's `start` is a ten-minute boundary, and `seconds` is coverage scattered
+    # inside it — not a contiguous span beginning at `start`.** A server alive for 190
+    # seconds of a 600-second bucket produces `seconds = 190` with no record of *which* 190,
+    # so the overlap has to be taken against the whole bucket window and then expressed as a
+    # fraction of the covered time. Taking it against `[start, start + seconds)` instead
+    # reports zero busy energy whenever the traffic happened in the back half of a bucket,
+    # which is exactly what it did the first time this ran.
+    width = ledger.bucket
+    busy_wh = 0.0
+    busy_covered = 0.0
+    for e in rows:
+        start = e.get("start") or 0.0
+        covered = e.get("seconds") or 0.0
+        if covered <= 0:
+            continue
+        overlap = sum(max(0.0, min(start + width, b) - max(start, a)) for a, b in busy)
+        # Capped at 1: samples are taken every five seconds, so `covered` is a good proxy
+        # for "the server was alive", but a burst of traffic in an unsampled gap could
+        # otherwise claim more busy time than the bucket recorded at all.
+        frac = min(overlap / covered, 1.0)
+        busy_wh += (e.get("wh") or 0.0) * frac
+        busy_covered += covered * frac
+
+    idle_wh = max((total.get("wh") or 0.0) - busy_wh, 0.0)
+    completion = stats["completion_tokens"]
+    per_million = None
+    priced = None
+    if completion > 0:
+        per_million = busy_wh * 1e6 / completion
+        # Priced with the host draw and PSU losses the training side already accounts for,
+        # so the two numbers in this ledger mean the same thing.
+        cost = cfg.price(busy_wh, busy_covered)
+        priced = None if cost["money"] is None else cost["money"] * 1e6 / completion
+
+    return {
+        **stats,
+        "total": total,
+        "busy_wh": busy_wh,
+        "idle_wh": idle_wh,
+        # The share of the server's electricity that produced nothing. THE number for
+        # "should I leave this up?", and it is usually the large one.
+        "idle_share": (idle_wh / total["wh"]) if (total.get("wh") or 0) > 0 else None,
+        "wh_per_million_completion": per_million,
+        "money_per_million_completion": priced,
+        "currency": cfg.currency,
+        "configured": cfg.configured,
+        "caveat": (
+            "Per MILLION COMPLETION tokens, over generating time only. Prompt tokens are "
+            "counted separately because prefill and decode differ by orders of magnitude "
+            "per token; idle energy is excluded from the rate and reported beside it, "
+            "because whether to keep a server up is a different question from what a token "
+            "costs."
+        ),
+    }
+
+
 def report(ledger: Ledger, cfg: CostConfig, store=None, now: float | None = None,
            days: int = 14) -> dict:
     """Everything the cost panel shows: the grand total, each run, and the last fortnight.
@@ -469,6 +562,7 @@ def report(ledger: Ledger, cfg: CostConfig, store=None, now: float | None = None
         "week": window(now - 7 * 86400),
         "runs": runs,
         "daily": daily,
+        "serving": serving_report(ledger, cfg),
         "since": min((e.get("start") for e in entries if e.get("start")), default=None),
         "bucket_s": ledger.bucket,
         "server_time": now,
@@ -546,6 +640,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {(r['label'] or 'idle'):<22} {r['kind']:<9} {fmt_dur(r['seconds']):>9} "
               f"{_fmt_wh(r['wh']):>10} {_fmt_money(cfg, r['money']):>12} {cov:>8} "
               f"{est:>11} {per_m:>11}")
+
+    s = rep["serving"]
+    if s["requests"]:
+        print(f"\n  serving: {s['requests']:,} requests, "
+              f"{s['completion_tokens']:,} completion tokens "
+              f"({s['prompt_tokens']:,} prompt), "
+              f"{fmt_dur(s['busy_seconds'])} generating")
+        rate = (_fmt_money(cfg, s["money_per_million_completion"])
+                if s["money_per_million_completion"] is not None
+                else _fmt_wh(s["wh_per_million_completion"]))
+        print(f"           {rate} per million COMPLETION tokens")
+        if s["idle_share"] is not None:
+            print(f"           {_fmt_wh(s['busy_wh'])} generating, "
+                  f"{_fmt_wh(s['idle_wh'])} idle-but-loaded "
+                  f"({s['idle_share'] * 100:.0f}% of the server's energy produced nothing)")
+        if s["completion_tok_per_s"]:
+            print(f"           {s['completion_tok_per_s']:.1f} tok/s of card time "
+                  f"(batched — not per-request throughput)")
     return 0
 
 
