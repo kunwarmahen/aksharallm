@@ -94,6 +94,7 @@ grep is one line away from the prose. `tests/test_docs.py` fails if either point
 
 | # | Doc | What you'll learn |
 |---|-----|-------------------|
+| **22** | **[The whole journey, end to end](docs/22-journeys.md)** — *start here* | The route map: the ordered path from raw text to a model you can talk to, plus every side route (cheaper, faster, longer context, other modalities) — each with its real command, where it lives in the portal, and how you know it worked |
 | 0 | [What we're building](docs/00-overview.md) | What an LLM is, the four training stages, why each exists |
 | 1 | [Data](docs/01-data.md) | Where text comes from, why quality beats quantity, the on-disk format |
 | 2 | [Tokenizer](docs/02-tokenizer.md) | Why models read "tokens" not letters, how BPE works |
@@ -107,7 +108,7 @@ grep is one line away from the prose. `tests/test_docs.py` fails if either point
 | 10 | [Quantization](docs/10-quantization.md) | Storing weights in 4 bits: group scales, RTN/GPTQ/AWQ/QAT, **NF4**, a fused Triton kernel, and why smaller isn't faster |
 | 11 | [LoRA & QLoRA](docs/11-lora.md) | Fine-tuning without training the model: low-rank adapters, a 4-bit frozen base, one base + many skills, and a free DPO reference model |
 | 12 | [Evaluation](docs/12-eval.md) | Is the model actually any good? MMLU/ARC/HellaSwag/PIQA scored by log-likelihood, GSM8K, HumanEval executed for real, an LLM-judge — and why 25% on MMLU is not a failure |
-| 15 | [The learning path](docs/15-learning-path.md) | The repo as a course: nineteen lessons that each end in breaking real code and watching a real test go red — and why a lesson only counts once the check has been red *and then* green |
+| 15 | [The learning path](docs/15-learning-path.md) | The repo as a course: twenty-one lessons that each end in breaking real code and watching a real test go red — and why a lesson only counts once the check has been red *and then* green |
 | 14 | [Mixture of experts](docs/14-moe.md) | More parameters than you compute with: a router, N experts, top-k per token — the load-balancing loss, why upcycling is an identity at init, and the collapse that is invisible in the loss curve |
 | 17 | [Looking inside](docs/17-interpretability.md) | Attention maps recomputed from the layer's own inputs, the logit lens (*when* did it decide?), activation patching (which activation actually carries the fact), and a sparse autoencoder that pulls apart superposition |
 | 16 | [Serving](docs/16-serving.md) | Turning a checkpoint into something you use: a paged KV cache so memory is bounded by what is *used*, continuous batching so thirty conversations share one pass over the weights (50 → 272 tok/s), and an OpenAI-shaped API so existing clients work |

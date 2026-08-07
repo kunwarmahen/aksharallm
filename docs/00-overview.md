@@ -178,7 +178,7 @@ many forward passes to spend** on a given length of text. → [doc 19](19-diffus
 ## Learning it by breaking it
 
 Reading the chapters that follow is one way through this project. There is another, and it
-is better: [doc 15](15-learning-path.md) turns the repo into nineteen lessons that each end
+is better: [doc 15](15-learning-path.md) turns the repo into twenty-one lessons that each end
 in *breaking real code* and watching a real test go red. Most of the exercises are bugs that
 actually happened here — a causal mask applied during single-token decoding masks away the
 entire KV cache, and the model trains perfectly while generating garbage.

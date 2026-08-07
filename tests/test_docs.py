@@ -42,8 +42,8 @@ def section_of(text: str) -> str:
     return after.split("\n## ", 1)[0]
 
 
-def test_there_are_twentytwo_chapters():
-    assert len(CHAPTERS) == 22, [p.name for p in CHAPTERS]
+def test_there_are_twentythree_chapters():
+    assert len(CHAPTERS) == 23, [p.name for p in CHAPTERS]
 
 
 @pytest.mark.parametrize("doc", CHAPTERS, ids=lambda p: p.stem)
@@ -115,13 +115,16 @@ def test_the_pointer_lives_in_the_module_docstring():
 
 def test_every_chapter_is_named_by_at_least_one_module():
     """A chapter nothing points to is either about the repo rather than the code (00, 07,
-    08) or has quietly lost its implementation."""
+    08, 22) or has quietly lost its implementation."""
     named = set()
     for mod in MODULES:
         text = mod.read_text()
         named.update(POINTER.findall(text))
         named.update(ALSO.findall(text))
-    prose_only = {"docs/00-overview.md", "docs/08-troubleshooting.md"}
+    #: 22 is the route map: it sequences the other chapters rather than explaining a module,
+    #: so its "reading order" points at the launcher *scripts*, which are not Python modules
+    #: and therefore carry no `Read with:` pointer back.
+    prose_only = {"docs/00-overview.md", "docs/08-troubleshooting.md", "docs/22-journeys.md"}
     for doc in CHAPTERS:
         rel = f"docs/{doc.name}"
         if rel in prose_only:
