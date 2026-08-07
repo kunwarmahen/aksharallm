@@ -266,7 +266,15 @@ def _rescore(report: dict, against: str | None, con) -> None:
     any_row = False
     for name, res in (result.get("suites") or {}).items():
         clean = con.clean_score(res, dirty)
-        if not clean or clean["clean"] is None:
+        if not clean:
+            continue
+        if clean["clean"] is None:
+            # Say why, rather than dropping the row. A suite that quietly vanishes from
+            # this table looks like a suite that was clean.
+            any_row = True
+            print(f"  {name:>14}  reported "
+                  f"{'—' if clean['reported'] is None else format(clean['reported'], '.3f')}"
+                  f"  clean —   ({clean.get('note', 'not computable')})")
             continue
         any_row = True
         delta = clean["clean"] - (clean["reported"] or 0)

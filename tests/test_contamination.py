@@ -345,3 +345,30 @@ def test_a_bound_larger_than_the_corpus_is_not_partial():
                        items_per_suite=None, texts=10, verified=False)
     assert cov["partial"] is False
     assert cov["scanned_tokens"] == 10_000_000_000
+
+
+@pytest.mark.parametrize("items,score", [
+    ([{"id": "a", "correct": True}, {"id": "b", "correct": False}], 0.5),          # mc / gen
+    ([{"id": "a", "passed": True}, {"id": "b", "passed": False}], 0.5),            # code
+    ([{"id": "a", "score": 5}, {"id": "b", "score": 1}], 0.5),                     # judge, (s-1)/4
+])
+def test_dropping_nothing_changes_nothing(items, score):
+    """The invariant that catches a mis-read verdict field, whatever the schema.
+
+    `clean_score` used to read only `correct`, which is the multiple-choice schema. HumanEval
+    records `passed` and the judge records a 1-5 `score`, so both re-scored to **0.000 with
+    zero items dropped** — arithmetically impossible, and printed beside real numbers with
+    the same confidence. With an empty dirty set the clean score must equal the reported one
+    exactly; anything else means the reader and the scorer disagree about what an item says.
+    """
+    out = con.clean_score({"score": score, "items": items}, set())
+    assert out["dropped"] == 0 and out["kept"] == len(items)
+    assert out["clean"] == pytest.approx(score)
+
+
+def test_a_suite_it_cannot_read_is_refused_not_guessed():
+    """An unknown item schema must produce a refusal with a reason, never a number. A 0.000
+    that looks like a measurement is worse than an admitted gap."""
+    out = con.clean_score({"score": 0.4, "items": [{"id": "a", "verdict": "ok"}]}, set())
+    assert out["clean"] is None
+    assert "cannot re-score" in out["note"] and "verdict" in out["note"]

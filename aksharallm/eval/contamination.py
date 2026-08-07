@@ -355,13 +355,45 @@ def clean_score(result: dict, dirty_ids: set[str]) -> dict | None:
     if not kept:
         return {"reported": result.get("score"), "clean": None, "dropped": dropped,
                 "kept": 0, "note": "every item was contaminated"}
-    scored = [float(bool(i.get("correct"))) for i in kept]
+
+    read = verdict_reader(kept[0])
+    if read is None:
+        # Refuse rather than guess. This used to be a bare `bool(i["correct"])`, which is
+        # the multiple-choice schema: HumanEval records `passed` and the judge records a
+        # 1-5 `score`, so every item read as False and both suites re-scored to **0.000
+        # with zero items dropped** -- a number that cannot happen, printed with the same
+        # confidence as a real one. A re-score it cannot compute must say so.
+        return {"reported": result.get("score"), "clean": None, "dropped": dropped,
+                "kept": len(kept),
+                "note": f"cannot re-score: no known verdict field in {sorted(kept[0])}"}
+
+    scored = [read(i) for i in kept]
     return {
         "reported": result.get("score"),
         "clean": sum(scored) / len(scored),
         "dropped": dropped,
         "kept": len(kept),
     }
+
+
+def verdict_reader(item: dict):
+    """How to read one item's outcome as a number in 0..1, or None if we cannot.
+
+    Each task family records its own verdict, and they must be averaged the way that suite
+    averages them or the "clean" score is not comparable with the "reported" one:
+
+    - multiple choice and generation: `correct`, a bool.
+    - code: `passed`, a bool -- HumanEval's score is `passed / n`.
+    - the LLM judge: `score`, a 1-5 rating. It maps to 0-1 as `(s - 1) / 4`, matching
+      `judge.py` -- a model that scores 1 on everything is at the floor, not at 20%.
+    """
+    if "correct" in item:
+        return lambda i: float(bool(i.get("correct")))
+    if "passed" in item:
+        return lambda i: float(bool(i.get("passed")))
+    if "score" in item:
+        return lambda i: (float(i["score"]) - 1) / 4 if i.get("score") is not None else 0.0
+    return None
 
 
 def load_result(path: str | Path) -> dict:
