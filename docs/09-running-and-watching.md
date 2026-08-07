@@ -690,6 +690,35 @@ but it catches the exact shape that has now recurred five times.
 **Verify portal CSS against the running portal, with real data.** A static copy with a dead
 API renders empty panels that fit comfortably and measure perfectly clean.
 
+### A control the server will refuse has to refuse itself first
+
+Several panels hold a one-job-at-a-time lock, and the server raises on a second request — *a
+quantization job is already running*, *a measurement is already running*, *a job is already
+running*. The lock is deliberate: a contamination scan streams ten billion tokens, a
+per-domain split loads the model, a quantization pass wants the card to itself.
+
+But a refusal that exists only on the server is a button that **looks available**, is
+pressed, and fails into a toast. Quantize, Finetune and Synth had always gated their Run
+buttons on the running state. The Eval tab's four audit buttons and the Context tab's four
+measurement buttons had not, so pressing one during a scan bounced off the server.
+
+Two details worth keeping:
+
+- **The reason is repeated next to the button.** The Eval tab's audits sit ~1,500px down a
+  column that scrolls on its own, so the running state at the top of the panel is off screen
+  exactly when it is needed. A greyed-out control with its explanation somewhere else is
+  barely better than one that fails.
+- **A gate may add a reason, never remove one.** `#lc-extend` is already disabled when there
+  is nothing to write; a poll that re-enabled everything not-running would offer a button
+  that puts a 3.6 GB file on disk from an incomplete plan.
+
+`tests/test_portal_gating.py` checks every panel whose server refuses a second job, and it
+found the fourth Eval audit button that this section's first draft had missed. Building it
+also demonstrated its own failure mode: a first version read only the click handler, so it
+saw the one panel that posts inline and **skipped** the three that route through a helper —
+a test that cannot fail, wearing the colour of one that passes. It follows one level of
+indirection now.
+
 ### And a column that scrolls has to look like one
 
 The same shape has a second, milder failure. Once the column really does scroll, the content

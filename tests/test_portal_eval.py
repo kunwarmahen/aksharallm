@@ -11,6 +11,7 @@ button does anything.
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -383,3 +384,51 @@ def test_progress_is_read_from_every_job_not_only_the_benchmarks(repo):
     # first version of this regex matched the label with `\S+`.
     assert jobs._progress(["[calib] collecting logits 3/8 (38%)"]) == {
         "label": "collecting logits", "done": 3, "total": 8, "pct": 38}
+
+
+# ---- the gate on the shared job lock ---------------------------------------------------
+
+JS = (Path(__file__).resolve().parents[1] / "aksharallm" / "portal" / "static" / "js"
+      / "evals.js")
+
+
+def test_every_audit_button_is_gated_on_the_shared_job_lock():
+    """`start_audit` refuses a second job, so the buttons must refuse it first.
+
+    They did not: the server raised and the browser showed an error toast, which is a button
+    that looks available and is not. The lock is deliberate — a contamination scan streams
+    ten billion tokens and a per-domain split loads the model — so the refusal belongs
+    *before* the click.
+
+    This is the same shape as the trainer/launcher identification bugs: a hand-maintained
+    list of ids that a fourth audit would have to remember to join. Here the list is checked
+    against the handlers that actually post to the audit endpoint, so forgetting is caught.
+    """
+    js = JS.read_text()
+
+    posts_audit = set()
+    for match in re.finditer(r"\$\('(#[\w-]+)'\)\.addEventListener\('click',", js):
+        body = js[match.end(): match.end() + 700]
+        if "/api/eval/audit" in body:
+            posts_audit.add(match.group(1))
+    assert posts_audit, "no audit buttons found — has the panel been rewritten?"
+
+    gate = re.search(r"function gateAudits\(st\) \{(.*?)\n\}", js, re.S)
+    assert gate, "gateAudits is gone; the audit buttons are ungated"
+    gated = set(re.findall(r"'(#[\w-]+)'", gate.group(1)))
+
+    missing = posts_audit - gated
+    assert not missing, (
+        f"{sorted(missing)} post to /api/eval/audit but gateAudits does not disable them, "
+        f"so they stay clickable while a job holds the lock and fail server-side instead.")
+
+
+def test_the_gate_says_why_rather_than_only_greying_out():
+    """A disabled control with no reason is the thing this portal is not allowed to be —
+    and these sit far enough down a scrolling column that the running state at the top is
+    off screen exactly when it matters."""
+    js = JS.read_text()
+    gate = re.search(r"function gateAudits\(st\) \{(.*?)\n\}", js, re.S).group(1)
+    assert "describeJob" in gate, "the reason should name the job that holds the lock"
+    assert "title" in gate and "ev-audit-note" in gate, (
+        "the reason must reach both the button's title and the visible note")

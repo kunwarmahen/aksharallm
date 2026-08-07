@@ -145,11 +145,39 @@ function renderDatasets(st) {
     ? `Download ${missing.length} missing` : 'All data downloaded';
 }
 
+/* The audits share the eval panel's one-job-at-a-time lock, so they have to be gated by it.
+ *
+ * They were not: `start_audit` refuses a second job server-side, but the buttons stayed
+ * live, so pressing one during a scan bounced off an error toast — a button that looks
+ * available and is not. The lock is deliberate (a contamination scan streams ten billion
+ * tokens and a per-domain split loads the model; neither wants company), and a deliberate
+ * refusal should be visible before the click, not after it.
+ *
+ * The reason is repeated *here* rather than only at the top of the panel because these
+ * buttons sit ~1,500px further down a column that scrolls on its own — the running state up
+ * there is off screen exactly when it is needed. */
+function gateAudits(st) {
+  const note = $('#ev-audit-note');
+  const cur = st.current || {};
+  const why = !st.running ? '' :
+    `${describeJob(cur)} is running${cur.source === 'terminal' ? ' in a terminal' : ''}`
+    + ' — these share one job at a time.';
+  for (const id of ['#ev-con-run', '#ev-cal-run', '#ev-dd-run', '#ev-dom-run']) {
+    const btn = $(id);
+    if (!btn) continue;
+    btn.disabled = !!st.running;
+    btn.title = why || btn.dataset.title || '';
+  }
+  note.hidden = !why;
+  note.textContent = why;
+}
+
 function renderStatus(st) {
   ev.status = st;
   renderSuites(st);
   renderDatasets(st);
   renderRunNote();
+  gateAudits(st);
 
   const dev = st.device || {};
   $('#ev-device-note').textContent = dev.reason || '';

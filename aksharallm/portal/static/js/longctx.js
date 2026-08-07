@@ -148,6 +148,25 @@ async function poll(delay = 2000) {
     $('#lc-job-note').textContent = job.running
       ? `running (pid ${job.pid})${res.training ? ` — on the CPU, ${res.training} has the card` : ''}`
       : (res.training ? `${res.training} is training, so a measurement would run on the CPU` : '');
+    /* One measurement at a time — `longctx.py` refuses a second with "a measurement is
+     * already running". The buttons have to refuse it first: a control that looks available
+     * and then fails server-side teaches the reader to distrust every other control on the
+     * page. Same gate as the Eval tab's audits, for the same reason. */
+    for (const id of ['#lc-run-curve', '#lc-run-sweep', '#lc-run-needle', '#lc-run-flash',
+                      '#lc-extend']) {
+      const btn = $(id);
+      if (!btn) continue;
+      /* Never *enable* here — `#lc-extend` has its own reason to be off (there is nothing
+       * to write), and clearing that on every poll would offer a button that writes a
+       * 3.6 GB file from an incomplete plan. This gate only ever adds a reason. */
+      if (job.running) {
+        btn.disabled = true;
+        btn.title = 'a measurement is already running — one at a time';
+      } else if (btn.title.startsWith('a measurement is already running')) {
+        btn.disabled = false;
+        btn.title = '';
+      }
+    }
     renderResults(res.results || []);
     if (job.running) {
       lc.timer = setTimeout(() => poll(), delay);

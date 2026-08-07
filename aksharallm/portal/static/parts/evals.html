@@ -101,6 +101,10 @@
       <div class="ev-audit">
         <div class="panel-head"><h2>Is the benchmark trustworthy?</h2>
           <span class="panel-note">these two measure the <em>test</em> and the <em>data</em>, not the model</span>
+          <!-- Filled in when a job holds the one-at-a-time lock. These buttons are far
+               enough down the column that the running state at the top of the panel is off
+               screen, so the reason has to be repeated where the disabled button is. -->
+          <span class="panel-note warn" id="ev-audit-note" hidden></span>
         </div>
         <div class="ev-audit-grid">
           <div class="ev-audit-card">
