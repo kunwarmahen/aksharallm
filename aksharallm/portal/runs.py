@@ -39,6 +39,20 @@ RUN_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 #:
 #: `script` and `env` are both optional so a test can register a run with `{}` and get the
 #: Phase-2 launcher, which is what every caller meant before there were two.
+#: Every module in this repo that trains something into a `checkpoints/<run>/` directory
+#: and writes `train.pid` there. `trainer_pid` validates a pid file against this list, so a
+#: trainer missing from it reports its run as **idle while it is training** — the pid is
+#: read, the process is alive, and it is rejected as somebody else's.
+TRAINERS: tuple[str, ...] = (
+    "aksharallm.train.pretrain",
+    "aksharallm.train.sft",
+    "aksharallm.train.dpo",
+    "aksharallm.train.grpo",
+    "aksharallm.audio.train_codec",
+    "aksharallm.audio.train_lm",
+    "aksharallm.vision.train",
+)
+
 LAUNCHERS: dict[str, dict] = {
     "small-code": {},                                        # blended 85/15 base (default)
     "small": {"env": {"PURE": "1"}},                         # FineWeb-Edu only fallback
@@ -46,6 +60,10 @@ LAUNCHERS: dict[str, dict] = {
     "tiny": {"script": "scripts/experiment.sh", "args": ["tiny"]},
     "tiny-diffusion": {"script": "scripts/experiment.sh",
                        "args": ["tiny-diffusion"]},   # docs/19
+    # Audio and vision: a different launcher, the same pid/meta/log contract. docs/20, 21.
+    "codec-synth": {"script": "scripts/audio.sh", "args": ["codec-synth"]},
+    "codec-lj": {"script": "scripts/audio.sh", "args": ["codec-lj"]},
+    "audiolm-synth": {"script": "scripts/audio.sh", "args": ["audiolm-synth"]},
 }
 
 
@@ -104,9 +122,11 @@ def _cmdline(pid: int) -> str:
             return ""
 
 
-#: A top-level `model:` key — the cheap, text-only test for "the trainer could read this".
-#: Deliberately not a YAML parse: `runs()` is called on every poll of every open page.
-_RUN_CONFIG_RE = re.compile(r"^model:", re.MULTILINE)
+#: A top-level section that some trainer in this repo would recognise — the cheap, text-only
+#: test for "this is a run and not a settings file". `model:` is a language model, `codec:`
+#: and `audiolm:` are docs/20, `vision:` is docs/21. Deliberately not a YAML parse: `runs()`
+#: is called on every poll of every open page.
+_RUN_CONFIG_RE = re.compile(r"^(model|codec|audiolm|vision):", re.MULTILINE)
 
 
 def _is_run_config(path: Path) -> bool:
@@ -200,10 +220,10 @@ class RunStore:
         exactly when you want to read its history, not when you want it to vanish.
 
         Not every YAML under `configs/` is a run: `portal.yaml` configures the portal's own
-        code explainer. A run config is one the trainer could actually read, so that is the
-        test — it must declare a `model:` section. Anything else is a settings file that
-        happens to live next door, and a phantom run in the picker with no log and no
-        launcher is exactly the kind of thing you waste an evening on.
+        code explainer. A run config is one *some* trainer could read — a `model:` section
+        (a language model), a `codec:` or `audiolm:` one (docs/20), or `vision:` (docs/21).
+        Anything else is a settings file that happens to live next door, and a phantom run in
+        the picker with no log and no launcher is the kind of thing you waste an evening on.
         """
         names = {p.stem for p in (self.root / "configs").glob("*.yaml")
                  if _is_run_config(p)}
@@ -231,17 +251,31 @@ class RunStore:
         train.out_dir=/tmp/...` appended, and an unanchored match reports the smoke test as
         the run — which is how a stop request ends up aimed at a process that never reads it.
         `scripts/stop.sh` uses the same anchor and the same smoke-test guard.
+
+        **`TRAINERS` is why this is a list and not one string.** The validation used to be
+        `"aksharallm.train" in cmdline`, which silently excluded every trainer that does not
+        live in `aksharallm/train/`: a codec run's command line is
+        `aksharallm.audio.train_codec`, so its pid file was read, rejected, and the run
+        reported **idle while it was training** — with the log tail still advancing and no
+        Stop button, which is the most confusing possible combination. Adding a trainer means
+        adding it here.
         """
         pid = _read_int(self.run_dir(run) / "train.pid")
         if pid and _alive(pid):
             args = _cmdline(pid)
-            if "aksharallm.train" in args and "aksharallm_smoke" not in args:
+            if any(m in args for m in TRAINERS) and "aksharallm_smoke" not in args:
                 return pid
 
         cached = self._pgrep_cache.get(run)
         if cached and time.time() - cached[0] < self._PGREP_TTL:
             return cached[1] if _alive(cached[1]) else None
         try:
+            # The fallback stays **pretrain-only**, and widening it to `TRAINERS` is a bug:
+            # several trainers share one config and write to *different* directories, so
+            # `aksharallm.train.sft configs/demo.yaml` writes into `checkpoints/demo-sft/`
+            # and matching on the config name alone would report it as run `demo`. The pid
+            # file has no such ambiguity — it lives in the directory it describes — which is
+            # exactly why it exists and why only its check needed widening.
             found = subprocess.run(
                 ["pgrep", "-f", rf"aksharallm\.train\.pretrain configs/{run}\.yaml$"],
                 capture_output=True, text=True, timeout=5).stdout.split()

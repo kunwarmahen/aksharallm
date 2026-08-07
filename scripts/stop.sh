@@ -195,11 +195,22 @@ if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
 fi
 
 # pids get recycled; make sure this one is still our trainer before signalling it.
+#
+# TRAINERS must list every module that writes a `train.pid`. It used to be the single string
+# `aksharallm.train`, which silently excluded every trainer outside `aksharallm/train/` --
+# a codec run is `aksharallm.audio.train_codec`. The result was worse than a refusal: a LIVE
+# run was declared "not an aksharallm trainer", could not be stopped, AND had its pid file
+# deleted as stale, so nothing could reach it again. Keep this in step with `TRAINERS` in
+# aksharallm/portal/runs.py.
+TRAINERS='aksharallm\.(train\.(pretrain|sft|dpo|grpo)|audio\.train_(codec|lm)|vision\.train)'
 ARGS=$(ps -p "$PID" -o args= 2>/dev/null || true)
-if ! printf '%s' "$ARGS" | grep -q 'aksharallm.train'; then
+if ! printf '%s' "$ARGS" | grep -qE "$TRAINERS"; then
     echo "pid $PID is alive but is not an aksharallm trainer -- refusing to touch it." >&2
-    echo "(stale pid file; removing it)" >&2
-    rm -f "$PID_FILE"
+    echo "  it is: $ARGS" >&2
+    # **The pid file is NOT removed.** It names a live process, so it is not stale -- and
+    # deleting it would take away the only handle anything has on that run. If this is a
+    # genuinely recycled pid, remove it yourself; if it is a trainer this script has not
+    # heard of, add it to TRAINERS above.
     exit 1
 fi
 # Belt and braces after the anchored pgrep above: never aim a stop at the smoke test. Its

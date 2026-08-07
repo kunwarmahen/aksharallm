@@ -38,7 +38,7 @@ from ..config import Config, config_to_dict, load_config
 from ..data.loader import MixedTokenDataset, TokenDataset
 from ..model.transformer import Transformer
 from ..tokenizer.tokenizer import Tokenizer
-from . import report, stopfile
+from . import distributed, report, stopfile
 from .schedule import get_lr
 
 
@@ -136,7 +136,9 @@ def stop_file_target(path: Path) -> int | None:
 def save_checkpoint(path: Path, model, optimizer, cfg: Config, step: int, best_val: float,
                     extra=None, dataset=None):
     path.parent.mkdir(parents=True, exist_ok=True)
-    raw = model._orig_mod if hasattr(model, "_orig_mod") else model  # unwrap torch.compile
+    # Unwrap `torch.compile` and DDP. Either left on prefixes every key in the checkpoint
+    # (`_orig_mod.` / `module.`) and it loads nowhere -- discovered days later.
+    raw = distributed.unwrap(model)
     payload = {
         "model": raw.state_dict(),
         "optimizer": optimizer.state_dict(),
@@ -159,7 +161,7 @@ def save_checkpoint(path: Path, model, optimizer, cfg: Config, step: int, best_v
 
 def load_checkpoint(path, model, optimizer=None, device="cuda"):
     ckpt = torch.load(path, map_location=device, weights_only=False)
-    raw = model._orig_mod if hasattr(model, "_orig_mod") else model
+    raw = distributed.unwrap(model)
     raw.load_state_dict(ckpt["model"])
     if optimizer is not None and "optimizer" in ckpt:
         optimizer.load_state_dict(ckpt["optimizer"])
@@ -182,7 +184,7 @@ def evaluate(model, dataset: TokenDataset, batch_size: int, n_batches: int, ctx)
 def sample_text(model, tok: Tokenizer, prompt: str, max_new: int = 100, device="cuda") -> str:
     from ..infer.generate import generate
 
-    raw = model._orig_mod if hasattr(model, "_orig_mod") else model
+    raw = distributed.unwrap(model)
     raw.eval()
     ids = tok.encode(prompt, bos=True)
     out = generate(raw, ids, max_new_tokens=max_new, temperature=0.8, top_k=50,
@@ -272,14 +274,29 @@ def main():
     torch.manual_seed(cfg.train.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    # Multi-GPU. `torchrun` sets RANK/WORLD_SIZE; without them this is a no-op costing one
+    # dict lookup, and every line below behaves exactly as it did. See train/distributed.py
+    # for the four things that are wrong by default.
+    dd = distributed.setup(device)
+    device = distributed.device_for(dd, device)
+    if not dd.is_main:
+        # Every rank runs the same loop and would print the same header, the same step lines
+        # and the same samples. stdout only; **stderr is deliberately untouched**, so a
+        # traceback on rank 3 still reaches the log.
+        sys.stdout = open(os.devnull, "w")
+
     # TF32 for the fp32 matmuls that autocast leaves alone (mostly the optimizer and
     # anything outside the autocast region). Free ~2x on Ampere, no accuracy cost here.
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 
     out_dir = Path(cfg.train.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    claim_pid_file(out_dir)
+    if dd.is_main:
+        # Only rank 0 writes. The others would write the same bytes to the same path at the
+        # same instant, and a pid file naming one of several processes is worse than none.
+        out_dir.mkdir(parents=True, exist_ok=True)
+        claim_pid_file(out_dir)
+    distributed.barrier(dd)
 
     # ---- data --------------------------------------------------------------------
     # The data order is seeded from `train.seed`, like the weights. It did not used to be:
@@ -288,11 +305,14 @@ def main():
     # comparing runs that saw different batches. See loader.py's note.
     if cfg.data.train_sources:
         train_ds = MixedTokenDataset(cfg.data.train_sources, cfg.train.seq_len, device,
-                                     seed=cfg.train.seed)
+                                     seed=cfg.train.seed + dd.rank)
         print(f"blended training: {train_ds}")
     else:
+        # `+ dd.rank`: **every rank must draw a different batch.** Two ranks on the same
+        # slice all-reduce two copies of one gradient, which buys nothing but heat, and
+        # nothing about the loss curve would say so.
         train_ds = TokenDataset(cfg.data.train_bin, cfg.train.seq_len, device,
-                                seed=cfg.train.seed)
+                                seed=cfg.train.seed + dd.rank)
     val_ds = TokenDataset(cfg.data.val_bin, cfg.train.seq_len, device)
     tok = Tokenizer(cfg.data.tokenizer)
     # What this run is training *for*. `check` is each objective's own vocabulary rule --
@@ -327,7 +347,11 @@ def main():
         best_val = ckpt.get("best_val", float("inf"))
         print(f"resumed from {resume} at step {start_step}")
 
-    tokens_per_step = cfg.train.batch_size * cfg.train.grad_accum * cfg.train.seq_len
+    # The GLOBAL batch: every rank contributes a full micro-batch on every micro-step, so
+    # the per-rank figure would make throughput, the budget, the ETA and the cost per million
+    # tokens all wrong by exactly `world_size`, in the flattering direction.
+    tokens_per_step = distributed.tokens_per_step(
+        cfg.train.batch_size, cfg.train.grad_accum, cfg.train.seq_len, dd)
     # Counted here, while the model is still the plain module, and written into the log's
     # session_start record: the end-of-run report should not have to load a 1.2 GB checkpoint
     # (or reimplement "how big is this model") to say how big the model was. Both numbers,
@@ -358,12 +382,19 @@ def main():
     if cfg.train.stop_after_s is not None:
         print(f"stop         after {fmt_dur(cfg.train.stop_after_s)} of training "
               "(measured from the first step, so pre-flight and compilation are free)")
+    if dd.enabled:
+        print(f"distributed  {dd.describe()}, global batch {tokens_per_step:,} tokens/step")
     print(f"started      {datetime.now():%Y-%m-%d %H:%M:%S}")
     print("=" * 78)
 
     if cfg.train.compile:
         print("compiling model (first step will be slow)...")
         model = torch.compile(model)
+
+    # DDP wraps LAST, and `to_save` keeps the unwrapped module. A DDP `state_dict()` prefixes
+    # every key with `module.`, which loads nowhere and is discovered days later by whoever
+    # tries to use the checkpoint.
+    model, to_save = distributed.wrap(model, dd)
 
     # bf16 autocast: activations and matmuls run in bf16, the master weights and the
     # optimizer state stay fp32. bf16 has fp32's exponent range, so unlike fp16 it
@@ -405,7 +436,9 @@ def main():
     # ends up as one file. Bracketing each launch with session_start/session_end records is
     # what makes those sessions separable afterwards -- otherwise you cannot tell a resume
     # from a throughput change. scripts/sessions.py reads exactly these markers.
-    logf = open(out_dir / "train_log.jsonl", "a")
+    # Only rank 0 writes the run log. The others would append the same records to the same
+    # file at the same instant; devnull is simpler than a rank check at every write site.
+    logf = open(out_dir / "train_log.jsonl", "a") if dd.is_main else open(os.devnull, "w")
     model.train()
     t0 = time.time()  # start of the current log window (reset after eval/sample/ckpt)
     run_t0 = t0  # start of this invocation; never reset, so "up" is true wall-clock
@@ -460,13 +493,21 @@ def main():
         # otherwise the effective LR would scale with grad_accum.
         optimizer.zero_grad(set_to_none=True)
         loss_sum = 0.0
-        for _ in range(cfg.train.grad_accum):
+        for micro in range(cfg.train.grad_accum):
             batch = objective.batch(train_ds, cfg.train.batch_size)
-            with ctx:
-                loss = objective.loss(model, batch)
-                loss = loss / cfg.train.grad_accum
-            loss.backward()
+            # DDP all-reduces inside `backward()`, so without `no_sync` an accumulation of 4
+            # costs four all-reduces per optimizer step where one would do. The gradients are
+            # identical either way -- accumulation is a sum and averaging commutes with it --
+            # so the only symptom of getting this wrong is a run that is quietly slower.
+            with distributed.no_sync(model, dd, last=micro == cfg.train.grad_accum - 1):
+                with ctx:
+                    loss = objective.loss(model, batch)
+                    loss = loss / cfg.train.grad_accum
+                loss.backward()
             loss_sum += loss.item()
+        # Rank 0's loss is computed on 1/world_size of the batch that was actually stepped
+        # on. Averaging makes the logged number the one the optimizer saw.
+        loss_sum = distributed.mean(loss_sum, dd)
 
         # Clip by global norm. This is the single most effective guard against a bad
         # batch (or a loss spike) destroying a run that's been going for days.
@@ -498,6 +539,15 @@ def main():
         if why is None and stop_by is not None and time.time() >= stop_by:
             why = f"reached this session's {fmt_dur(cfg.train.stop_after_s)} time budget"
 
+        # **The deadlock guard.** If rank 0 sees a STOP file a millisecond before rank 1
+        # does, rank 0 leaves this loop and every other rank blocks forever inside the next
+        # all-reduce, waiting for a peer that has exited. The symptom is a run that is not
+        # dead, not progressing, and shows no error at all. So the decision is turned into a
+        # collective before it is acted on -- `any` rather than `all`, because a stop only
+        # one rank can see is still a stop.
+        if distributed.agree(why is not None, dd) and why is None:
+            why = "a peer rank asked to stop"
+
         # ---- logging --------------------------------------------------------------
         # `step == max_steps - 1` is there so a run that finishes *normally* gets a line for
         # its final step, the way a bounded stop always has. Without it the last line lands
@@ -515,7 +565,7 @@ def main():
             steps_done = step - prev_log_step
             prev_log_step = step
             tok_per_sec = tokens_per_step * steps_done / dt
-            raw = model._orig_mod if hasattr(model, "_orig_mod") else model
+            raw = distributed.unwrap(model)
             mfu = raw.estimate_mfu(tok_per_sec)
             mem = torch.cuda.max_memory_allocated() / 1e9 if device == "cuda" else 0
             s_per_step = dt / steps_done
@@ -588,7 +638,9 @@ def main():
                 wandb.log({"val_loss": val_loss}, step=step)
             if val_loss < best_val:
                 best_val = val_loss
-                save_checkpoint(out_dir / "ckpt_best.pt", model, optimizer, cfg, step, best_val)
+                if dd.is_main:
+                    save_checkpoint(out_dir / "ckpt_best.pt", to_save, optimizer, cfg,
+                                    step, best_val)
             t0 = time.time()  # don't bill eval time to the next step's throughput
 
         # `0` reads as "never" for every one of these cadences, which is what a person
@@ -600,8 +652,9 @@ def main():
 
         if step > 0 and cfg.train.ckpt_every and step % cfg.train.ckpt_every == 0:
             tc = time.time()
-            save_checkpoint(out_dir / "ckpt_last.pt", model, optimizer, cfg, step, best_val,
-                            dataset=train_ds)
+            if dd.is_main:
+                save_checkpoint(out_dir / "ckpt_last.pt", to_save, optimizer, cfg, step,
+                                best_val, dataset=train_ds)
             print(f"  >> saved ckpt_last.pt at step {step}  ({fmt_dur(time.time() - tc)})")
             t0 = time.time()
 
@@ -610,8 +663,9 @@ def main():
         # save at the exact current step, then exit 0.
         if why:
             print(f"[stop] {why} -- saving ckpt_last.pt at step {step} and exiting")
-            save_checkpoint(out_dir / "ckpt_last.pt", model, optimizer, cfg, step, best_val,
-                            dataset=train_ds)
+            if dd.is_main:
+                save_checkpoint(out_dir / "ckpt_last.pt", to_save, optimizer, cfg, step,
+                                best_val, dataset=train_ds)
             if stop_file.exists():
                 stop_file.unlink()  # so the next run doesn't stop immediately
             log_session("session_end", reason=why, last_step=step,
@@ -627,6 +681,7 @@ def main():
             # describe the whole run. One is available on demand at any point:
             print(f"[stop] a report of the run so far: "
                   f"python -m aksharallm.train.report {cfg.name}")
+            distributed.teardown()
             return
 
     # final
@@ -635,11 +690,12 @@ def main():
     print(f"\nfinal val {objective.metric} {val_loss:.4f}  "
           f"{'ppl' if objective.comparable_to_ar else 'ppl <='} "
           f"{math.exp(min(val_loss, 20)):.2f}")
-    save_checkpoint(out_dir / "ckpt_last.pt", model, optimizer, cfg,
-                    cfg.train.max_steps - 1, min(best_val, val_loss), dataset=train_ds)
-    if val_loss < best_val:
-        save_checkpoint(out_dir / "ckpt_best.pt", model, optimizer, cfg,
-                        cfg.train.max_steps - 1, val_loss)
+    if dd.is_main:
+        save_checkpoint(out_dir / "ckpt_last.pt", to_save, optimizer, cfg,
+                        cfg.train.max_steps - 1, min(best_val, val_loss), dataset=train_ds)
+        if val_loss < best_val:
+            save_checkpoint(out_dir / "ckpt_best.pt", to_save, optimizer, cfg,
+                            cfg.train.max_steps - 1, val_loss)
     log_session("session_end", reason="max_steps", last_step=cfg.train.max_steps - 1,
                 steps=cfg.train.max_steps - start_step, elapsed=time.time() - run_t0,
                 final_val_loss=val_loss)
@@ -649,7 +705,9 @@ def main():
     print(f"checkpoints in {out_dir}")
     # The end of the budget: the one moment a report can describe the whole run rather than
     # the evening that just ended. Stops do not write one — see the stop path above.
-    report.write_quietly(out_dir, run=cfg.name)
+    if dd.is_main:
+        report.write_quietly(out_dir, run=cfg.name)
+    distributed.teardown()
 
 
 if __name__ == "__main__":

@@ -444,6 +444,85 @@ OOM, and bad configs in 30 seconds instead of six days.
 
 ---
 
+## More than one GPU
+
+There is one card in this machine and there will not be a second one. That is not a reason to
+leave the distributed path unwritten, and — more to the point — not a reason to leave it
+**untested**: the `gloo` backend runs the whole thing across CPU processes, so the process
+group, the rank split, the all-reduce and the rank-0-only writes are all exercised with no
+CUDA anywhere.
+
+```mermaid
+flowchart LR
+    D["one global batch"] --> A["rank 0<br/>its own micro-batch"]
+    D --> B["rank 1<br/>a DIFFERENT micro-batch"]
+    A --> GA["grad A"]
+    B --> GB["grad B"]
+    GA --> R["all-reduce<br/>every rank ends up with the mean"]
+    GB --> R
+    R --> S["identical step<br/>on every rank"]
+```
+
+Every rank holds a full copy of the model, so the parameters stay identical forever and the
+only thing that crosses between processes is a gradient.
+
+```bash
+scripts/multigpu.sh 2 configs/small-code.yaml          # 2 GPUs
+DEVICE=cpu scripts/multigpu.sh 2 configs/tiny.yaml     # 2 CPU processes, to test the path
+```
+
+Everything else works unchanged — the STOP file, resume, the session log — because
+`train/distributed.py` is a no-op when `torchrun` has not set `RANK`/`WORLD_SIZE`.
+
+### Four things that are wrong by default
+
+**1. Every rank must see different data.** The bug is not a crash. If two ranks draw the same
+batch, the all-reduce averages two copies of one gradient and you have bought nothing but
+heat — and the loss curve looks completely normal. The loader is seeded `seed + rank`, and a
+test asserts two ranks draw different batches from one corpus.
+
+**2. Accumulation must not all-reduce every micro-batch.** DDP synchronises inside
+`backward()`, so `grad_accum: 4` costs four all-reduces per optimizer step where one would
+do. `no_sync()` on all but the last micro-step is the fix. The gradients are **identical**
+either way — accumulation is a sum and averaging commutes with it — so the only symptom of
+getting this wrong is a run that is quietly slower.
+
+**3. A stop must be agreed before it is acted on.** This is the one that hangs. If rank 0
+reads a STOP file a millisecond before rank 1 does, rank 0 leaves the loop and rank 1 blocks
+forever inside the next all-reduce waiting for a peer that has gone. The symptom is a run
+that is not dead, not progressing, and shows no error at all. Demonstrated rather than
+asserted:
+
+```
+agree=False: 1/2 ranks exited cleanly     <- rank 1 never got the message
+agree=True : 2/2 ranks exited cleanly
+```
+
+**4. The numbers scale.** `tokens_per_step` is `batch × accum × seq × world_size`. Reporting
+the per-rank figure makes throughput, the token budget, the ETA and the cost per million
+tokens all wrong by exactly `world_size`, in the flattering direction. And a loss printed
+from rank 0 alone is computed on `1/world_size` of the batch that was actually stepped on, so
+it is averaged before it is logged.
+
+### Measured
+
+Two CPU ranks through the real trainer, against the same config single-process:
+
+| | single | 2 ranks (gloo) |
+|---|---|---|
+| reported batch | 512 tokens/step | **1,024 tokens/step** |
+| final val after 20 steps | 8.2025 | **8.1413** |
+
+Better, because it saw twice the tokens in the same number of steps. That is also the thing
+to understand before launching: **N GPUs finish `train.max_steps` in 1/N the time having seen
+N times the tokens.** If you want the global batch held fixed instead, halve `grad_accum`.
+
+One more, easy to discover late: `torch.compile` hides the module behind `_orig_mod` and DDP
+behind `module`. Either left on prefixes every key in the checkpoint and it loads nowhere.
+`distributed.unwrap()` is the single place that takes both off, in that order, and everything
+that reaches for a method the wrappers do not forward — `estimate_mfu`, `state_dict` — goes
+through it.
+
 ## The code, in reading order
 
 | # | file | what to look for |
@@ -458,10 +537,15 @@ OOM, and bad configs in 30 seconds instead of six days.
 | 7 | [`aksharallm/train/stopfile.py`](../aksharallm/train/stopfile.py) | `parse` → `reached` — the three things a STOP file can hold. The whole stop contract, shared by pretraining, SFT and QAT |
 | 8 | same file + `pretrain.py` | `claim_pid_file`, `resolve_stop_step`, `_request_stop` — the signal handler, the pid file, and the single save-and-exit path every kind of stop goes through |
 | 9 | [`aksharallm/train/runlog.py`](../aksharallm/train/runlog.py) | `split_sessions` / `summarise_session` — how `train_log.jsonl` is read back, by both `scripts/sessions.py` and the portal |
+| 10 | [`aksharallm/train/distributed.py`](../aksharallm/train/distributed.py) | the docstring's four defaults that are wrong, then `agree` — the deadlock guard — and `unwrap`. Then find the five places `pretrain.py` calls into it |
 
 What pins it: `tests/test_pipeline.py::test_warmup_is_linear_and_peaks_at_base_lr`,
 `::test_cosine_decays_to_the_floor_and_never_below`, and the stop-file group
 (`test_empty_stop_file_means_stop_now`, `::test_a_deadline_stop_file_fires_on_time_not_on_a_step`).
+`tests/test_distributed.py` spawns two gloo processes and checks the arithmetic: the
+all-reduce really averages, a stop seen by one rank is seen by all, `no_sync` changes the
+communication and not the answer, and two ranks draw different batches.
+
 Break the warmup on purpose in [lesson 5](lessons/05-training-loop.md), the stop contract in
 [lesson 6](lessons/06-stop-resume.md).
 
