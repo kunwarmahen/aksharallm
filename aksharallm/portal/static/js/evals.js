@@ -403,9 +403,28 @@ function renderContamination(latest) {
     }));
   const anyDirty = (latest.suites || []).some((s) =>
     (s.parts.answered || {}).dirty > 0);
+  /* A partial scan produces the same table with smaller numbers, so it has to be labelled
+     where the numbers are — not in the log that scrolled away. "No contamination found"
+     read off 5% of the corpus is not a finding. Reports written before `coverage` existed
+     have no field to check, so they say nothing rather than claiming to be complete. */
+  const cov = latest.coverage;
+  let scope = '';
+  if (cov) {
+    const partial = cov.scanned_tokens < cov.total_tokens || cov.items_per_suite != null;
+    scope = partial
+      ? `<p class="ev-hint dirty"><strong>Partial scan — these are lower bounds.</strong> `
+        + `${(cov.scanned_tokens / Math.max(1, cov.total_tokens) * 100).toFixed(1)}% of the `
+        + `corpus${cov.items_per_suite == null ? ''
+          : `, first ${fmt.int(cov.items_per_suite)} items per suite`}. `
+        + `Contamination outside what was read is invisible, not absent.</p>`
+      : `<p class="ev-hint">Full scan: ${fmt.int(cov.texts)} items against all `
+        + `${fmt.compact(cov.total_tokens)} training tokens`
+        + `${cov.verified ? ', every hit verified against the real token stream' : ''}.</p>`;
+  }
   box.innerHTML =
     `<table><thead><tr><th>suite</th><th>part</th><th>checked</th><th>dirty</th>`
     + `<th>rate</th><th>too short</th></tr></thead><tbody>${rows.join('')}</tbody></table>`
+    + scope
     + `<p class="ev-hint">${latest.n}-gram overlap, ${fmt.ago(latest.when)}. `
     + (anyDirty
       ? '<strong class="dirty">Some answered items appear in the training data.</strong> '
@@ -507,14 +526,18 @@ async function loadAudits() {
 function wireAudit() {
   $('#ev-con-run').addEventListener('click', async () => {
     try {
+      const scan = $('#ev-con-scan').value;
       await post('/api/eval/audit', {
         kind: 'contaminate',
         config: $('#ev-con-config').value,
         suites: $('#ev-con-suites').value,
+        max_tokens: scan === '' ? null : Number(scan),
         verify: true,
       });
-      flash('Checking for leakage — a full pass over 10B tokens takes about half an hour.',
-        'ok');
+      flash(scan === ''
+        ? 'Checking for leakage — a full pass over 10B tokens takes about half an hour.'
+        : 'Quick look started. It reads part of the corpus, so the result is a lower '
+          + 'bound — run the full pass before quoting a number.', 'ok');
     } catch (err) { flash(err.message, 'error'); }
   });
   $('#ev-dom-run').addEventListener('click', async () => {

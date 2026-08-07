@@ -346,6 +346,26 @@ judge:
    because the portal writes it there; the reader excludes it by name. Without that the
    running job appears in the table as an empty evaluation.
 
+7. **That folder holds two different shapes, and telling them apart by *name* does not
+   work.** The audits live there too — contamination, calibration, dedup — deliberately, so
+   the Eval tab reads one directory. But a **contamination report uses the key `suites` for
+   a list** of per-suite overlap records, where a result uses it for a `{name: score}` dict.
+   `Results.rows()` called `.items()` on the list, which raised inside `/api/eval`, which
+   made the API answer `{"ok": false}`, which made the browser build an empty suite list —
+   so the whole tab arrived with **nothing selectable and Evaluate disabled**, three layers
+   from the cause. Calibration and dedup carry no `suites` key at all, never crashed, and
+   quietly became rows with no score and no step. `report.is_result()` now decides by
+   **shape**: `suites` must be a dict. The lesson generalises past this file — a folder that
+   several producers write into needs a structural check, because a name-based one only ever
+   excludes the filenames whoever wrote it had already thought of.
+
+8. **`--label` names the comparison, not the model.** The step, the checkpoint and the run
+   are already recorded beside it, so repeating them in the label wastes the one free-text
+   field. Use it for what you will later want to line rows up by — the stage (`base`, `sft`,
+   `dpo`), the variant under test (`nf4-g64`, `yarn4x`, `pre-dedup`), or the point in a long
+   run (`mid-phase2`). Two rows that belong in the same comparison should differ in exactly
+   one thing, and the label is how you find them again in a table of thirty.
+
 ## Is the benchmark trustworthy? (contamination, and the number hiding two)
 
 Every score above assumes two things nobody had checked. This section checks them.
@@ -461,6 +481,41 @@ wrong in:
   two thousand full scans. Small enough to ignore in a summary, too large to leave unstated
   in a finding somebody will quote — so `--verify` re-reads the actual tokens behind every
   hit and drops the ones that do not hold up.
+- **A partial scan says so.** Every report carries a `coverage` block, and both ways of
+  going faster set `partial: true`. See below.
+
+#### Going faster, and why only one of the two knobs is in the portal
+
+There are two ways to make the check finish sooner, and they are not interchangeable.
+
+| flag | shrinks | what it costs you |
+|---|---|---|
+| `--max-tokens N` | the **scan** — less corpus read | leaks in the unread part are invisible, but every benchmark item is still checked, so it degrades *evenly* |
+| `--limit N` | the **probe** — fewer benchmark items | most of the benchmark is never checked at all, and the loader takes the **first** N rows rather than a sample, so what is left out is not a random remainder |
+
+The asymmetry is because of where the cost is. The scan is `O(training tokens)` — ten
+billion of them, about half an hour — while the probe is a sorted hash array searched with
+`np.searchsorted`. Measured on this project's `mc` suites: the full probe is **58,940 texts
+and 2.14M distinct 13-grams, built in 19 seconds**, against `--limit 50`'s 500 texts and
+7,980 n-grams in 0.1s. So `--limit` saves about nineteen seconds off a thirty-minute run
+and stops checking 99% of the benchmark.
+
+That is why the portal's panel offers **scan depth and not item count**: whole corpus (the
+default and the real answer), first 500M tokens, first 2B. `--limit` remains on the CLI,
+where you are more likely to be deliberately probing one suite.
+
+**Either way the report records what it looked at**, because until it did, a partial scan
+was byte-indistinguishable from a complete one — same fields, same shape, a smaller dirty
+count that reads as good news:
+
+```json
+"coverage": { "scanned_tokens": 80000000, "total_tokens": 10000000000,
+              "items_per_suite": 40, "texts": 80, "verified": true, "partial": true }
+```
+
+The Eval tab keys on `partial` and puts **"Partial scan — these are lower bounds"** directly
+above the table, not in a log that has scrolled away. "No contamination found" read off 0.8%
+of the corpus is not a finding.
 
 ### 2. One validation number is hiding two
 

@@ -217,6 +217,22 @@ def cmd_contaminate(args) -> int:
         print(f"  verified {len(hits)}/{before} hits against the real token stream")
 
     out = con.summarise(hits, probe, args.n)
+
+    # How much was actually looked at. Without this a partial scan is indistinguishable from
+    # a full one -- same shape, same fields, a smaller dirty count -- and it is wrong in the
+    # optimistic direction, which for a contamination check is the direction that matters.
+    # `--limit` shrinks the probe (fewer benchmark items checked) and `--max-tokens` shrinks
+    # the scan (less corpus read); both under-count, so both are recorded even when unset.
+    scanned = sum(min(Path(b).stat().st_size // 2, args.max_tokens or total_tokens)
+                  for b in bins)
+    out["coverage"] = cov = con.coverage(
+        total_tokens=total_tokens, max_tokens=None if scanned >= total_tokens else scanned,
+        items_per_suite=args.limit, texts=len(texts), verified=args.verify)
+    if cov["partial"]:
+        print(f"\nPARTIAL SCAN — {scanned / max(1, total_tokens):.1%} of the corpus"
+              f"{'' if args.limit is None else f', first {args.limit} items per suite'}. "
+              f"Every number below is a LOWER BOUND on the real contamination.")
+
     print(f"\n{'suite':>12} {'part':>10} {'items':>7} {'dirty':>7} {'rate':>7}")
     for s in out["suites"]:
         for part, p in sorted(s["parts"].items()):

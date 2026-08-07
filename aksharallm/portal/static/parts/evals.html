@@ -120,10 +120,21 @@
                   <option value="mc">multiple choice</option>
                   <option value="all">everything</option>
                 </select></label>
+              <!-- Scan depth, not item count. `--limit` (fewer benchmark items) is
+                   deliberately NOT offered: it barely saves time, because the cost is the
+                   corpus, and it silently stops checking most of the benchmark. Reading
+                   less of the CORPUS at least degrades evenly across every item. -->
+              <label class="field"><span class="field-label">how much to read</span>
+                <select id="ev-con-scan">
+                  <option value="">the whole corpus — the real answer (~30 min)</option>
+                  <option value="500000000">first 500M tokens — a quick look (~2 min)</option>
+                  <option value="2000000000">first 2B tokens (~6 min)</option>
+                </select></label>
             </div>
             <div class="ev-row">
               <button id="ev-con-run" class="ghost" type="button">Check for leakage</button>
-              <span class="ev-hint">a full pass over 10B tokens takes ~30 min</span>
+              <span class="ev-hint">Anything less than the whole corpus gives a
+                <strong>lower bound</strong> — the result says so, and says how much it read.</span>
             </div>
             <div id="ev-con-out" class="ev-audit-out"></div>
           </div>

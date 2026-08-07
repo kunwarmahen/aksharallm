@@ -315,3 +315,33 @@ def test_a_saved_report_can_rescore_without_scanning_again(tmp_path):
     clean = con.clean_score(result, set(saved["dirty_ids"]))
     assert clean["dropped"] == 1 and clean["kept"] == 1
     assert clean["clean"] == 0.0, "only q1 leaked its answer, and q1 was the correct one"
+
+
+def test_a_partial_scan_is_recorded_as_partial():
+    """The whole point of `coverage`: a report from half the corpus must not be readable as
+    a report from all of it. Both ways of going faster under-count, so both set `partial`."""
+    full = con.coverage(total_tokens=10_000_000_000, max_tokens=None,
+                        items_per_suite=None, texts=58_940, verified=True)
+    assert full["partial"] is False
+    assert full["scanned_tokens"] == full["total_tokens"] == 10_000_000_000
+
+    short_scan = con.coverage(total_tokens=10_000_000_000, max_tokens=500_000_000,
+                              items_per_suite=None, texts=58_940, verified=True)
+    assert short_scan["partial"] is True
+    assert short_scan["scanned_tokens"] == 500_000_000
+
+    # `--limit` reads the whole corpus but checks only some of the benchmark. Still partial:
+    # the loader takes the FIRST N rows, so the unchecked items are not a random remainder.
+    few_items = con.coverage(total_tokens=10_000_000_000, max_tokens=None,
+                             items_per_suite=50, texts=500, verified=True)
+    assert few_items["partial"] is True
+    assert few_items["scanned_tokens"] == few_items["total_tokens"]
+
+
+def test_a_bound_larger_than_the_corpus_is_not_partial():
+    """`--max-tokens 10^18` on a 10B corpus read everything. Reporting that as a partial
+    scan would train the reader to ignore the warning that matters."""
+    cov = con.coverage(total_tokens=10_000_000_000, max_tokens=10**18,
+                       items_per_suite=None, texts=10, verified=False)
+    assert cov["partial"] is False
+    assert cov["scanned_tokens"] == 10_000_000_000

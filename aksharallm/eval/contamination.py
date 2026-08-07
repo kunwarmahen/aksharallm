@@ -312,6 +312,34 @@ def summarise(hits: dict[str, int], probe: Probe, n: int) -> dict:
                                     if k.split("\t")[2] == "question"})}
 
 
+def coverage(total_tokens: int, max_tokens: int | None, items_per_suite: int | None,
+             texts: int, verified: bool) -> dict:
+    """How much of the benchmark and how much of the corpus this report actually looked at.
+
+    Without it a partial scan is **indistinguishable from a complete one**: identical
+    fields, identical shape, and a smaller dirty count that reads as good news. Both ways of
+    going faster under-count, so both are recorded even when unset —
+
+    - `max_tokens` shrinks the *scan*: less corpus read, so leaks in the unread part are
+      invisible. Degrades evenly across every benchmark item.
+    - `items_per_suite` shrinks the *probe*: fewer benchmark items checked at all. Worse
+      than it sounds, because the loader takes the **first** N rows rather than a sample, so
+      the unchecked items are not a random remainder.
+
+    `partial` is the flag every renderer should key on. A contamination number is only a
+    finding when it is `False`.
+    """
+    scanned = int(min(total_tokens, max_tokens) if max_tokens else total_tokens)
+    return {
+        "scanned_tokens": scanned,
+        "total_tokens": int(total_tokens),
+        "items_per_suite": items_per_suite,
+        "texts": int(texts),
+        "verified": bool(verified),
+        "partial": scanned < int(total_tokens) or items_per_suite is not None,
+    }
+
+
 def clean_score(result: dict, dirty_ids: set[str]) -> dict | None:
     """A benchmark result re-scored with the contaminated items removed.
 

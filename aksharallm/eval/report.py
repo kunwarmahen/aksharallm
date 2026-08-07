@@ -29,6 +29,29 @@ from .suites import SUITES
 NOT_RESULTS = {"current.json"}
 
 
+def is_result(data: object) -> bool:
+    """Is this parsed JSON a scored evaluation, as opposed to something else in `logs/eval/`?
+
+    Decided by **shape, not filename**. The directory also holds *audits* — contamination,
+    calibration, dedup — which measure the benchmark rather than the model, and they are
+    written here on purpose so the Eval tab reads one folder. Two of those shapes are
+    actively hostile to `rows()`:
+
+    - a contamination report uses the key ``suites`` for a **list** of per-suite overlap
+      records, so `.items()` on it raises `AttributeError` and takes the whole tab down —
+      the API returns `{"ok": false}`, `renderSuites` builds an empty checkbox list, and
+      every suite becomes unselectable with Evaluate stuck disabled;
+    - calibration and dedup carry no ``suites`` key at all, so they used to sail through as
+      rows with no scores and no checkpoint — phantom evaluations in the trend table.
+
+    `NOT_RESULTS` could not have caught either: it is an exact-name set, so it only ever
+    excludes the one filename someone thought of. Every audit added later would have to
+    remember to add itself. A result is the thing `rows()` can actually read, so that is
+    what gets tested for.
+    """
+    return isinstance(data, dict) and isinstance(data.get("suites"), dict)
+
+
 def results_dir(root: Path | str | None = None) -> Path:
     """Where evaluations are recorded. Deliberately under `logs/`, not `data/`: a result is
     something this project produced, not something it downloaded."""
@@ -57,6 +80,8 @@ class Results:
             try:
                 data = json.loads(path.read_text())
             except (OSError, ValueError):
+                continue
+            if not is_result(data):
                 continue
             prov = data.get("provenance") or {}
             if run and prov.get("run") != run:

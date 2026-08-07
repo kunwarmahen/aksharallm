@@ -176,6 +176,36 @@ def test_the_command_is_the_one_you_would_type(repo, spy_popen):
     assert res["state"] == "running"
 
 
+def test_the_quick_look_reaches_the_scan_and_not_the_probe(repo, spy_popen):
+    """The contamination panel offers scan depth (`--max-tokens`) and deliberately not item
+    count (`--limit`).
+
+    They are not interchangeable. The cost of the check is the corpus — 10B tokens streamed
+    past a sorted hash array — so cutting items saves almost nothing (the whole `mc` probe
+    builds in 19s) while silently leaving most of the benchmark unchecked. Cutting the scan
+    buys time proportionally and degrades *evenly* across every item. So one is exposed and
+    the other is not, and this asserts that on the command line where it is decided.
+    """
+    (repo / "configs").mkdir(exist_ok=True)
+    (repo / "configs" / "small-code.yaml").write_text("model: {}\n")
+    EvalJobs(repo).start_audit({"kind": "contaminate", "config": "configs/small-code.yaml",
+                               "suites": "mc", "max_tokens": 500_000_000, "verify": True})
+    cmd = spy_popen["cmd"]
+    assert cmd[2:5] == ["-m", "aksharallm.eval", "contaminate"]
+    assert cmd[cmd.index("--max-tokens") + 1] == "500000000"
+    assert "--verify" in cmd
+    assert "--limit" not in cmd
+
+
+def test_the_full_scan_passes_no_bound_at_all(repo, spy_popen):
+    """`max_tokens: null` from the browser must mean "read everything", not "read 0"."""
+    (repo / "configs").mkdir(exist_ok=True)
+    (repo / "configs" / "small-code.yaml").write_text("model: {}\n")
+    EvalJobs(repo).start_audit({"kind": "contaminate", "config": "configs/small-code.yaml",
+                               "suites": "mc", "max_tokens": None, "verify": True})
+    assert "--max-tokens" not in spy_popen["cmd"]
+
+
 def test_a_group_alias_is_expanded_before_it_reaches_the_command_line(repo, spy_popen):
     """`fast` is a portal-side convenience; the recorded command has to name the actual
     suites, or a result file cannot say what was measured."""
@@ -230,6 +260,69 @@ def test_the_running_job_state_is_not_mistaken_for_a_result(repo):
     (repo / "logs" / "eval" / "current.json").write_text('{"job": "x", "state": "running"}')
     rows = EvalJobs(repo).status()["results"]
     assert len(rows) == 1 and rows[0]["step"] == 100
+
+
+def _audits(repo: Path):
+    """The three audit shapes that really share `logs/eval/`, keys copied from files the
+    CLI wrote. Contamination reusing the key `suites` for a *list* is the whole point."""
+    d = repo / "logs" / "eval"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "contamination-1786042785.json").write_text(json.dumps({
+        "n": 13, "dirty_ids": [],
+        "suites": [{"suite": "piqa", "parts": {"question": {"checkable": 10, "dirty": 0,
+                                                            "rate": 0.0}}}],
+    }))
+    (d / "calibration-tiny-20260806-193614.json").write_text(json.dumps({
+        "n_total": 100, "n_fit": 50, "n_scored": 50, "temperature": 1.02,
+        "before": {"ece": 0.0135}, "after": {"ece": 0.0141}, "checkpoint": "tiny/ckpt_best.pt",
+    }))
+    (d / "dedup-tinystories-20260806-233309.json").write_text(json.dumps({
+        "documents": 1000, "tokens": 50000, "clusters": 3, "duplicate_documents": 7,
+        "duplicate_token_share": 0.014,
+    }))
+
+
+def test_an_audit_beside_the_results_does_not_take_the_eval_tab_down(repo):
+    """A contamination report calls its list of per-suite overlaps `suites`, and `rows()`
+    wants `suites` to be a name->score map. Iterating one as the other raised
+    `AttributeError: 'list' object has no attribute 'items'` *inside* `/api/eval`, so the
+    whole tab got `{"ok": false}`: no suite checkboxes were built and Evaluate stayed
+    disabled forever. The crash was three layers from the symptom, so this asserts the
+    symptom — status() answers at all, and it answers with the suites the browser ticks."""
+    _result(repo, "20260101-000000-tiny-eval.json", 100, {"piqa": 0.6})
+    _audits(repo)
+    st = EvalJobs(repo).status()
+    assert st["suites"] and st["groups"]["all"]
+
+
+def test_audits_are_not_counted_as_evaluations(repo):
+    """Calibration and dedup carry no `suites` key at all, so they never crashed — they
+    quietly became rows with no score, no checkpoint and no step. A phantom evaluation in
+    the trend table is the failure that does not announce itself."""
+    _result(repo, "20260101-000000-tiny-eval.json", 100, {"piqa": 0.6})
+    _audits(repo)
+    rows = EvalJobs(repo).status()["results"]
+    assert [r["step"] for r in rows] == [100]
+    assert EvalJobs(repo).compare("piqa")["points"][0]["step"] == 100
+
+
+def test_a_result_is_identified_by_shape_not_by_its_filename(repo):
+    """`NOT_RESULTS` is an exact-name set: it excludes the one filename someone thought of,
+    and every audit added later has to remember to add itself. Naming an audit anything at
+    all must still keep it out of the table — and a real result named nothing in particular
+    must still land in it."""
+    from aksharallm.eval.report import is_result
+
+    assert is_result({"suites": {"piqa": {"score": 0.6}}})
+    assert not is_result({"suites": [{"suite": "piqa"}]})
+    assert not is_result({"n_total": 100, "temperature": 1.02})
+    assert not is_result([1, 2, 3])
+
+    _result(repo, "whatever-i-called-it.json", 100, {"piqa": 0.6})
+    (repo / "logs" / "eval" / "20260101-000000-tiny-eval.json").write_text(
+        json.dumps({"suites": [{"suite": "piqa", "parts": {}}]}))
+    rows = EvalJobs(repo).status()["results"]
+    assert [r["file"] for r in rows] == ["whatever-i-called-it.json"]
 
 
 def test_compare_orders_by_training_step_not_by_when_it_was_run(repo):
