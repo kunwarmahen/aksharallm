@@ -350,27 +350,131 @@ python -m aksharallm.diffusion tiny-diffusion-smoke infill \
 
 ---
 
-## Route 7 — understand what you built
+## Route 7 — know what you built
 
-Not a route so much as the thing you should be doing throughout.
+Not really a route: this is the thing you do at every milestone. There are seven
+measurements, they answer different questions, and **none of them is a substitute for
+another**. This section is what to run, when, and how to read the answer.
 
-Every command here takes a checkpoint — a run name resolves to that run's best.
+### When each one fires
 
-| Question | Command | Portal |
-|---|---|---|
-| What is it doing internally? | `python -m aksharallm.interp lens small-code` | **Interp** |
-| Is the benchmark honest? | `python -m aksharallm.eval contaminate --config configs/small-code.yaml` | **Eval** |
-| Is its confidence honest? | `python -m aksharallm.eval calibrate small-code` | **Eval** |
-| Is prose or code harder for it? | `python -m aksharallm.eval domains small-code` | **Eval** |
-| What did the electricity cost? | `python -m aksharallm.portal.cost report` | **Cost** |
-| What happened in that run? | `python -m aksharallm.train.report small-code` | **Report** |
+```mermaid
+flowchart TD
+    P["pretraining finishes"] --> R["📄 run report"]
+    P --> B["📊 benchmarks"]
+    B --> C{"🔍 contamination"}
+    C -->|clean| Q["numbers are quotable"]
+    C -->|dirty| RS["re-score without<br/>the leaked items"]
+    RS --> Q
+    P --> D["🪓 per-domain loss"]
+    P --> K["🎯 calibration"]
 
-The interpretability tools found that this project's 300M model only decides on the answer
-to "The capital of France is" at **block 20 of 24** — with eleven changes of mind before
-that. Three independent methods agree on block 20, which is the only reason to believe it.
+    Q --> SFT["SFT"]
+    SFT --> D2["🪓 per-domain again<br/><i>did Python survive?</i>"]
+    SFT --> DPO["DPO"]
+    DPO --> K2["🎯 calibration again<br/><i>alignment usually breaks it</i>"]
 
-📖 [chapter 17 — interpretability](17-interpretability.md) ·
-[chapter 12 — evaluation](12-eval.md)
+    classDef s fill:#2d6cdf,stroke:#1a4a9e,color:#fff
+    classDef m fill:#e8f0fe,stroke:#2d6cdf,color:#1a1a1a
+    class P,SFT,DPO s
+    class R,B,D,K,D2,K2,RS m
+```
+
+### The seven, and how to read each
+
+Every command takes a checkpoint; a run name resolves to that run's best.
+
+| # | What it answers | Run it | Portal |
+|---|---|---|---|
+| 1 | What happened in that run? | `python -m aksharallm.train.report small-code` | **Report** |
+| 2 | Is it any good? | `python -m aksharallm.eval small-code --suite all --limit 0 --label base` | **Eval** |
+| 3 | Are those scores honest? | `python -m aksharallm.eval contaminate --config configs/small-code.yaml --verify` | **Eval** |
+| 4 | Is prose or code harder for it? | `python -m aksharallm.eval domains small-code` | **Eval** |
+| 5 | Is its confidence honest? | `python -m aksharallm.eval calibrate small-code` | **Eval** |
+| 6 | How much of the corpus was repeats? | `python -m aksharallm.data.dedup data/blend/codeparrot-python.bin` | **Eval** |
+| 7 | What is it doing internally? | `python -m aksharallm.interp lens small-code` | **Interp** |
+| — | What did the electricity cost? | `python -m aksharallm.portal.cost report` | **Cost** |
+
+**1 · The run report.** Written automatically when a run finishes its budget. Read the
+**findings** section first — it is the part that is not just a restatement of the log. It
+measures loss spikes against the EMA rather than against the previous step, and a throughput
+regression against the median session rather than the fastest, because both of the naive
+versions cry wolf constantly.
+
+**2 · Benchmarks.** *A single score means nothing.* Read every number against three things:
+the chance line, its own error bar, and what the same suite scored earlier. `eval suites`
+prints what to **expect** from each one before you run it, which is what stops 25.8% on MMLU
+reading as a failure — 25% is chance, and a 300M model sitting on it is the correct result.
+Suites that move at this scale are PIQA, ARC-Easy and HellaSwag; MMLU, ARC-Challenge, GSM8K
+and HumanEval are not expected to leave the floor until an order of magnitude more
+parameters. **Worry if** a suite is *below* chance by more than its error bar — that is a
+scoring bug, not a weak model.
+
+**3 · Contamination.** How much of the benchmark was already in the training data. Two
+columns, counted separately and read differently: **`question` leaking is normal and mostly
+harmless** — benchmark questions are public web text — while **`answered`** is the question
+*with its answer*, which is what a contaminated corpus memorises. Watch the **`too short`**
+column: items under 13 tokens cannot be checked at all, so "0% dirty" on a suite of
+one-line questions can mean "0% checked". Then re-score rather than eyeballing the rate:
+
+```bash
+python -m aksharallm.eval contaminate --report logs/eval/<report>.json \
+    --against logs/eval/<result>.json
+```
+
+A suite that is 1% dirty and scores the same either way is fine. One that gains points on
+exactly the dirty items is telling you something. **Worry if** the clean score moves by more
+than the suite's error bar.
+
+**4 · Per-domain loss.** A blended run reports one validation number over 85% prose and 15%
+Python, so the average is 85% prose by construction and the model's Python ability is nearly
+invisible in it. Split, they are not alike: **prose 2.7696 (ppl 15.95) vs Python 1.2558
+(ppl 3.51)**. Run it after pretraining for the record, and **again after SFT** — SFT is all
+prose, so if Python loss climbs while the blended total barely moves, that is catastrophic
+forgetting and the total is precisely the number that will not show it. The check that the
+split is honest is that the parts blend back to the run's own val loss.
+
+**5 · Calibration.** Everything else asks whether the model is *right*. This asks whether,
+when it says it is 80% sure, it is right 80% of the time. A model can be accurate and
+overconfident, or weak and perfectly honest, and accuracy cannot tell those apart. Read
+**ECE** — average gap between confidence and correctness — but always beside accuracy, never
+instead of it: a model that always predicts the base rate with the base rate's confidence
+has near-perfect ECE and is useless. **ECE moves with bin count** (10 / 15 / 30 are all
+reported for that reason), so only compare like with like. A fitted **temperature near 1.0**
+means there is nothing a single scalar can fix — the model is already honest. Run it again
+**after DPO**: alignment is where calibration usually degrades, and the base-model number is
+what makes that visible.
+
+**6 · Duplicates.** How much of the corpus is the same thing twice. Quote it **per offset**
+and take at least two — the first sample came from the front of the file, which is not
+representative. Measured here: fineweb-edu **0.014%** of tokens against codeparrot-python
+**8.04%**, two hundred times apart, because FineWeb's own pipeline already deduplicates and
+CodeParrot is full of vendored files and forks (largest cluster: 175 copies of one file).
+
+**7 · Interpretability.** The only one that is about mechanism rather than score, and the
+only one you run out of curiosity rather than duty. Its rule: **a picture that is wrong is
+still a picture**, so every tool here is pinned to something unarguable — the last logit-lens
+row equals the model's real prediction, a final-layer patch restores exactly 100%. This
+project's 300M model only settles on the answer to "The capital of France is" at **block 20
+of 24**, after eleven changes of mind. Three independent methods agree on block 20, which is
+the only reason to believe any of them.
+
+### If you have just finished pretraining, in order
+
+```bash
+python -m aksharallm.train.report small-code                     # what the run did
+python -m aksharallm.eval small-code --suite all --limit 0 --label base
+python -m aksharallm.eval contaminate --config configs/small-code.yaml --verify
+python -m aksharallm.eval domains small-code                     # prose vs Python
+python -m aksharallm.eval calibrate small-code                   # honest confidence?
+```
+
+Do all of it **before** SFT. Every one of these describes the base model, and SFT is the
+point after which you can no longer measure what the base model was.
+
+📖 [chapter 12 — evaluation](12-eval.md) ·
+[chapter 17 — interpretability](17-interpretability.md) ·
+[chapter 9 — the run report](09-running-and-watching.md)
 
 ---
 
