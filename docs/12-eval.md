@@ -307,6 +307,37 @@ exactly those commands: pick a checkpoint, tick suites, press Evaluate. It leads
 trend chart rather than the Run button, for the same reason the Finetune tab leads with the
 memory budget — one benchmark score in isolation is close to meaningless.
 
+### A job typed in a terminal shows up in the browser
+
+Both directions, and *while it is running* — not only once it has finished.
+
+That distinction was a real gap. Results always appeared in both places, because both write
+into `logs/eval/`, but only the portal's own launcher wrote `eval.pid` and `current.json`.
+So a `python -m aksharallm.eval` in a terminal left the tab reporting "nothing running",
+with a Start button beside it, no progress bar, and no log — which reads as "the portal has
+not noticed my work" and is exactly the disagreement between browser and terminal this
+project is built to avoid.
+
+`eval/jobs.py` is `pretrain.claim_pid_file` for evaluation, and for the same reason: **the
+claim belongs to the directory, not to a command line**, so whoever started the job the
+readers get one answer. A terminal job now publishes its pid, what it is working on, and a
+`source: "terminal"` marker, and it tees its own stdout to `logs/eval/<job>.log` so the
+tab's progress bar and log tail work — a portal job gets that for free from `Popen`.
+
+Three things it is careful about, each of which would otherwise make the tab lie:
+
+- **It never takes a live job's slot.** A second evaluation runs unannounced and says so,
+  rather than overwriting the first's state and making the portal show progress for one job
+  under the description of another.
+- **It records its own ending.** For an abandoned job the portal infers done-vs-failed by
+  looking for the artifact, which only works when the job name matches the artifact name —
+  and a terminal job does not control that. It writes `done` or `failed` itself, so the
+  guess is never needed.
+- **A stale pid does not wedge it.** A `kill -9` leaves the file behind, so readers check
+  liveness. The recycled-pid guard is the recorded command line rather than a substring
+  match on the module name, which also means a job started by a wrapper or a notebook is
+  still visible.
+
 ## Configuration
 
 The judge reads `judge:` in `configs/portal.yaml`, which is the Code tab's `explain:`
@@ -687,7 +718,8 @@ word `undefined` — exactly where a reader most needs to trust the number.
 | 9 | [`eval/contamination.py`](../aksharallm/eval/contamination.py) | `ngram_hashes` (the Horner trick that makes ten billion tokens tractable), `build_probe` (and the trim that makes `answered` mean something), `scan_bin`'s chunk overlap, `clean_score` |
 | 10 | [`eval/domains.py`](../aksharallm/eval/domains.py) | `derive_spans` then `verify_spans` — the derivation and the check on it. `blended()` is the end-to-end test: it has to agree with the run's own val loss |
 | 11 | [`eval/calibration.py`](../aksharallm/eval/calibration.py) | the docstring's four ways ECE lies, then `collect` — where the memory goes, and why positions are subsampled. `fit_temperature` last, and read why NLL-optimal is not ECE-optimal |
-| 12 | [`aksharallm/portal/evals.py`](../aksharallm/portal/evals.py) | `EvalJobs` — the tab runs the CLI in a subprocess and reads the same result files; `start_audit` adds the two checks above to the same job lock |
+| 12 | [`eval/jobs.py`](../aksharallm/eval/jobs.py) | `announced` — how a job typed in a terminal becomes visible in the browser. Read the refusal first (it must never take a live job's slot), then `_Tee`, which is what makes the progress bar work for a job the portal did not launch |
+| 13 | [`aksharallm/portal/evals.py`](../aksharallm/portal/evals.py) | `EvalJobs` — the tab runs the CLI in a subprocess and reads the same result files; `start_audit` adds the two checks above to the same job lock. `_pid` is the other half of `jobs.py`: liveness, then the recorded command line rather than a substring match |
 
 What pins it: `tests/test_contamination.py` leads with a **positive control** — a known item
 planted in a fake corpus that the scanner must find — because a checker that reports 0%

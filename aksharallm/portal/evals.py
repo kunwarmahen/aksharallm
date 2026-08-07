@@ -103,7 +103,18 @@ class EvalJobs:
     # ---- process state -----------------------------------------------------------------
     def _pid(self) -> int | None:
         pid = _read_int(self.pid_file)
-        if pid and _alive(pid) and "aksharallm.eval" in _cmdline(pid):
+        if not pid or not _alive(pid):
+            return None
+        live = _cmdline(pid)
+        if "aksharallm.eval" in live:
+            return pid
+        # A job that published its own identity is trusted on that identity rather than on
+        # how its command line happens to read. The substring test above is really a guard
+        # against pid reuse after a `kill -9`; a recycled pid would not also reproduce the
+        # exact command line recorded when the claim was made. This is what lets a job
+        # started some other way -- a wrapper script, a notebook -- still be visible here.
+        cur = self._current()
+        if cur.get("pid") == pid and cur.get("cmdline") and cur["cmdline"] == live:
             return pid
         return None
 

@@ -21,11 +21,13 @@ files in.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 import time
 from pathlib import Path
 
+from .jobs import announced
 from .report import Results, compare_table, summary_table
 from .runner import Harness, Options, describe
 from .sources import EvalError, SOURCES, fetch, load, status
@@ -469,6 +471,24 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
+#: Commands worth publishing to the portal. The rest finish before it could poll.
+ANNOUNCED = {"run", "contaminate", "domains", "calibrate", "fetch"}
+
+
+def _job_meta(args) -> dict:
+    """What the Eval tab shows beside "running": enough to tell two jobs apart."""
+    meta = {}
+    for name, key in (("checkpoint", "checkpoint"), ("config", "config"),
+                      ("label", "label")):
+        value = getattr(args, name, None)
+        if value:
+            meta[key] = str(value)
+    if suite := getattr(args, "suite", None):
+        with contextlib.suppress(Exception):
+            meta["suites"] = resolve(suite)
+    return meta
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     # `python -m aksharallm.eval small-code` should work without typing `run`. Anything that
@@ -485,7 +505,15 @@ def main(argv: list[str] | None = None) -> int:
         handler = getattr(args, "fn", None) or {
             "run": cmd_run, "fetch": cmd_fetch, "suites": cmd_suites,
             "report": cmd_report}[args.cmd]
-        return handler(args)
+        # Tell the portal what this terminal is doing, so the Eval tab shows a job started
+        # here exactly as it shows one started there -- the results always appeared in both,
+        # but the *running* state only ever did for the portal's own launches. Only the
+        # long-running commands: announcing `suites` or `report` would flash a job that is
+        # over before the tab's next poll. See jobs.py.
+        if args.cmd not in ANNOUNCED:
+            return handler(args)
+        with announced(args.cmd, _job_meta(args), root=getattr(args, "root", None)):
+            return handler(args)
     except EvalError as exc:
         print(f"\n  {exc}\n", file=sys.stderr)
         return 1
