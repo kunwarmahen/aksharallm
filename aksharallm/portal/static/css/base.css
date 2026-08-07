@@ -34,8 +34,9 @@
   --sheet-radius: 18px;
   --gap: 16px;
   /* Height of the sticky top bar, so anything that sticks below it can clear it. The bar
-   * wraps to two rows on a phone, so app.js keeps this measured rather than guessed; the
-   * value here is the one-row desktop case, used until the first measurement lands. */
+   * can still wrap to two rows on a phone with a long run name in the picker, so
+   * main.js keeps this measured rather than guessed; the value here is the one-row desktop
+   * case, used until the first measurement lands. */
   --topbar-h: 57px;
 
   /* One content column for the whole portal. Every view is capped at --page-max and

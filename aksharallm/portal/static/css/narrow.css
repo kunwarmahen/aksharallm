@@ -1,16 +1,12 @@
 /* Narrow screens. Loaded last, so these overrides win over every panel above. */
 
 /* ---- narrow screens ------------------------------------------------------------------
- * The top bar is sticky, so its height is spent permanently — and left to wrap on its own
- * it went to three rows and 171px, a fifth of a phone screen and tall enough to swallow
- * the whole control band as soon as the page scrolled, which reads as the controls
- * behaving differently from everything else on the page. Below the width where all three
- * groups fit on one line, the tab strip takes a row of its own instead: two rows, one
- * predictable height, no wrapping that depends on how many tabs exist.
+ * The top bar is sticky, so its height is spent permanently. It used to carry the view
+ * strip, which is what made it wrap — three rows and 171px on a phone, a fifth of the
+ * screen and enough to swallow the control band the moment the page scrolled. The views
+ * are in a drawer now, so the bar is a menu button, a brand and the run picker at every
+ * width, and there is no breakpoint here that depends on how many views exist.
  */
-@media (max-width: 1100px) {
-  .tabs { order: 3; flex: 1 0 100%; margin-left: -4px; }
-}
 
 /* A phone drops what the screen already tells you, and lets each control group have a
  * full-width row of its own. */
@@ -21,6 +17,10 @@
   .topbar { padding: 10px var(--page-gutter); gap: 8px 12px; }
   .brand-sub { display: none; }              /* the mark and the name already say it */
   .topbar-right { gap: 10px; }
+  /* The button keeps the view name, which is information, and drops the word "Menu",
+   * which the three lines beside it already say. */
+  .nav-open-label, .nav-open-sep { display: none; }
+  #nav-open { padding: 6px 10px; }
   /* The select carries `aria-label="run"`, so the printed label is pure height. */
   #run-field .field-label { display: none; }
 

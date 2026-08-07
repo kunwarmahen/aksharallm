@@ -1,4 +1,4 @@
-/* The chrome that never changes: the sticky top bar, and the tab strip inside it. */
+/* The chrome that never changes: the sticky top bar, and the view drawer behind it. */
 
 /* ---- top bar ------------------------------------------------------------------------ */
 .topbar {
@@ -18,7 +18,9 @@
  * would notch the page background in at the seam, so the bar keeps its square edge there
  * and the control band below it carries the curve for both. */
 .topbar:has(+ .view:not([hidden]) > .controls) { border-radius: 0; }
-.brand { display: flex; align-items: baseline; gap: 10px; }
+/* Menu button, then brand, then the run controls hard right. The auto margin does the
+ * spreading rather than `space-between`, which would have pushed the brand to the middle. */
+.brand { display: flex; align-items: baseline; gap: 10px; margin-right: auto; }
 .brand .mark {
   width: 22px; height: 22px; border-radius: 6px; align-self: center;
   background: url('/static/favicon.svg') center / contain no-repeat;
@@ -27,24 +29,101 @@
 .brand-sub { color: var(--ink-muted); }
 .topbar-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 
-/* ---- tabs ----------------------------------------------------------------------------- */
-/* Two views, one page. The tab strip sits in the top bar so the brand, the view and the
- * run selector read as one line of context. */
-/* Six tabs are wider than a phone. A flex item refuses to shrink past its content, so
- * without `min-width: 0` the strip sets a floor under the whole page and every panel
- * inherits the overflow. Instead the strip scrolls sideways on its own: `overflow-x`
- * makes its min-content zero, and the padding/negative-margin pair keeps room for the
- * focus ring, which the scroll container would otherwise clip. */
-.tabs {
-  display: flex; gap: 4px;
-  min-width: 0; overflow-x: auto; overscroll-behavior-x: contain;
-  padding: 4px; margin: -4px -4px -4px 4px;
-  scrollbar-width: none;
+/* ---- the menu button ------------------------------------------------------------------
+ * The views used to be a strip across the bar. Fourteen of them no longer fit anywhere —
+ * on a desktop they filled the middle of the bar edge to edge, and below 1100px they took a
+ * whole second sticky row that every screenful then paid for. They are a drawer now, closed
+ * by default, and the bar keeps one row at every width.
+ *
+ * The cost of hiding them is that nothing on screen says which view you are in, so the
+ * button says it: [☰ Menu · Dashboard].
+ *
+ * Styled by id, not by a `.nav-open` class, and that is not a preference. `nav-open` is
+ * already the open-state class on <body>, so `.nav-open { display: inline-flex }` set the
+ * BODY to inline-flex the moment the drawer opened: the top bar shrank to 140px, the
+ * footer landed halfway down the right-hand side and the phone layout picked up 200px of
+ * horizontal scroll. A state class on <body> shares a namespace with every component
+ * class in the portal — give the two different names, or key one of them off an id. */
+#nav-open { display: inline-flex; align-items: center; gap: 9px; padding: 6px 12px; }
+#nav-open:hover:not(:disabled) { border-color: var(--border); }
+#nav-open[aria-expanded="true"] { background: var(--wash); border-color: var(--border); }
+.nav-open-label { font-weight: 550; }
+.nav-open-sep { color: var(--ink-muted); }
+.nav-current { color: var(--ink); font-weight: 600; }
+
+/* Three lines from one element: the middle is the box, the other two are its pseudos. */
+.burger, .burger::before, .burger::after {
+  display: block; width: 16px; height: 2px; border-radius: 2px; background: currentColor;
 }
-.tabs::-webkit-scrollbar { display: none; }
+.burger { position: relative; }
+.burger::before, .burger::after { content: ''; position: absolute; left: 0; }
+.burger::before { top: -5px; }
+.burger::after { top: 5px; }
+
+/* ---- the view drawer -------------------------------------------------------------------
+ * Fixed, full-height, off-canvas to the left until `body.nav-open`. It overlays the page
+ * rather than pushing it, so no view has to reflow to make room and the layout of every tab
+ * is the same whether the menu is open or not.
+ *
+ * A closed drawer has to be genuinely gone — not tabbable, not read out — which `visibility`
+ * does and a transform alone does not. But it cannot be *animated*: on the way in, focus
+ * moves to the current view's button in the same tick the class is added, and `.focus()` on
+ * a `visibility: hidden` element does nothing at all, so the drawer opened with focus still
+ * on <body>. So visibility switches instantly on open (`0s` delay) and is held back until
+ * the slide has finished on close (`0.22s` delay) — one property, two delays, no timers.
+ * JS also sets `inert`, which is what actually keeps the fourteen buttons out of the tab
+ * order for browsers that would otherwise walk into a transformed subtree. */
+.nav {
+  position: fixed; top: 0; left: 0; bottom: 0; z-index: 40;
+  width: min(272px, 84vw);
+  display: flex; flex-direction: column;
+  padding: 12px 12px 20px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  border-radius: 0 var(--sheet-radius) var(--sheet-radius) 0;
+  overflow-y: auto; overscroll-behavior: contain;
+  transform: translateX(-100%);
+  visibility: hidden;
+  transition: transform 0.22s ease, visibility 0s linear 0.22s;
+}
+body.nav-open .nav {
+  transform: none;
+  visibility: visible;
+  transition: transform 0.22s ease, visibility 0s linear 0s;
+}
+
+.nav-scrim {
+  position: fixed; inset: 0; z-index: 30;
+  background: rgba(11, 11, 11, 0.38);
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.22s ease;
+}
+body.nav-open .nav-scrim { opacity: 1; pointer-events: auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  .nav, .nav-scrim { transition: none; }
+}
+
+.nav-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 2px 4px 6px;
+}
+.nav-title { font-weight: 650; letter-spacing: -0.01em; }
+.nav-close { padding: 4px 9px; font-size: 13px; line-height: 1; }
+
+/* The group headings are for the reader, not the router: they say what you would be trying
+ * to do, which is the only thing that makes fourteen entries scannable. */
+.nav-label {
+  margin: 14px 0 5px; padding: 0 8px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.nav-group { display: flex; flex-direction: column; gap: 2px; }
+
 .tab {
-  padding: 6px 14px; border-color: transparent; color: var(--ink-2);
-  font-weight: 550; flex: none;
+  width: 100%; text-align: left; justify-content: flex-start;
+  padding: 7px 12px; border-color: transparent; color: var(--ink-2);
+  font-weight: 550;
 }
 .tab:hover:not(.on) { border-color: var(--border); }
 .tab.on {

@@ -275,14 +275,20 @@ gradient norm and the LR schedule, the per-session table, the tail of the live l
 config the trainer actually read. Start, stop, "stop after N more steps", "stop at step N"
 and "cancel that" are buttons.
 
-There are three tabs, and each has its own address (`#dashboard`, `#play`, `#code`) so a
-view can be bookmarked or linked to:
+The views live behind the **☰ Menu** button at the top left — it is closed until you ask
+for it, and it names the view you are currently in. Each view also has its own address
+(`#dashboard`, `#play`, `#code`) so it can be bookmarked or linked to. Three of them matter
+while a run is going:
 
-| tab | what it is for |
+| view | what it is for |
 |---|---|
 | **Dashboard** | everything above — the run |
 | **Playground** | talk to the checkpoint the run is producing; see "Testing the model while it trains" |
 | **Code** | a source browser that explains the project back to you with a local model |
+
+The rest of the menu is the other phases of the project — quantizing, fine-tuning,
+evaluating, and so on — each covered by its own chapter, and all of them listed with their
+commands in the [route map](22-journeys.md).
 
 **The portal is a view, not a second system.** It starts runs by running `scripts/phase2.sh`
 and stops them by running `scripts/stop.sh` — the same scripts, with the same pre-flight and

@@ -5,6 +5,7 @@
 import { $, $$, api, flash, fmt, live, post } from './core.js';
 import { state } from './state.js';
 import { VIEWS, showView } from './router.js';
+import { closeNav, wireNav } from './nav.js';
 import { UNIT_MINUTES, UNIT_MORE_STEPS, act, boundPicker, drawCharts, fmtMins, fmtWhen, refresh, renderRuns, renderSessionBudget, schedule, secPerStep, selectRun, wireGpu, wireReport, wireSchedule, wireServe } from './dashboard.js';
 import { wireCode } from './code.js';
 import { wireQuantTab } from './quantize.js';
@@ -21,6 +22,7 @@ import './audio.js';     /* likewise */
 import './vision.js';    /* likewise */
 
 function wire() {
+  wireNav();
   wireGpu();
   wireSchedule();
   wireReport();
@@ -33,8 +35,9 @@ function wire() {
   wireSynthTab();
   wireLearnTab();
   boundPicker.wire();
+  /* Picking a view is the whole reason the drawer is open, so it closes behind you. */
   for (const tab of $$('.tab')) {
-    tab.addEventListener('click', () => showView(tab.dataset.view));
+    tab.addEventListener('click', () => { showView(tab.dataset.view); closeNav(); });
   }
   $('#run-select').addEventListener('change', (e) => selectRun(e.target.value));
 

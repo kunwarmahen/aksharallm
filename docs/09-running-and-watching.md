@@ -485,18 +485,20 @@ flowchart TD
     core["core.js<br/>$, fmt, api, flash"]
     state["state.js<br/>the selected run"]
     router["router.js<br/>which tab is on screen"]
+    nav["nav.js<br/>the view drawer, open/closed"]
     charts["charts.js"]
     md["markdown.js"]
     dash["dashboard.js"]
     tabs["code · docs · quant · lora · evals<br/>synth · interp · longctx · diffusion<br/>learn · play"]
     main["main.js — wire + boot"]
 
-    core --> charts & md & router & dash & tabs & main
+    core --> charts & md & router & nav & dash & tabs & main
     state --> router & dash & tabs
     router --> dash & tabs
     charts --> dash & tabs
     md --> tabs
     dash --> tabs
+    nav --> main
     tabs --> main
 ```
 
@@ -507,6 +509,11 @@ is shown, `leave` when the reader goes elsewhere — which is where a tab stops 
 polling, so a dashboard left up overnight is not also polling five other panels. Adding a
 tab is a `registerTab` call in that tab's module; there is nothing to edit in the router.
 
+`nav.js` sits beside it and owns one thing: whether the view **drawer** is open. The two do
+not know about each other. The drawer's entries are the same `.tab` buttons the router has
+always marked as current, so `nav.js` never names a view and `router.js` never mentions the
+menu.
+
 Two consequences worth stating, because they are the reason for the shape:
 
 - **A tab is inert until you open it.** Nothing in `quantize.js` or `code.js` runs on load. The
@@ -515,25 +522,86 @@ Two consequences worth stating, because they are the reason for the shape:
   `narrow.css` (the small-screen overrides) last. They are separate `<link>`s rather than
   `@import` so the browser fetches them in parallel.
 
+### Fourteen views, one button
+
+The views were a strip of buttons across the top bar for as long as there were three of
+them. At fourteen the strip had stopped working at every width: it filled the middle of a
+desktop bar edge to edge, and below 1100px it took a whole second row of a bar that is
+`position: sticky` — a row every screenful of every view then paid for, forever.
+
+They are a **drawer** now: closed by default, opened from one button at the top left, and it
+overlays the page rather than pushing it, so no view has to reflow to make room.
+
+```mermaid
+flowchart LR
+    btn["☰ Menu · Dashboard<br/>the only chrome left"]
+    drawer["the drawer<br/>fourteen .tab buttons"]
+    router["router.js<br/>showView()"]
+    view["the view"]
+
+    btn -- click --> drawer
+    drawer -- click a .tab --> router
+    router --> view
+    router -- names the current view --> btn
+    drawer -- Esc · scrim · a pick --> btn
+```
+
+Three things about it are worth knowing, because each was a bug before it was a decision:
+
+- **The button says where you are.** With the strip gone, nothing else on the page did. It
+  reads `☰ Menu · Dashboard`, and the name comes from `textContent` of the very button that
+  opens that view — one list, not a second one to drift out of step. On a phone the word
+  "Menu" drops and the view name stays, because the three lines beside it already say
+  "menu" and only the name is information.
+- **Closed means gone, not just off-screen.** A drawer that is merely translated out of
+  frame still holds fourteen entries in the tab order, so Tab from the run picker walks
+  into a menu nobody can see. It is `visibility: hidden` *and* `inert` when closed, and
+  while it is open the top bar, the footer and every view are `inert` instead — so focus
+  cannot walk out behind the scrim, and a screen reader is not offered a page the reader
+  cannot reach. Escape, the scrim and picking a view all close it and hand focus back to
+  the button that opened it.
+- **`visibility` cannot be animated here.** The obvious `transition: transform .22s,
+  visibility .22s` looks right and breaks the keyboard: opening focuses the current view's
+  entry in the same tick the class goes on, and `.focus()` on an element still computing as
+  `visibility: hidden` does nothing at all — the drawer opens with focus stranded on
+  `<body>`. So visibility switches instantly on open and is *delayed* on close
+  (`visibility 0s linear 0.22s`), which slides out and then disappears. One property, two
+  delays, no timers.
+
+**And the trap that cost the most.** The open state is `document.body.classList.add(
+'nav-open')`, and the button that opens the drawer was styled `.nav-open { display:
+inline-flex }`. That selector matches `<body>` too. Opening the menu turned the entire
+document into an inline-flex container: the top bar shrank to 140px and fell 1,300px down
+the page, the footer landed halfway up the right-hand side, and a 390px phone gained 200px
+of horizontal scroll. Nothing errored, and the drawer itself looked perfect — it is
+`position: fixed` and did not care.
+
+A state class on `<body>` shares one namespace with every component class in the portal, and
+no tool warns you. `tests/test_portal_nav.py` now does: it reads the classes the JS puts on
+`document.body`, and fails on any CSS rule whose *subject* is one of them unqualified.
+`body.nav-open .nav` is fine, `.stale main` is fine — `.nav-open { }` is not. The same file
+checks that every view in the router's `VIEWS` has an entry in the drawer, which used to be
+self-evident from a strip you could see all of and is not self-evident from a closed menu.
+
 ### On a phone
 
 Checking a run from bed is half of what this page is for, so it has to survive a 390px
 screen. The layout is fluid rather than fixed — panels stack, the stat tiles go two-up, the
-tab strip swipes sideways with the current tab scrolled into view — and the page itself
-**never scrolls horizontally**, from 320px up.
+menu becomes a full-height sheet 272px wide — and the page itself **never scrolls
+horizontally**, from 320px up.
 
 The top bar is sticky, which means its height is spent *permanently*: whatever it takes is
-gone from every screenful you scroll through. Left to wrap on its own it took three rows and
-171px on a phone — a fifth of the screen, and enough to hide the entire control band behind
-it the moment you scrolled, so the Start/Stop rectangle looked like it was behaving
-differently from everything else on the page. Below 1100px the tab strip therefore takes a
-row of its own, giving a bar that no longer re-wraps every time a tab is added: **83px** on a
-desktop, 133px on a tablet, and 100–130px on a phone depending on how wide the selected
-run's name makes the run picker.
+gone from every screenful you scroll through. It used to carry the view strip, which is what
+made it wrap — three rows and 171px on a phone, a fifth of the screen and enough to hide the
+entire control band behind it the moment you scrolled, so the Start/Stop rectangle looked
+like it was behaving differently from everything else on the page. With the views in a
+drawer the bar is a menu button, a brand and the run picker at every width: **57px** on a
+phone, 65px on a desktop, and 83px on the dashboard, which is the one view that shows the
+run picker's label.
 
-Anything else that sticks has to clear it, and the number is not knowable in CSS — it
-depends on how the bar wrapped. `trackTopbarHeight()` in `js/main.js` measures the bar with a
-`ResizeObserver` and publishes it as `--topbar-h`; the Docs sidebar sticks at
+Anything else that sticks has to clear it, and the number is not knowable in CSS — a long
+run name can still wrap the bar on a phone. `trackTopbarHeight()` in `js/main.js` measures
+the bar with a `ResizeObserver` and publishes it as `--topbar-h`; the Docs sidebar sticks at
 `calc(var(--topbar-h) + var(--gap))`.
 
 ### One column
@@ -588,9 +656,10 @@ too, which is worse:
   below 420px. Narrower than that and the track — and every panel beside it — hangs off the
   screen. Write the floor as `minmax(min(420px, 100%), 1fr)`: identical above 420px, and it
   collapses instead of overflowing below it.
-- A flex item will not shrink past its own content. The tab strip is eight tabs and ~700px
-  wide, so it dragged the whole page out to 558px until it was given `min-width: 0` and its
-  own `overflow-x: auto` — now it scrolls in place instead of scrolling the page.
+- **A flex item will not shrink past its own content.** The old tab strip was eight tabs and
+  ~700px wide, and it dragged the whole page out to 558px until it was given `min-width: 0`
+  and its own `overflow-x: auto`. The strip is gone — that is what the drawer above is for —
+  but the rule is not: any flex row with wide contents in the top bar will do it again.
 - **A form control can have a fixed width in a global rule.** `input[type="number"]` is
   `width: 120px` in `controls.css`; two of them in a `1fr 1fr` grid row pushed the Synth tab
   23px past a 320px phone, because a grid item's automatic minimum is its content's
@@ -857,15 +926,18 @@ page.
 | 11 | [`aksharallm/portal/pipeline.py`](../aksharallm/portal/pipeline.py) | `Pipeline` — the post-training panel. A small parallel reader to `RunStore`, because SFT/DPO/GRPO have no `configs/<run>.yaml` and do have prerequisites |
 | 12 | [`evals.py`](../aksharallm/portal/evals.py) · [`quantize.py`](../aksharallm/portal/quantize.py) · [`finetune.py`](../aksharallm/portal/finetune.py) · [`synth.py`](../aksharallm/portal/synth.py) | one job runner per tab. Read any *one* of them — they are the same shape: start a subprocess of the CLI, stream its output, write a JSON result. [`learn.py`](../aksharallm/portal/learn.py) is the exception, and says why |
 | 13 | [`aksharallm/portal/static/js/router.js`](../aksharallm/portal/static/js/router.js) | `registerTab` — the router knows nothing about any tab; each module registers itself with `open` / `leave`. This is why a tab is inert until you open it |
-| 14 | `static/js/core.js` → `state.js` → `charts.js` → `dashboard.js` → one tab file | the DAG in the diagram above, bottom to top. `main.js` last: it only wires and boots |
-| 15 | [`scripts/preflight_tests.py`](../scripts/preflight_tests.py) | the launch gate's display. Short, and the docstring is the argument: a gate that looks like a hang gets cancelled, and then it is not a gate |
+| 14 | [`aksharallm/portal/static/js/nav.js`](../aksharallm/portal/static/js/nav.js) | `openNav` / `closeNav` — sixty lines, and every one of them is about focus. `BEHIND()` is the list that goes `inert` while the drawer is up |
+| 15 | `static/js/core.js` → `state.js` → `charts.js` → `dashboard.js` → one tab file | the DAG in the diagram above, bottom to top. `main.js` last: it only wires and boots |
+| 16 | [`scripts/preflight_tests.py`](../scripts/preflight_tests.py) | the launch gate's display. Short, and the docstring is the argument: a gate that looks like a hang gets cancelled, and then it is not a gate |
 
 What pins it: `tests/test_report.py` (the findings, and the two ways a report could quietly
 lie), `tests/test_portal.py` and its siblings (`test_portal_cost.py`,
 `test_portal_eval.py`, `test_portal_finetune.py`, `test_portal_quantize.py`,
 `test_portal_synth.py`, `test_portal_pipeline.py`) —
 `test_a_second_portal_does_not_steal_the_pid_file` is the one whose absence caused real
-confusion.
+confusion. For the client: `tests/test_portal_css.py` (the clipped-column trap) and
+`tests/test_portal_nav.py` (a view missing from the drawer, and a `<body>` state class that
+is also a component class).
 
 ---
 

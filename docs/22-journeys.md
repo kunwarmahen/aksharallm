@@ -74,6 +74,11 @@ flowchart TD
 There are also **Route 5** (make it *better* rather than cheaper — distillation, MoE,
 scaling up) and **Route 6** (do something other than text — diffusion, audio, vision).
 
+> **Where the portal views are.** Every "In the portal: the **X** view" below means the
+> **☰ Menu** button at the top left of `scripts/portal.sh` — the menu is closed until you
+> open it, and the button names whichever view you are in. Each view also has its own
+> address, so `http://127.0.0.1:8765/#evals` goes straight there.
+
 ---
 
 ## Route 0 — the 30-minute taste

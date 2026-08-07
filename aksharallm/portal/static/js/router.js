@@ -2,7 +2,10 @@
  *
  * The router knows the list of views but nothing about what any of them do: each tab module
  * calls registerTab() with what to run when it is opened and when it is left. Adding a tab
- * is a registerTab call in that tab's module — there is nothing to edit here. */
+ * is a registerTab call in that tab's module — there is nothing to edit here.
+ *
+ * It knows nothing about the menu either. The buttons it marks live in the drawer in
+ * nav.js, but they are still plain `.tab` elements and this file treats them as such. */
 
 import { $, $$ } from './core.js';
 import { state } from './state.js';
@@ -36,9 +39,10 @@ export function showView(view) {
     tab.classList.toggle('on', on);
     if (on) tab.setAttribute('aria-current', 'page');
     else tab.removeAttribute('aria-current');
-    // On a phone the strip is narrower than its six tabs and scrolls sideways, so the
-    // current view can sit off-screen — including on load, from a #hash or localStorage.
-    if (on) tab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    // The views live in a drawer that is closed by default, so the menu button is the only
+    // thing on screen that says which one you are in. Its label comes from the button that
+    // opens the view — one list, not two that can drift apart.
+    if (on) $('#nav-current').textContent = tab.textContent.trim();
   }
   localStorage.setItem('aksharallm-view', view);
   /* The tab in the address bar, so a view can be linked to and reloaded into. Written

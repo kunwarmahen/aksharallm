@@ -29,29 +29,71 @@
 </head>
 <body>
 
+<!-- The view menu. It lives BEFORE the top bar in the DOM, not inside it, for two reasons:
+     it is a fixed-position overlay so its position in the flow is irrelevant, and the bar's
+     `:has(+ .view ...)` rule in chrome.css needs the first view to stay its next sibling.
+     Fourteen views are a menu, not a strip, so they are grouped by what you would be
+     trying to do; the group headings are the only thing here the router does not read. -->
+<div id="nav-scrim" class="nav-scrim"></div>
+
+<nav id="nav" class="nav" aria-label="views">
+  <div class="nav-head">
+    <span class="nav-title">Views</span>
+    <button id="nav-close" class="ghost nav-close" type="button" aria-label="Close menu">✕</button>
+  </div>
+
+  <p class="nav-label" id="nav-g-watch">Watch</p>
+  <div class="nav-group" role="group" aria-labelledby="nav-g-watch">
+    <button class="tab" data-view="dashboard" type="button" aria-current="page">Dashboard</button>
+    <button class="tab" data-view="play" type="button">Playground</button>
+    <button class="tab" data-view="code" type="button">Code</button>
+  </div>
+
+  <p class="nav-label" id="nav-g-make">Improve it</p>
+  <div class="nav-group" role="group" aria-labelledby="nav-g-make">
+    <button class="tab" data-view="quant" type="button">Quantize</button>
+    <button class="tab" data-view="lora" type="button">Finetune</button>
+    <button class="tab" data-view="synth" type="button">Synth</button>
+  </div>
+
+  <p class="nav-label" id="nav-g-measure">Measure it</p>
+  <div class="nav-group" role="group" aria-labelledby="nav-g-measure">
+    <button class="tab" data-view="evals" type="button">Eval</button>
+    <button class="tab" data-view="interp" type="button">Interp</button>
+  </div>
+
+  <p class="nav-label" id="nav-g-reach">Reach further</p>
+  <div class="nav-group" role="group" aria-labelledby="nav-g-reach">
+    <button class="tab" data-view="longctx" type="button">Context</button>
+    <button class="tab" data-view="diff" type="button">Diffusion</button>
+    <button class="tab" data-view="audio" type="button">Audio</button>
+    <button class="tab" data-view="vision" type="button">Vision</button>
+  </div>
+
+  <p class="nav-label" id="nav-g-read">Read</p>
+  <div class="nav-group" role="group" aria-labelledby="nav-g-read">
+    <button class="tab" data-view="learn" type="button">Learn</button>
+    <button class="tab" data-view="docs" type="button">Docs</button>
+  </div>
+</nav>
+
 <header class="topbar">
+  <!-- The menu button carries the name of the view you are on. With the strip gone, this is
+       the only thing on the page that says where you are, so it is not an icon alone. It is
+       styled by id: `nav-open` is also the open-state class on <body>. -->
+  <button id="nav-open" class="ghost" type="button"
+          aria-controls="nav" aria-expanded="false" aria-haspopup="menu">
+    <span class="burger" aria-hidden="true"></span>
+    <span class="nav-open-label">Menu</span>
+    <span class="nav-open-sep" aria-hidden="true">·</span>
+    <span id="nav-current" class="nav-current">Dashboard</span>
+  </button>
+
   <div class="brand">
     <span class="mark" aria-hidden="true"></span>
     <span class="brand-name">aksharallm</span>
     <span class="brand-sub">training portal</span>
   </div>
-
-  <nav class="tabs" aria-label="views">
-    <button class="tab" data-view="dashboard" type="button" aria-current="page">Dashboard</button>
-    <button class="tab" data-view="play" type="button">Playground</button>
-    <button class="tab" data-view="code" type="button">Code</button>
-    <button class="tab" data-view="quant" type="button">Quantize</button>
-    <button class="tab" data-view="lora" type="button">Finetune</button>
-    <button class="tab" data-view="evals" type="button">Eval</button>
-    <button class="tab" data-view="synth" type="button">Synth</button>
-    <button class="tab" data-view="interp" type="button">Interp</button>
-    <button class="tab" data-view="longctx" type="button">Context</button>
-    <button class="tab" data-view="diff" type="button">Diffusion</button>
-    <button class="tab" data-view="audio" type="button">Audio</button>
-    <button class="tab" data-view="vision" type="button">Vision</button>
-    <button class="tab" data-view="learn" type="button">Learn</button>
-    <button class="tab" data-view="docs" type="button">Docs</button>
-  </nav>
 
   <div class="topbar-right">
     <label class="field" id="run-field">

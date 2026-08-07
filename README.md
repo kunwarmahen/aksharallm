@@ -197,9 +197,10 @@ aksharallm/
 │   │   ├── learn.py          the Learn tab: lessons, gating, and running their checks
 │   │   ├── server.py         stdlib http.server + a small JSON API
 │   │   └── static/           the client: no build step, no framework, no dependencies
-│   │       ├── index.html        the shell; server fills its <!--#include --> markers
+│   │       ├── index.html        the shell + the view drawer; server fills its
+│   │       │                     <!--#include --> markers
 │   │       ├── parts/<tab>.html  markup, one file per view
-│   │       ├── js/<tab>.js       ES modules, one per view (+ core/state/router/charts)
+│   │       ├── js/<tab>.js       ES modules, one per view (+ core/state/router/nav/charts)
 │   │       └── css/<tab>.css     rules, one per view (+ base/chrome/controls/narrow)
 │   ├── learn/            the learning path: lessons, gating, checks — see docs/15
 │   │   ├── lessons.py        frontmatter, the prereq graph, and the anti-rot validation
