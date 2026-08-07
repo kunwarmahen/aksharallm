@@ -245,6 +245,88 @@ files are the size you expect before starting a multi-day run.**
 
 ---
 
+## How much of it is the same thing twice?
+
+A web crawl is full of duplicated text. Not byte-identical — that would be easy — but the
+same article behind three templates, the same licence header on ten thousand files, the same
+answer quoted in four blog posts. Each copy is a silent, unrequested extra epoch on whatever
+happened to be popular.
+
+Exact matching cannot see it, and comparing every pair cannot either: 8 million documents is
+32 trillion pairs. Two ideas stacked make it tractable.
+
+```mermaid
+flowchart LR
+    D["a document"] --> S["k-token shingles<br/>hashed to 64 bits"]
+    S --> M["MinHash: for each of P<br/>hash functions, keep the MINIMUM"]
+    M --> G["signature:<br/>P integers"]
+    G --> B["LSH: B bands of R rows"]
+    B --> C["candidates = share any band"]
+```
+
+**MinHash.** Hash a document's shingles with one function and keep the minimum; repeat for P
+functions. The probability two documents share a minimum *is* their Jaccard similarity, so
+the fraction of the P positions that agree estimates it. Any document collapses to P
+integers.
+
+**LSH.** Split each signature into `B` bands of `R` rows; two documents are candidates if any
+band matches exactly. The chance of that is `1 - (1 - t^R)^B` — an S-curve whose knee sits
+near `(1/B)^(1/R)`. Choosing B and R is choosing where it turns.
+
+```bash
+.venv/bin/python -m aksharallm.data.dedup data/blend/codeparrot-python.bin --limit 60000
+```
+
+### What our own blend contains
+
+**The two halves of the corpus are two hundred times apart.** Sampled twice at different
+offsets, 60,000 documents each:
+
+| source | duplicate documents | duplicate tokens | largest cluster |
+|---|---|---|---|
+| **fineweb-edu** (85%) | 0.017% / 0.025% | **0.014% / 0.036%** | 2 |
+| **codeparrot-python** (15%) | 6.35% / 4.02% | **8.04% / 5.23%** | 151 / 175 |
+
+FineWeb-Edu is essentially clean, and it should be — its published pipeline deduplicates
+with exactly this technique, so what this measures is that the filter worked.
+CodeParrot-clean is not, and that is unsurprising once said out loud: vendored dependencies,
+generated files, forks of the same repository and boilerplate headers are all *legitimately*
+near-identical code. A cluster of 175 documents is one file living in 175 places.
+
+Weighted 85/15, roughly **1% of the blend's tokens are a repeat of another token in it**, and
+almost all of that 1% is in the Python 15%.
+
+> **Worth wondering about, and not yet worth claiming.** [Doc 12](12-eval.md) records that
+> Python's held-out loss is **2.7696 → 1.2558**, more than twice as predictable as prose. Some
+> of that is real — code is more repetitive than English. But an 8% duplication rate in the
+> Python half means some of those held-out documents have near-copies in training, which
+> would also lower the number. Separating the two would need a run on a deduplicated Python
+> split, which has not been done. It is listed as an open question rather than an answer.
+
+### Four ways this measurement lies, all reported
+
+1. **MinHash estimates Jaccard; it does not compute it.** The standard error is
+   `sqrt(t(1-t)/P)` — ±0.040 at P=128 near the threshold. The report prints it.
+2. **LSH's misses are invisible.** A similar pair that shares no band is never compared, so
+   it does not show up as a near-miss — it does not show up at all. The report prints the
+   whole detection curve so the miss rate is a number rather than a hope:
+
+   | true similarity | 0.5 | 0.7 | 0.8 | 0.9 |
+   |---|---|---|---|---|
+   | chance LSH sees it | 6% | 61% | 95% | 100% |
+
+3. **A sample is a sample of however the file was ordered.** These numbers come from the
+   front of each `.bin`, and a corpus written repository by repository is very much ordered
+   — which is why `--start-token` exists and why the table above shows **two offsets**. The
+   Python figure moves between 5.2% and 8.0%; the conclusion (two orders of magnitude apart
+   from prose) does not.
+4. **Ten copies are one cluster of ten, and nine removable documents.** One of them is the
+   original and keeping it is the point.
+
+**And the token share is the number that matters, not the document share.** Documents are
+not equal: dropping 200,000 forty-token stubs changes almost nothing, while dropping 3,000
+duplicated long files changes the corpus measurably.
+
 ## The code, in reading order
 
 | # | file | what to look for |
@@ -254,7 +336,12 @@ files are the size you expect before starting a multi-day run.**
 | 3 | [`aksharallm/data/prepare_blend.py`](../aksharallm/data/prepare_blend.py) | `blended_corpus` — one tokenizer fitted on the *mix*, then one `.bin` per source |
 | 4 | [`aksharallm/data/loader.py`](../aksharallm/data/loader.py) again | `MixedTokenDataset._counts` — where the 85/15 becomes an exact per-batch split rather than an average (largest-remainder, so the counts always sum to `batch_size`) |
 | 5 | [`aksharallm/config.py`](../aksharallm/config.py) | `DataConfig` — `train_bin`, `train_sources`, `tokenizer`. The ratio lives here, which is why retuning it costs nothing |
-| 6 | [`aksharallm/data/prepare_sft.py`](../aksharallm/data/prepare_sft.py) · [`prepare_dpo.py`](../aksharallm/data/prepare_dpo.py) | the post-training side of the same machinery — read after [doc 5](05-posttraining.md). The `jsonl` recipe in each is how generated data ([doc 13](13-synthetic-data.md)) gets in |
+| 6 | [`aksharallm/data/dedup.py`](../aksharallm/data/dedup.py) | `signature` (the one broadcast that makes it fast), then `LSHParams.detection_probability` — the S-curve is the whole design, and `report`'s token share is the number to quote |
+| 7 | [`aksharallm/data/prepare_sft.py`](../aksharallm/data/prepare_sft.py) · [`prepare_dpo.py`](../aksharallm/data/prepare_dpo.py) | the post-training side of the same machinery — read after [doc 5](05-posttraining.md). The `jsonl` recipe in each is how generated data ([doc 13](13-synthetic-data.md)) gets in |
+
+`tests/test_dedup.py` leads with a **planted duplicate**, for the reason
+`tests/test_contamination.py` does: a deduplicator that finds nothing because it is
+broken looks exactly like a clean corpus, and that is the comfortable answer.
 
 What pins it: `tests/test_pipeline.py::test_loader_shift_and_bounds` (the shift) and
 `::test_mixed_respects_weights_every_batch` (the exact blend). Break the first one on
