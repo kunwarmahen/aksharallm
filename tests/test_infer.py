@@ -493,3 +493,34 @@ def test_portal_yaml_is_still_not_mistaken_for_a_run():
     portal_yaml = repo_root() / "configs" / "portal.yaml"
     assert portal_yaml.is_file(), "the repo's own portal.yaml should exist"
     assert _is_run_config(portal_yaml) is False
+
+
+# --- the model's sloppiness must not read as ours ------------------------------------------
+# `run_program` compiles the generated source in-process before dispatching it to the
+# subprocess, because "SyntaxError, line 4" beats a traceback from a child. Compiling only
+# parses -- it never runs -- which is what makes that safe. But since Python 3.12 an invalid
+# escape sequence in a string literal is a *compile-time* SyntaxWarning, so a model writing
+# `re.findall("\w+", s)` instead of `r"\w+"` printed
+#     <model>:6: SyntaxWarning: invalid escape sequence '\w'
+# straight into the GRPO training log, between two step lines, with no step number and
+# nothing to say it came from generated code rather than from the trainer.
+
+def test_a_warning_from_generated_code_does_not_escape_into_our_output(recwarn):
+    """The model's regex is the model's business; the reward is unaffected either way."""
+    program = ('import re\n'
+               'def words(s):\n'
+               '    return re.findall("\\w+", s)\n'          # not a raw string, on purpose
+               'assert words("a b") == ["a", "b"]\n')
+    res = sandbox.run_program(program)
+    assert res.ok and res.status == "pass", f"the program itself is fine: {res.detail}"
+    assert not [w for w in recwarn if issubclass(w.category, SyntaxWarning)], (
+        "a SyntaxWarning from the generated source reached our own warning stream; it lands "
+        "in the trainer's log looking like the trainer's problem")
+
+
+def test_suppressing_warnings_did_not_suppress_real_syntax_errors():
+    """The compile check earns its place by catching these — the single most common outcome
+    for a base model. Silencing warnings must not silence errors."""
+    res = sandbox.run_program("def f(:\n    pass\n")
+    assert not res.ok and res.status == "syntax"
+    assert "not valid Python" in res.detail

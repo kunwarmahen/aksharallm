@@ -555,9 +555,13 @@ def main():
             # longest-running stage of the three. Throughput/MFU stay out deliberately:
             # most of a GRPO step is sampling and sandbox execution rather than the update,
             # so tokens/sec would describe the wrong thing.
+            # `lr` too, even though GRPO holds it constant: it is the only one of the four
+            # trainers that omitted it, so its learning-rate chart was permanently empty and
+            # read as broken. A flat line at 1e-6 is a fact worth being able to see.
             logf.write(json.dumps({"step": step, "reward": mean_r, "solved": solve,
                                    "loss": loss.item(), "grad_norm": float(gnorm),
-                                   "time": time.time(), "s_per_step": s_per_step,
+                                   "lr": args.lr, "time": time.time(),
+                                   "s_per_step": s_per_step,
                                    "elapsed": up, "eta_s": eta, **m}) + "\n")
             logf.flush()
 

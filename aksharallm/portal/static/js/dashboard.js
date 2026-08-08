@@ -275,6 +275,19 @@ function renderCharts(s) {
     },
   };
 
+  /* A card whose every series is empty *on a run that has logged steps* is not "waiting for
+   * data" — this run will never log that number, and "No readings yet — fills in as the run
+   * logs steps" is then a promise that never comes true. Same call the MoE card already
+   * makes below. The `step.length` guard is what keeps the message honest for a run that has
+   * genuinely only just started, where it is exactly right. */
+  const hideEmpty = (id, keys) => {
+    const card = $(`#card-${id}`);
+    if (!card) return;
+    const anyData = step.length > 0
+      && keys.some((k) => (ser[k] || []).some((v) => v != null));
+    card.hidden = step.length > 0 && !anyData;
+  };
+
   /* The Throughput card, repointed for the two stages that do not measure throughput. Same
    * argument as the tiles: the alternative is a titled, axis-drawn, permanently empty chart,
    * which reads as a broken page rather than as an absent measurement. What goes there is
@@ -314,6 +327,10 @@ function renderCharts(s) {
       tokNote.textContent = 'thousand tokens per second · MFU is this same curve as a % of peak';
     }
   }
+
+  hideEmpty('lr', ['lr']);
+  hideEmpty('gnorm', ['grad_norm']);
+  hideEmpty('tok', stage === 'dpo' ? ['acc'] : stage === 'grpo' ? ['reward', 'solved'] : ['tok_per_sec']);
 
   /* Mixture of experts only. A dense run has no `moe_shares` and the card stays hidden —
    * rather than showing an empty chart that reads as a broken one. */

@@ -42,6 +42,7 @@ import os
 import shutil
 import subprocess
 import sys
+import warnings
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -128,7 +129,17 @@ def run_program(program: str, timeout_s: float = 10.0, memory_mb: int = 512,
 
     full = PREAMBLE + program
     try:
-        compile(full, "<model>", "exec")
+        # Warnings suppressed, errors not. This `compile` is a *validity check on untrusted
+        # input* -- it parses and never runs, which is why it is safe to do in-process at all
+        # -- so a complaint about the generated code's style is not our warning to emit. It
+        # was landing in the trainer's own log: a GRPO run writing `re.findall("\\w+", s)`
+        # instead of `r"\\w+"` produced `<model>:6: SyntaxWarning: invalid escape sequence`
+        # between two step lines, reading as though the trainer had the problem. The model's
+        # sloppiness shows up where it belongs -- in the reward, which is unaffected here,
+        # because the code compiles and runs fine.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            compile(full, "<model>", "exec")
     except SyntaxError as exc:
         # Worth catching here rather than in the child: for a base model this is the single
         # most common outcome, and "SyntaxError: line 4" is a more useful answer than a

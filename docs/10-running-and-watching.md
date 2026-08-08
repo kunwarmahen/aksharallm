@@ -454,6 +454,20 @@ record as an eval, so the next writer to forget loses a field rather than the re
 This only applies to logs written from now on. A run finished before the change cannot grow
 the fields retroactively; its loss curve and validation numbers are all there is.
 
+**A chart with nothing in it should disappear, not promise.** The empty state reads *"No
+readings yet — this chart fills in as the run logs steps"*, which is exactly right for a run
+that has just started and a lie for a run that will never log that number. GRPO was the case:
+it was the only one of the four trainers that never wrote `lr` to a step record, so its
+Learning rate card sat empty forever. Both halves are fixed — GRPO logs its (constant)
+learning rate, and a card whose every series is null **on a run that has already logged
+steps** now hides itself, the same call the Expert routing card has always made. The
+`has logged steps` guard is what keeps the message honest for a genuinely fresh run.
+
+Worth knowing when reading a resumed run: **the charts already span every session.** The
+step log is appended to, so a stage resumed at step 17 draws its curve from step 0 — the
+earlier session's records are still there and are read the same way. What a resume cannot do
+is backfill a field the earlier session never wrote.
+
 ### When a stage dies, and the panel says "ready"
 
 The first real SFT run on the 300M model exposed two bugs at once, and the second one hid
