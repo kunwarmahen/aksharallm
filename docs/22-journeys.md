@@ -202,9 +202,15 @@ scripts/stage.sh sft small-code
 In the portal: the **Post-training** panel, which refuses to start until a base checkpoint
 exists and says so rather than failing later.
 
+SFT trains every weight, so it needs as much memory per micro-batch as pretraining did.
+The defaults suit the tiny models; on a bigger one, lower `BS` (and raise `ACCUM` to match)
+— see [the stage knobs](09-running-and-watching.md#when-a-stage-dies-and-the-panel-says-ready).
+
 **How you know it worked:** the Playground's Chat mode unlocks. It is hard-refused on a
 base checkpoint on purpose — a base model has never seen a chat token, and letting it try
-would look like a broken model rather than a wrong stage.
+would look like a broken model rather than a wrong stage. If the stage dies instead, the
+panel's card turns red and shows the last line the trainer printed — it will not quietly
+return to "ready".
 
 ### 5 · Align — teach it which answer is better
 

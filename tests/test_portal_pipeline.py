@@ -92,3 +92,47 @@ def test_grpo_headline_metric_is_reward(tmp_path):
     assert st["grpo"]["metric"]["key"] == "reward"
     assert st["grpo"]["metric"]["value"] == 0.42
     assert st["sft"]["metric"]["key"] == "val_loss"
+
+
+def _crashed_sft(tmp_path, last_line: str = "torch.OutOfMemoryError: CUDA out of memory."):
+    """An SFT run that started, died, and left no checkpoint — the state the first real SFT
+    attempt was actually in while the portal showed 'ready'."""
+    _touch(tmp_path / "checkpoints" / "small-code" / "ckpt_best.pt")
+    d = tmp_path / "checkpoints" / "small-code-sft"
+    d.mkdir(parents=True, exist_ok=True)
+    log = tmp_path / "logs" / "small-code-sft" / "sft_20260807-203006.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(f"started 2026-08-07 20:30:13\nTraceback (most recent call last):\n{last_line}\n")
+    # a pid that is gone: `scripts/stop.sh` removes this file, so its survival means a crash
+    (d / "train.pid").write_text("999999999")
+    (d / "run.meta").write_text(f"pid     999999999\nlog     {log.relative_to(tmp_path)}\n")
+    return d
+
+
+def test_a_crashed_stage_reports_failed_not_ready(tmp_path):
+    _crashed_sft(tmp_path)
+    st = stages(Pipeline(tmp_path), "small-code")["sft"]
+    assert st["phase"] == "failed"
+    assert "out of memory" in st["reason"].lower()   # the last log line, verbatim
+    assert st["can_start"]                           # you fix a knob and press it again
+    assert not st["can_stop"]
+
+
+def test_a_crashed_stage_still_blocks_what_depends_on_it(tmp_path):
+    _crashed_sft(tmp_path)
+    st = stages(Pipeline(tmp_path), "small-code")
+    assert st["dpo"]["phase"] == "blocked" and not st["dpo"]["can_start"]
+    assert st["grpo"]["phase"] == "blocked" and not st["grpo"]["can_start"]
+
+
+def test_a_finished_stage_is_done_even_with_a_stale_pid(tmp_path):
+    """Order matters: a checkpoint means it finished, whatever the pid file says."""
+    d = _crashed_sft(tmp_path)
+    _touch(d / "sft_best.pt")
+    assert stages(Pipeline(tmp_path), "small-code")["sft"]["phase"] == "done"
+
+
+def test_a_stage_that_never_ran_is_still_ready(tmp_path):
+    _touch(tmp_path / "checkpoints" / "small-code" / "ckpt_best.pt")
+    st = stages(Pipeline(tmp_path), "small-code")["sft"]
+    assert st["phase"] == "ready" and st["reason"] is None

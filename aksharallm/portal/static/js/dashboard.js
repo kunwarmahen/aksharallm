@@ -284,16 +284,21 @@ function renderPipeline(p) {
     const m = s.metric || {};
     const val = m.value == null ? '' : (m.key === 'reward'
       ? `reward ${fmt.num(m.value, 3)}` : `val ${fmt.num(m.value, 4)}`);
-    const sub = s.step == null ? s.blurb
+    // A failed stage shows what killed it, not its blurb — that line is the whole reason
+    // the panel exists after a crash. It is long (a CUDA OOM names every number it had),
+    // so the full text goes in the tooltip and the box shows what fits.
+    const sub = s.phase === 'failed' ? (s.reason || 'the trainer exited without a checkpoint')
+      : s.step == null ? s.blurb
       : `step ${fmt.int(s.step)}${val ? ` · ${val}` : ''}`;
     const startAttrs = s.can_start ? '' : `disabled title="${escHtml(s.reason || '')}"`;
+    const subAttrs = s.phase === 'failed' ? ` title="${escHtml(s.reason || '')}"` : '';
     return `
       <div class="stage stage-${s.phase}">
         <div class="stage-head">
           <span class="stage-name">${s.stage.toUpperCase()}</span>
           <span class="badge badge-pipe-${s.phase}">${s.phase}</span>
         </div>
-        <div class="stage-sub">${escHtml(sub)}</div>
+        <div class="stage-sub"${subAttrs}>${escHtml(sub)}</div>
         <div class="stage-actions">
           <button data-base="${escHtml(p.base)}" data-stage="${s.stage}" data-action="start" ${startAttrs}>${s.done ? 'Re-run' : 'Start'}</button>
           <button data-base="${escHtml(p.base)}" data-stage="${s.stage}" data-action="stop" ${s.can_stop ? '' : 'disabled'}>Stop</button>

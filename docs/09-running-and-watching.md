@@ -236,6 +236,51 @@ If you ask for a stage whose prerequisite is missing, it tells you exactly what 
 first. (The stages themselves — what SFT, DPO and GRPO actually *do* — are
 [doc 5](05-posttraining.md).)
 
+The trainer defaults are for the tiny models, so `stage.sh` sets the ones that have to
+change with model size, and takes them from the environment:
+
+```bash
+BS=4 ACCUM=16 scripts/stage.sh sft small-code   # halve the activations, same tokens/step
+EPOCHS=3 LR=2e-5 scripts/stage.sh sft small-code
+CRASH_WINDOW=60 scripts/stage.sh sft small-code # watch longer before declaring success
+```
+
+SFT defaults to `BS=8 ACCUM=8` — 65,536 tokens per step, measured at ~21 GB peak for the
+300M model on a 24 GB card. `BS` is the one to change on different hardware; keep
+`BS × ACCUM` constant and the optimisation is unchanged, only the memory moves.
+
+### When a stage dies, and the panel says "ready"
+
+The first real SFT run on the 300M model exposed two bugs at once, and the second one hid
+the first. Worth reading as a pair, because the shape recurs: **a status that cannot
+express failure will report success.**
+
+The trainer OOM'd in its first forward pass — `sft.py`'s defaults were `16 × 4`, sized for
+the tiny models, and 16 micro-batches of 1024-token activations on top of AdamW's fp32
+states do not fit in 24 GB alongside a 300M model. (Pretraining had always known this:
+`configs/small-code.yaml` tunes `batch_size: 12` for the same model. Nothing carried that
+across, because SFT had never been run at this size before.)
+
+That should have been loud. It was silent, because:
+
+| | was | is |
+|---|---|---|
+| `stage.sh` startup guard | `sleep 5`, then one `kill -0` | polls every second for `CRASH_WINDOW` (30s), bails the moment the pid goes |
+| `Pipeline` phases | `blocked \| ready \| running \| done` | …`\| failed` |
+
+The launch was at 20:30:07 and the OOM at 20:30:13 — **six seconds, one past the window**.
+So the script printed its normal success block and left a `train.pid` naming a dead process.
+Then `stage_status()` computed `phase = "done" if done else "ready"`: with no `failed` in its
+vocabulary, a crashed stage and a stage that never ran are the same state. The card went
+orange for five seconds and returned to "ready" with the traceback unread on disk.
+
+A stage is now **failed** when a `train.pid` outlives its process and no checkpoint exists —
+`scripts/stop.sh` removes that file, so its survival means an exit nobody asked for. The
+`reason` is the last non-empty line of the log named in `run.meta`, which for an OOM is the
+entire diagnosis. Two ordering rules matter: `done` is checked *before* `failed`, so a
+checkpoint always beats a stale pid; and `can_start` stays true, because the fix is almost
+always to change one knob and press the button again.
+
 ---
 
 ## The portal: the whole project in a browser
@@ -291,9 +336,12 @@ The panels, in plain terms:
 - **Sessions** — every launch as a row, so a run trained over ten evenings is ten
   comparable lines. Newest first, and the panel keeps a fixed height: past about ten rows
   the table scrolls inside itself (header row pinned) rather than stretching the page.
-- **Post-training** — the three stages as cards. Each **Start** button is live only when its
-  prerequisite checkpoint exists; otherwise it's greyed out with the reason as a tooltip
-  ("needs …-sft/sft_best.pt — run SFT first"). This is the gate above, made visible.
+- **Post-training** — the three stages as cards, each in one of five phases: **blocked**
+  (prerequisite missing), **ready**, **running**, **done**, **failed**. Each **Start** button
+  is live only when its prerequisite checkpoint exists; otherwise it's greyed out with the
+  reason as a tooltip ("needs …-sft/sft_best.pt — run SFT first"). This is the gate above,
+  made visible. A **failed** card shows the last line the dead trainer printed — see
+  [when a stage dies](#when-a-stage-dies-and-the-panel-says-ready) for why that phase exists.
 - **GPU** — what the card is doing, during a run and between runs.
 - **Cost** — what that cost, per run and in total. See [below](#what-a-run-cost).
 - **Schedule** — recurring start/stop windows (e.g. "train 8pm–7am"), from the browser or

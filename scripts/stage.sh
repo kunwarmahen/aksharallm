@@ -18,6 +18,7 @@
 #   TOK=path/to/tokenizer.json   override the tokenizer (else inferred from base_run)
 #   DATA=smoltalk|ultrafeedback  override the dataset recipe
 #   SEQ=1024   EPOCHS=2   LR=...   extra trainer args passed through
+#   BS=8  ACCUM=8                  SFT micro-batch and accumulation (BS*ACCUM*SEQ = tokens/step)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -110,8 +111,13 @@ case "$STAGE" in
         DATA=${DATA:-smoltalk}
         [ -s data/sft/train_tokens.npy ] || $PY -m aksharallm.data.prepare_sft "$DATA" \
             --tokenizer "$TOK" --out-dir data/sft --seq-len "$SEQ"
+        # The trainer's own default (16 x 4) was sized for the tiny models and OOMs a 300M
+        # model on a 24 GB card: 16 x 1024 of activations on top of AdamW's fp32 states
+        # leaves nothing, and it dies in the first forward pass. 8 x 8 is the same 65,536
+        # tokens/step, measured at ~21 GB peak on a 3090. Raise BS on a bigger card.
         CMD=($PY -m aksharallm.train.sft --base "$BASE_CKPT" --data-dir data/sft
-             --tokenizer "$TOK" --out-dir "$RUN_DIR" --epochs "${EPOCHS:-2}" --lr "${LR:-1e-5}")
+             --tokenizer "$TOK" --out-dir "$RUN_DIR" --epochs "${EPOCHS:-2}" --lr "${LR:-1e-5}"
+             --batch-size "${BS:-8}" --grad-accum "${ACCUM:-8}")
         ;;
     dpo)
         DATA=${DATA:-ultrafeedback}
@@ -143,13 +149,21 @@ cmd     ${CMD[*]}
 META
 echo "$(date '+%Y-%m-%d %H:%M:%S')  pid $PID  $LOG" >> "$RUN_DIR/sessions.log"
 
-sleep 5
-if ! kill -0 "$PID" 2>/dev/null; then
-    echo "    ERROR: the $STAGE trainer died within 5s. Last lines of $LOG:" >&2
-    tail -20 "$LOG" >&2
-    rm -f "$PID_FILE"
-    exit 1
-fi
+# Watch it long enough to catch the crashes that happen on the way up. Five seconds used to
+# be the window, and an OOM in the first forward pass landed just past it: the script
+# declared success, left a pid file behind for a dead process, and the portal quietly went
+# back to "ready" with the traceback unread. Allocating the model, compiling and reaching
+# step 1 takes ~20s on the 300M model, so watch for 30 and stop as soon as it dies.
+CRASH_WINDOW=${CRASH_WINDOW:-30}
+for _ in $(seq "$CRASH_WINDOW"); do
+    sleep 1
+    if ! kill -0 "$PID" 2>/dev/null; then
+        echo "    ERROR: the $STAGE trainer died during startup. Last lines of $LOG:" >&2
+        tail -20 "$LOG" >&2
+        rm -f "$PID_FILE"
+        exit 1
+    fi
+done
 
 echo "    pid $PID  ->  $PID_FILE"
 echo "    watch:   tail -f $LOG_LINK"

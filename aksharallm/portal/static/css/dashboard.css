@@ -125,6 +125,11 @@
 .stage-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 .stage-name { font-weight: 600; letter-spacing: .02em; }
 .stage-sub { font-size: .82rem; opacity: .75; margin: .35rem 0 .55rem; min-height: 2.2em; }
+/* A crash message is one long unbroken line; clamp it so one failed stage cannot stretch
+   the row past the other three. The full text is on the tooltip. */
+.stage-failed .stage-sub { opacity: .9; overflow: hidden; overflow-wrap: anywhere;
+         display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3;
+         max-height: 3.9em; }
 .stage-actions { display: flex; gap: .4rem; }
 .stage-actions button { flex: 1; }
 .stage-actions button:disabled { opacity: .45; cursor: not-allowed; }
@@ -132,8 +137,10 @@
 .badge-pipe-ready   { background: var(--series-1); color: #fff; }
 .badge-pipe-running { background: #d97706; color: #fff; }
 .badge-pipe-done    { background: #059669; color: #fff; }
+.badge-pipe-failed  { background: #b91c1c; color: #fff; }
 .stage-running { border-color: #d97706; }
 .stage-done    { border-color: #059669; }
+.stage-failed  { border-color: #b91c1c; }
 
 /* Cost panel. Same tile grid as the GPU panel above it — it is the same measurement, one
    step further along (watts -> watt-hours -> money), and it should not look like a

@@ -23,7 +23,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from .runs import RUN_NAME_RE, RunError, _alive, _cmdline, _read_int, repo_root
+from .runs import RUN_NAME_RE, RunError, _alive, _cmdline, _read_int, _read_meta, repo_root
 
 #: stage -> (best-checkpoint filename, log filename, human blurb)
 STAGES = {
@@ -67,6 +67,28 @@ class Pipeline:
                 return pid
         return None
 
+    def _crash(self, base: str, stage: str) -> str | None:
+        """The error a dead stage left behind, or None if it did not die.
+
+        `train.pid` is written by the launcher and removed by `scripts/stop.sh`, so a pid
+        file naming a process that is gone means the trainer exited on its own without
+        being asked to. If it had finished it would have left a checkpoint; the caller
+        checks that first. What is left is a crash, and the useful thing to show is the
+        last line it printed — for the OOM this catches, that line is the whole diagnosis.
+        """
+        rdir = self.stage_dir(base, stage)
+        if _read_int(rdir / "train.pid") is None:
+            return None
+        log = _read_meta(rdir / "run.meta").get("log")
+        if not log:
+            return "the trainer exited during startup (no log recorded)"
+        try:
+            lines = [ln.strip() for ln in
+                     (self.root / log).read_text(errors="replace").splitlines() if ln.strip()]
+        except OSError:
+            return f"the trainer exited during startup; see {log}"
+        return lines[-1] if lines else f"the trainer exited without writing to {log}"
+
     def _last(self, base: str, stage: str) -> dict:
         """The most recent logged line (step + the stage's headline metric)."""
         log = self.stage_dir(base, stage) / STAGES[stage][1]
@@ -97,10 +119,17 @@ class Pipeline:
             phase = "blocked"
             can_start = False
             reason = f"needs {prereq.relative_to(self.root)} — {how}"
+        elif done:
+            phase, can_start, reason = "done", True, None
+        elif (err := self._crash(base, stage)) is not None:
+            # It ran and it is not running now, and it produced no checkpoint. Saying
+            # "ready" here is what made the first SFT attempt look like nothing happened:
+            # the button went orange for five seconds and came back, and the traceback sat
+            # in the log unread. Start stays enabled — the fix is usually to press it again
+            # with a knob changed.
+            phase, can_start, reason = "failed", True, err
         else:
-            phase = "done" if done else "ready"
-            can_start = True
-            reason = None
+            phase, can_start, reason = "ready", True, None
 
         last = self._last(base, stage)
         # each stage's headline number: reward for GRPO, val loss for SFT/DPO
@@ -110,10 +139,11 @@ class Pipeline:
             "stage": stage,
             "run": self.stage_run(base, stage),
             "blurb": STAGES[stage][2],
-            "phase": phase,          # blocked | ready | running | done
+            "phase": phase,          # blocked | ready | running | done | failed
             "can_start": can_start,
             "can_stop": running,
-            "reason": reason,        # why it can't start (shown as the disabled tooltip)
+            # why it can't start (the disabled tooltip), or — when it failed — what killed it
+            "reason": reason,
             "done": done,
             "pid": pid,
             "step": last.get("step"),

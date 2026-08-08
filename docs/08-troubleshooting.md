@@ -13,6 +13,8 @@
 | MFU < 20% | `compile` off, batch too small, or fp32 |
 | generates garbage but trains fine | **KV cache bug** |
 | OOM | reduce `batch_size`, raise `grad_accum` |
+| a portal stage flashes "running", then "ready" | the trainer died on startup — read the log named in `checkpoints/<run>/run.meta` |
+| SFT OOMs on a model whose pretraining fit | SFT's defaults are its own, not the model's YAML — lower `BS=`, raise `ACCUM=` |
 
 ---
 
@@ -93,6 +95,13 @@ In order of preference:
    We measured 6.3 GB → 3.6 GB.
 4. **Gradient checkpointing** — recompute activations in the backward pass instead of
    storing them. ~60% less activation memory, ~30% slower.
+
+**Post-training is not exempt.** SFT and DPO train every weight, so they need the same
+memory per micro-batch as pretraining — but they take their batch size from `sft.py`'s own
+defaults (`16 × 4`), not from `configs/<run>.yaml`. A model whose pretraining you tuned to
+fit will still OOM under SFT if you never set it. Use `BS=` / `ACCUM=` on
+`scripts/stage.sh` and keep their product constant; see
+[doc 5](05-posttraining.md#hyperparameters--and-why-they-differ-from-pretraining).
 
 ### Memory grows over time
 

@@ -96,10 +96,20 @@ of weights and two small files, not two 1.2 GB checkpoints. See [11-lora.md](11-
 | dropout | 0.0 | **0.05** | Now we're overfitting-limited, not data-limited. |
 | weight decay | 0.1 | **0.0** | Not needed for a short run. |
 | loss on | all tokens | **assistant only** | The whole point. |
+| micro-batch | tuned per model | **the same limit applies** | Identical weights, identical AdamW states, identical activations. SFT is not cheaper than pretraining. |
 
 **The most common mistake is too high an LR.** Symptom: the model becomes fluent and
 confident but forgets facts it knew before. That's *catastrophic forgetting* — you've
 overwritten pretraining. If in doubt, go lower.
+
+**The second most common is assuming SFT is the small job.** It trains every weight, so it
+needs the same memory per micro-batch as pretraining did — but its defaults live in
+`sft.py` (`16 × 4`) rather than in the model's YAML, so nothing carries your tuned
+`batch_size` across. On the 300M model that mismatch is an instant OOM in the first forward
+pass: pretraining had been tuned to `batch_size: 12`, SFT asked for 16, and 16 × 1024 of
+activations do not fit in 24 GB. `scripts/stage.sh` now passes `BS=8 ACCUM=8` (the same
+65,536 tokens/step, ~21 GB peak), and you override `BS` for a different card. Keep
+`BS × ACCUM` fixed and you have changed only the memory, not the optimisation.
 
 ## Datasets
 
