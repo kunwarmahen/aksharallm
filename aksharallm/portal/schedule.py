@@ -48,6 +48,18 @@ from pathlib import Path
 
 from .runs import RunError, RunStore, _alive, _cmdline, _read_int
 
+#: `small-code-grpo` -> ("small-code", "grpo"). The `<base>-<stage>` convention is built by
+#: `Pipeline.stage_run` and parsed by `baseOf()` in dashboard.js, so reading it here adds no
+#: new rule — it just teaches the clock which launcher a run belongs to.
+_STAGE_RE = re.compile(r"^(?P<base>.+)-(?P<stage>sft|dpo|grpo)$")
+
+
+def _stage_of(run: str) -> tuple[str, str] | None:
+    """(base, stage) if this run name is a post-training stage, else None."""
+    m = _STAGE_RE.match(run or "")
+    return (m.group("base"), m.group("stage")) if m else None
+
+
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
@@ -257,6 +269,11 @@ class Scheduler:
                  tick: float = TICK_SECONDS):
         self.store = store
         self.schedule = schedule or Schedule(store.root)
+        # Post-training stages are launched through the pipeline, not through LAUNCHERS;
+        # see `_start`. Imported here rather than at module scope because pipeline.py
+        # imports from runs.py, which this module also imports.
+        from .pipeline import Pipeline
+        self.pipeline = Pipeline(store.root)
         self.tick = tick
         self.log_path = store.root / "logs" / "scheduler.log"
         self.pid_path = store.root / "logs" / "scheduler.pid"
@@ -294,12 +311,85 @@ class Scheduler:
         with open(self.log_path, "a") as fh:
             fh.write(line + "\n")
 
+    def startable(self) -> list[str]:
+        """Run names the schedule may be pointed at: the launchers, plus the post-training
+        stages of the ones that are *language* models.
+
+        Two filters, for two different reasons.
+
+        Only language models get stages: a codec or an audio LM has no SFT, so offering
+        `codec-lj-grpo` would be 24 lines of nonsense in a dropdown. That test is structural
+        (does the config have a `model:` section) rather than temporal, so it does not
+        flicker as checkpoints come and go.
+
+        But stages ARE listed whether or not their prerequisite exists yet. A rule written
+        today for a GRPO whose SFT finishes next week is exactly what a schedule is for; the
+        gate is enforced at fire time, where `Pipeline.start` refuses with the reason and
+        the clock records a skip.
+        """
+        from .pipeline import STAGES
+        from .runs import LAUNCHERS
+        names = set(LAUNCHERS)
+        for base in LAUNCHERS:
+            cfg = self.store.root / "configs" / f"{base}.yaml"
+            try:
+                if not re.search(r"^model:", cfg.read_text(errors="replace"), re.MULTILINE):
+                    continue
+            except OSError:
+                continue
+            names |= {f"{base}-{stage}" for stage in STAGES}
+        return sorted(names)
+
+    def _start(self, rule: Rule) -> dict:
+        """Start a rule's run, through whichever launcher owns it.
+
+        A post-training stage is launched by `scripts/stage.sh`, not `phase2.sh`, so it is
+        not in `LAUNCHERS` and `RunStore.start` refuses it. Rather than teach `LAUNCHERS`
+        about a second script — which would also put a second Start button on the dashboard,
+        next to the Post-training panel's one, and duplicate the dependency gate — the
+        scheduler dispatches on the run's shape and calls the same `Pipeline.start` the
+        panel's button calls.
+
+        `<base>-<stage>` is already load-bearing in both directions (`Pipeline.stage_run`
+        builds it, `baseOf()` in dashboard.js parses it), so this adds no new convention.
+        The gate comes along for free: `Pipeline.start` raises `RunError` naming the missing
+        prerequisite, and `fire` records that as a skip without stopping the clock — which
+        is the right behaviour for a rule written before its prerequisite exists.
+
+        `stop_after` and `skip_smoke` are phase2.sh's and have no meaning for a stage; the
+        window's paired stop rule is what bounds a stage session.
+        """
+        if (stage := _stage_of(rule.run)) is not None:
+            base, name = stage
+            return self.pipeline.start(base, name)
+        return self.store.start(rule.run, stop_after=rule.stop_after,
+                                skip_smoke=rule.skip_smoke)
+
+    def _busy(self, run: str) -> str | None:
+        """Another run's trainer holding the card, or None. Only consulted for starts.
+
+        There is one GPU. Per-run idempotency ("already training" is a no-op) does not help
+        across runs: a 22:00 GRPO window overlapping a 00:30 base-run window puts two
+        trainers on the same 3090, and the second one dies in its first forward pass with
+        nobody awake to read the traceback. A human pressing Start may have a reason to
+        double up; an unattended clock does not, so this guard lives here rather than in
+        `RunStore.start`.
+        """
+        for other in self.store.runs():
+            if other != run and self.store.trainer_pid(other):
+                return other
+        return None
+
     def fire(self, rule: Rule, occurrence: datetime) -> str:
         """Run one rule. Never raises: a bad rule must not stop the clock."""
         try:
             if rule.action == "start":
-                res = self.store.start(rule.run, stop_after=rule.stop_after,
-                                       skip_smoke=rule.skip_smoke)
+                if (busy := self._busy(rule.run)):
+                    # Raised, not returned: RunError below is what records last_fired,
+                    # last_result and the log line. An early return here would leave the
+                    # rule looking like it never came due.
+                    raise RunError(f"'{busy}' is training; one GPU, one trainer")
+                res = self._start(rule)
                 result = f"started (launch pid {res['pid']})"
             else:
                 res = self.store.stop(rule.run, "now")

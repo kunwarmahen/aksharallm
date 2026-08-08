@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
 import signal
 import sys
 import time
@@ -52,7 +53,7 @@ from ..config import ModelConfig
 from ..lora import setup as lora_setup
 from ..lora.layer import disable_adapters
 from ..model.transformer import Transformer
-from . import report, stopfile
+from . import report, resume, stopfile
 from .pretrain import fmt_dur, human, save_checkpoint, stamp
 from .schedule import get_lr
 from .sft import _rebuild_cfg
@@ -171,6 +172,12 @@ def main():
     ap.add_argument("--stop-in", default=None, metavar="DURATION",
                     help="train for this long, then save and exit: 30m / 90s / 2h / 1h30m, "
                          "or a bare number read as minutes.")
+    ap.add_argument("--resume", default=None, metavar="PATH|auto",
+                    help="continue a stopped run: 'auto' picks <out-dir>/dpo_last.pt if it "
+                         "exists, so the same command starts and resumes. Restores the "
+                         "POLICY and its optimizer, the epoch and the position in the "
+                         "shuffled epoch. The reference model always stays --sft. "
+                         "Not available with --lora.")
     lora_setup.add_lora_args(ap)
     args = ap.parse_args()
     use_lora = lora_setup.wants_lora(args)
@@ -217,6 +224,24 @@ def main():
     val_ds = DPODataset(data_dir, "val", args.device)
 
     optimizer, _ = policy.configure_optimizers(0.0, args.lr, (0.9, 0.95), args.device)
+
+    # ---- resume -----------------------------------------------------------------------
+    # Note what is NOT reloaded: `ref`. It was built above from `--sft` and is the anchor the
+    # KL term measures drift *from*. Re-pointing it at the resumed policy would make the
+    # constraint measure the policy against itself — KL collapses toward zero, the run
+    # wanders arbitrarily far from the SFT model, and the logged KL still looks healthy.
+    resumed = None
+    resume_path = resume.resolve(args.resume, out_dir / "dpo_last.pt")
+    if resume_path and use_lora:
+        raise SystemExit(
+            "--resume does not work with --lora: an adapter file is not a training "
+            "checkpoint (no optimizer state, no epoch position). Re-run without --resume.")
+    if resume_path:
+        prev = resume.load(resume_path, policy, optimizer, args.device)
+        resumed = prev.get("dpo_progress") or {}
+        resumed.setdefault("step", prev.get("step", 0))
+        resumed.setdefault("best", prev.get("best_val", float("inf")))
+
     steps_per_epoch = train_ds.n // (args.batch_size * args.grad_accum)
     max_steps = steps_per_epoch * args.epochs
     warmup = max(10, int(0.1 * max_steps))
@@ -240,13 +265,36 @@ def main():
     ctx = (torch.autocast("cuda", dtype=torch.bfloat16)
            if args.device.startswith("cuda") else torch.autocast("cpu", enabled=False))
     logf = open(out_dir / "dpo_log.jsonl", "a")
+
+    def log_session(event: str, **kw):
+        """Bracket each launch, so `runlog.split_sessions` can turn one append-only log into
+        "this run over N evenings", and the dashboard has a `max_steps` to draw progress and
+        an ETA from. See sft.py for the same block and the `final_val_loss` naming rule."""
+        rec = {"event": event, "time": time.time(),
+               "iso": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+               "run": out_dir.name, **kw}
+        logf.write(json.dumps(rec) + "\n")
+        logf.flush()
+
     policy.train()
     rng = np.random.default_rng(1234)
     step = 0
+    start_epoch, skip_batches = 0, 0
+    best_val = float("inf")
+    if resumed:
+        step = int(resumed.get("step", 0))
+        best_val = float(resumed.get("best", float("inf")))
+        start_epoch = int(resumed.get("epoch", 0))
+        skip_batches = int(resumed.get("batches_done", 0))
+        if not resume.restore_rng(rng, resumed.get("epoch_rng_state"), "the shuffle position"):
+            skip_batches = 0
+        where = f"step {step}, epoch {start_epoch}"
+        if skip_batches:
+            where += f", {skip_batches} batches into that epoch"
+        print(f"resumed from {resume_path} at {where} (reference still {args.sft})")
     t0 = time.time()  # current log window
     run_t0 = t0  # whole invocation
     prev_log_step = -1
-    best_val = float("inf")
 
     # ---- stopping early ------------------------------------------------------------
     # Identical contract to sft.py: a signal or a file, whichever arrives first, breaks out
@@ -266,15 +314,33 @@ def main():
     signal.signal(signal.SIGINT, _request_stop)
     signal.signal(signal.SIGTERM, _request_stop)
     print(f"started {datetime.now():%Y-%m-%d %H:%M:%S}")
+    # A DPO step runs four forward passes (chosen/rejected x policy/reference), so a plain
+    # "tokens/second" would flatter it and an MFU derived from 6N would be simply wrong.
+    # Steps and wall-clock are logged; the throughput tile stays honest by staying empty.
+    log_session("session_start", pid=os.getpid(), start_step=step, max_steps=max_steps,
+                params=policy.num_params(), epochs=args.epochs, beta=args.beta,
+                batch_size=args.batch_size, grad_accum=args.grad_accum, lr=args.lr,
+                stage="dpo", resumed=bool(resumed))
     if stop_by is not None:
         print(f"budget  {fmt_dur(stop_by - run_t0)} of training, then save and exit")
 
     why = None
     announced = None
-    for epoch in range(args.epochs):
+    epoch, batches_done, epoch_rng_state = start_epoch, 0, None
+    for epoch in range(start_epoch, args.epochs):
         if why:
             break
+        # Recorded before the permutation is drawn: this names the shuffle a resume replays.
+        epoch_rng_state = rng.bit_generator.state
+        batches_done = 0
         batches = train_ds.epoch_batches(args.batch_size, rng)
+        for _ in range(skip_batches):
+            try:
+                next(batches)
+                batches_done += 1
+            except StopIteration:
+                break
+        skip_batches = 0   # only the first epoch of a resume is partial
         exhausted = False
         while not exhausted:
             lr = get_lr(step, base_lr=args.lr, warmup_steps=warmup, max_steps=max_steps,
@@ -291,6 +357,7 @@ def main():
                 except StopIteration:
                     exhausted = True
                     break
+                batches_done += 1   # counts generator advances, which is what a resume replays
                 # Reference logprobs need no graph -- it's frozen.
                 with torch.no_grad(), as_reference(policy, ref) as refm:
                     rc = sequence_logprob(refm, cx, cy, cm, ctx)
@@ -346,7 +413,9 @@ def main():
                 if vl < best_val:
                     best_val = vl
                     _save(out_dir, "best", policy, optimizer, ckpt, mcfg, args, step,
-                          best_val, va, use_lora, lora_config, lora_report)
+                          best_val, va, use_lora, lora_config, lora_report,
+                          resume.epoch_progress(epoch, batches_done, epoch_rng_state,
+                                                best_val))
                 t0 = time.time()
             step += 1
             if why:
@@ -355,14 +424,20 @@ def main():
 
     vl, va = evaluate(policy, ref, val_ds, args.batch_size, 20, args.beta, ctx)
     print(f"\nfinal val loss {vl:.4f} acc {va*100:.1f}%")
+    done_epoch = epoch if why else args.epochs
+    progress = resume.epoch_progress(done_epoch, batches_done if why else 0,
+                                     epoch_rng_state, min(best_val, vl))
     _save(out_dir, "last", policy, optimizer, ckpt, mcfg, args, step, min(best_val, vl),
-          va, use_lora, lora_config, lora_report)
+          va, use_lora, lora_config, lora_report, progress)
     if vl < best_val:
         _save(out_dir, "best", policy, optimizer, ckpt, mcfg, args, step, vl, va,
-              use_lora, lora_config, lora_report)
+              use_lora, lora_config, lora_report, progress)
     # Clear the honoured request: a stop file left behind would end the *next* run at step 0.
     if why and stop_file.exists():
         stop_file.unlink(missing_ok=True)
+    log_session("session_end", reason=why or "epochs", last_step=step, steps=step,
+                final_val_loss=vl, final_val_acc=va, best_val=min(best_val, vl),
+                elapsed=time.time() - run_t0)
     print(f"ran {step} steps in {fmt_dur(time.time() - run_t0)}"
           f"{f' (stopped early: {why})' if why else ''}, "
           f"finished {datetime.now():%Y-%m-%d %H:%M:%S}")
@@ -372,8 +447,12 @@ def main():
 
 
 def _save(out_dir: Path, which: str, policy, optimizer, ckpt, mcfg, args, step, val, acc,
-          use_lora: bool, lora_config, lora_report):
-    """An adapter file when training adapters, a full checkpoint otherwise. See sft._save."""
+          use_lora: bool, lora_config, lora_report, progress=None):
+    """An adapter file when training adapters, a full checkpoint otherwise. See sft._save.
+
+    `progress` records the epoch and shuffle position so `--resume` is exact; see
+    `aksharallm/train/resume.py`.
+    """
     if use_lora:
         return lora_setup.save(
             out_dir / f"dpo_{which}.lora.pt", policy, lora_config, ckpt, args.sft,
@@ -381,7 +460,8 @@ def _save(out_dir: Path, which: str, policy, optimizer, ckpt, mcfg, args, step, 
             training={"stage": "dpo", "step": step, "val_loss": val, "val_acc": acc,
                       "beta": args.beta, "lr": args.lr, "data_dir": args.data_dir})
     cfg_obj = _rebuild_cfg(ckpt, mcfg, args)
-    return save_checkpoint(out_dir / f"dpo_{which}.pt", policy, optimizer, cfg_obj, step, val)
+    return save_checkpoint(out_dir / f"dpo_{which}.pt", policy, optimizer, cfg_obj, step, val,
+                           extra={"dpo_progress": progress} if progress else None)
 
 
 if __name__ == "__main__":

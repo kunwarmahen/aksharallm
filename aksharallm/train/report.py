@@ -306,7 +306,11 @@ def build(out_dir: str | Path, run: str | None = None, log: str | None = None,
         return data
 
     steps = [r for r in records if "step" in r and "loss" in r]
-    vals = [r for r in records if "val_loss" in r]
+    # `"step" in r` is not redundant: a session record carrying a validation number would
+    # otherwise be read as an eval and then indexed by a step it does not have. The
+    # convention is that session records spell it `final_val_loss`, but a reader that
+    # crashes when a writer forgets is a reader that turns a naming slip into a lost report.
+    vals = [r for r in records if "val_loss" in r and "step" in r]
     last = runlog.latest(records)
     sessions = runlog.summarise_sessions(runlog.split_sessions(records))
     starts = [r for r in records if r.get("event") == "session_start"]

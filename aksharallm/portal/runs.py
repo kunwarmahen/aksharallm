@@ -255,8 +255,14 @@ class RunStore:
                  if _is_run_config(p)}
         ckpt = self.root / "checkpoints"
         if ckpt.is_dir():
+            # A step log is the usual evidence, but it does not exist until the first log
+            # line — so a stage launched a minute ago was missing from the run picker while
+            # it was already training, and only appeared once it logged. `run.meta` is
+            # written by the launcher before the trainer starts, so it is the earlier and
+            # more honest signal: this directory belongs to a run somebody started.
             names |= {p.name for p in ckpt.iterdir()
-                      if p.is_dir() and any((p / n).exists() for n in RUN_LOGS)}
+                      if p.is_dir() and (any((p / n).exists() for n in RUN_LOGS)
+                                         or (p / "run.meta").exists())}
         return sorted(n for n in names if RUN_NAME_RE.match(n))
 
     def check(self, run: str) -> str:

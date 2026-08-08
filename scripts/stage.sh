@@ -19,6 +19,8 @@
 #   DATA=smoltalk|ultrafeedback  override the dataset recipe
 #   SEQ=1024   EPOCHS=2   LR=...   extra trainer args passed through
 #   BS=8  ACCUM=8                  SFT micro-batch and accumulation (BS*ACCUM*SEQ = tokens/step)
+#   RESUME=auto|none|<path>        continue a stopped stage (default auto); none starts over
+#   CRASH_WINDOW=30                seconds to watch a new trainer before declaring success
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -137,14 +139,14 @@ case "$STAGE" in
             --tokenizer "$TOK" --out-dir data/dpo --seq-len "$SEQ"
         CMD=($PY -m aksharallm.train.dpo --sft "$SFT_CKPT" --data-dir data/dpo
              --tokenizer "$TOK" --out-dir "$RUN_DIR" --beta "${BETA:-0.1}" --lr "${LR:-5e-7}"
-             --stop-file "$STOP_FILE")
+             --stop-file "$STOP_FILE" --resume "${RESUME:-auto}")
         ;;
     grpo)
         # Code reward uses the built-in sandbox tasks -- no dataset to prepare.
         CMD=($PY -m aksharallm.train.grpo --init "$SFT_CKPT" --tokenizer "$TOK"
              --out-dir "$RUN_DIR" --reward "${REWARD:-code}" --group-size "${GROUP:-8}"
              --lr "${LR:-1e-6}" --steps "${STEPS:-500}"
-             --stop-file "$STOP_FILE")
+             --stop-file "$STOP_FILE" --resume "${RESUME:-auto}")
         ;;
 esac
 

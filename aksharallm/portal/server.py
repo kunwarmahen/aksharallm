@@ -640,7 +640,7 @@ class Handler(BaseHTTPRequestHandler):
                 "holder": holder or (os.getpid() if self.scheduler._thread else None),
                 "in_portal": bool(self.scheduler._thread),
                 "events": self.scheduler.recent(40),
-                "startable": sorted(LAUNCHERS),
+                "startable": self.scheduler.startable(),
             })
         return self._error(404, "no such api path")
 
@@ -776,10 +776,25 @@ class Handler(BaseHTTPRequestHandler):
         sched = self.scheduler.schedule.reload_if_changed()
 
         def check_run(run: str, act: str) -> str:
-            self.store.check(run)
-            if act == "start" and run not in LAUNCHERS:
-                raise RunError(f"'{run}' has no launcher, so a scheduled start could never "
-                               f"work. Startable runs: {', '.join(sorted(LAUNCHERS))}.")
+            """A rule may name anything the clock can actually act on.
+
+            Deliberately the same list the picker is built from — `Scheduler.startable()` —
+            rather than `LAUNCHERS` directly. A post-training stage is launched through
+            `Pipeline.start`, not `phase2.sh`, so it is not in LAUNCHERS and testing against
+            it here rejected exactly the rules the picker had just offered.
+
+            `store.check` is only right for a *stop*, and only for a run that exists: a
+            stage has no `configs/<run>.yaml`, so it is not a known run until it has been
+            launched once, and refusing to schedule it before then would defeat the point.
+            """
+            startable = self.scheduler.startable()
+            if act == "start":
+                if run not in startable:
+                    raise RunError(f"'{run}' has no launcher, so a scheduled start could "
+                                   f"never work. Startable: {', '.join(startable)}.")
+                return run
+            if run not in startable:
+                self.store.check(run)
             return run
 
         if action == "enable":               # the master switch

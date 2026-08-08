@@ -486,13 +486,13 @@ def test_a_reshuffled_resume_would_repeat_data(tmp_path):
 def test_progress_survives_a_checkpoint_round_trip(tmp_path):
     """`_progress` has to come back out of a .pt file intact — it is a numpy rng state
     dict, not a scalar, and that is the part most likely to break silently."""
-    from aksharallm.train.sft import _progress
+    from aksharallm.train import resume
     rng = np.random.default_rng(1234)
-    p = _progress(epoch=1, batches_done=17, epoch_rng_state=rng.bit_generator.state,
-                  best_val=1.25)
+    p = resume.epoch_progress(epoch=1, batches_done=17,
+                              epoch_rng_state=rng.bit_generator.state, best=1.25)
     torch.save({"sft_progress": p}, tmp_path / "ckpt.pt")
     back = torch.load(tmp_path / "ckpt.pt", weights_only=False)["sft_progress"]
-    assert back["epoch"] == 1 and back["batches_done"] == 17 and back["best_val"] == 1.25
+    assert back["epoch"] == 1 and back["batches_done"] == 17 and back["best"] == 1.25
     # and it must still drive a generator to the same sequence
     r2 = np.random.default_rng(0)
     r2.bit_generator.state = back["epoch_rng_state"]
@@ -583,3 +583,93 @@ def test_resume_can_be_switched_off_by_word(tmp_path, tok_path, value):
                        cwd=Path(__file__).resolve().parents[1], timeout=600)
     assert r.returncode == 0, r.stderr[-2000:]
     assert "resumed from" not in r.stdout, "the word should have switched resuming off"
+
+
+# ---- the resume contract, shared by SFT / DPO / GRPO -------------------------------------
+
+def test_resume_resolve_reads_auto_and_the_off_words(tmp_path):
+    from aksharallm.train import resume
+    last = tmp_path / "sft_last.pt"
+    assert resume.resolve(None, last) is None
+    assert resume.resolve("auto", last) is None          # nothing to continue yet
+    last.write_bytes(b"x")
+    assert resume.resolve("auto", last) == last
+    for word in ("none", "None", " off ", "no", "false", ""):
+        assert resume.resolve(word, last) is None, word
+    assert resume.resolve(str(tmp_path / "other.pt"), last) == tmp_path / "other.pt"
+
+
+def test_restore_rng_survives_a_missing_state(capsys):
+    from aksharallm.train import resume
+    rng = np.random.default_rng(0)
+    assert resume.restore_rng(rng, None, "the sampler") is False   # not an error
+    assert resume.restore_rng(rng, {"nonsense": 1}, "the sampler") is False
+    assert "could not restore the sampler" in capsys.readouterr().out
+
+
+def test_a_resume_loads_the_policy_and_never_the_reference(tmp_path):
+    """The rule that is unique to post-training, and silent when broken.
+
+    DPO and GRPO hold a trained policy and a frozen reference; the KL term measures drift
+    away from that reference. If a resume reloads the reference from the same checkpoint as
+    the policy, the anchor moves with the policy: KL collapses toward zero and the run is
+    free to wander arbitrarily far from the SFT model *while reporting a small KL*.
+    """
+    from aksharallm.config import ModelConfig
+    from aksharallm.model.transformer import Transformer
+    from aksharallm.train import resume
+
+    cfg = ModelConfig(vocab_size=64, d_model=16, n_layers=1, n_heads=2, n_kv_heads=1,
+                      max_seq_len=8, tie_embeddings=True, dropout=0.0)
+    reference = Transformer(cfg)                       # what --init/--sft produced
+    anchor = {k: v.clone() for k, v in reference.state_dict().items()}
+
+    drifted = Transformer(cfg)                         # a policy that has trained a while
+    with torch.no_grad():
+        for p in drifted.parameters():
+            p.add_(torch.randn_like(p))
+    torch.save({"model": drifted.state_dict()}, tmp_path / "last.pt")
+
+    policy = Transformer(cfg)
+    resume.load(tmp_path / "last.pt", policy, optimizer=None, device="cpu")
+
+    # the policy moved to the checkpoint...
+    for k, v in policy.state_dict().items():
+        assert torch.allclose(v, drifted.state_dict()[k]), k
+    # ...and the reference did not move at all
+    for k, v in reference.state_dict().items():
+        assert torch.allclose(v, anchor[k]), f"the KL reference drifted at {k}"
+
+
+def test_a_stage_log_carries_what_the_dashboard_reads(tmp_path, tok_path):
+    """The complaint that prompted this: a finished SFT showed a loss curve and four empty
+    tiles. Throughput, MFU, ETA, progress and the Sessions table are all read by key name
+    from the step log, and SFT was writing none of them.
+    """
+    from aksharallm.train import runlog
+
+    base, data = _tiny_sft_run(tmp_path, tok_path)
+    out = tmp_path / "out"
+    r = subprocess.run(
+        [sys.executable, "-m", "aksharallm.train.sft", "--base", str(base),
+         "--data-dir", str(data), "--tokenizer", str(tok_path), "--out-dir", str(out),
+         "--epochs", "1", "--batch-size", "2", "--grad-accum", "2", "--device", "cpu",
+         "--eval-every", "4", "--log-every", "2"],
+        capture_output=True, text=True, cwd=Path(__file__).resolve().parents[1], timeout=600)
+    assert r.returncode == 0, r.stderr[-2000:]
+
+    records = runlog.load_records(out / "sft_log.jsonl")
+    steps = [x for x in records if "step" in x and "loss" in x]
+    assert steps, "no step records"
+    for key in ("tok_per_sec", "mfu", "grad_norm", "eta_s", "s_per_step"):
+        assert steps[-1].get(key) is not None, f"the dashboard reads {key} and it is missing"
+
+    # session brackets: the Sessions table, and where max_steps/progress come from
+    sessions = runlog.summarise_sessions(runlog.split_sessions(records))
+    assert len(sessions) == 1, sessions
+    start = next(x for x in records if x.get("event") == "session_start")
+    end = next(x for x in records if x.get("event") == "session_end")
+    assert start["max_steps"] > 0 and start["tokens_per_step"] == 2 * 2 * 16
+    # a session record must NOT look like an eval: it has no step to place one at
+    assert "val_loss" not in end and end["final_val_loss"] is not None
+    assert (out / "report.md").exists(), "the run report must still write"

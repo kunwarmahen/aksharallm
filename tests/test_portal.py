@@ -1113,3 +1113,101 @@ def test_run_log_path_falls_back_so_a_fresh_run_has_something_to_watch(tmp_path)
     assert run_log_path(tmp_path).name == "train_log.jsonl"
     (tmp_path / "grpo_log.jsonl").write_text("")
     assert run_log_path(tmp_path).name == "grpo_log.jsonl"
+
+
+# ---- scheduling a post-training stage -----------------------------------------------------
+
+def test_a_stage_run_is_offered_but_an_audio_codec_stage_is_not(store, repo, monkeypatch):
+    """Language models get stages; a codec has no SFT, and 24 nonsense rows in a dropdown
+    is its own kind of bug."""
+    monkeypatch.setitem(runs_mod.LAUNCHERS, "demo", {})
+    monkeypatch.setitem(runs_mod.LAUNCHERS, "noisy", {})
+    (repo / "configs" / "noisy.yaml").write_text("codec:\n  bins: 8\n")
+    offered = Scheduler(store, Schedule(repo, repo / "schedule.json")).startable()
+    assert {"demo", "demo-sft", "demo-dpo", "demo-grpo"} <= set(offered)
+    assert "noisy" in offered
+    assert not [n for n in offered if n.startswith("noisy-")], offered
+
+
+def test_a_stage_rule_launches_through_the_pipeline_not_phase2(store, repo, monkeypatch):
+    """`RunStore.start` refuses a stage (no launcher). The clock must reach stage.sh via
+    Pipeline instead — the same call the Post-training panel's button makes."""
+    sched = Schedule(repo, repo / "schedule.json")
+    scheduler = Scheduler(store, sched, tick=0.01)
+    seen = {}
+
+    def fake_start(base, stage):
+        seen["args"] = (base, stage)
+        return {"ok": True, "pid": 4321}
+
+    monkeypatch.setattr(scheduler.pipeline, "start", fake_start)
+    rule = Rule(run="demo-grpo", action="start", at="22:00")
+    sched.add(rule)
+    result = scheduler.fire(rule, at(MON, 22, 0))
+    assert seen["args"] == ("demo", "grpo"), "did not dispatch to the pipeline"
+    assert "started" in result and "4321" in result
+
+
+def test_a_stage_rule_whose_prerequisite_is_missing_skips_with_the_reason(store, repo):
+    """A rule may legitimately be written before its prerequisite exists. It must skip,
+    record why, and leave the clock running."""
+    sched = Schedule(repo, repo / "schedule.json")
+    scheduler = Scheduler(store, sched, tick=0.01)
+    rule = Rule(run="demo-grpo", action="start", at="22:00")
+    sched.add(rule)
+    result = scheduler.fire(rule, at(MON, 22, 0))
+    assert "skipped" in result and "sft" in result.lower(), result
+    assert rule.last_fired is not None, "a skip still counts as handled"
+
+
+def test_a_scheduled_start_refuses_while_another_run_holds_the_gpu(store, repo, monkeypatch):
+    """One card, one trainer. Per-run idempotency does not catch this: the 22:00 stage rule
+    and the 00:30 base-run rule are different runs, and both starting means an OOM at 3am
+    with nobody awake."""
+    monkeypatch.setitem(runs_mod.LAUNCHERS, "demo", {})
+    sched = Schedule(repo, repo / "schedule.json")
+    scheduler = Scheduler(store, sched, tick=0.01)
+    monkeypatch.setattr(store, "trainer_pid", lambda run: 999 if run == "demo" else None)
+
+    rule = Rule(run="demo-grpo", action="start", at="22:00")
+    sched.add(rule)
+    result = scheduler.fire(rule, at(MON, 22, 0))
+    assert "skipped" in result and "demo" in result and "one GPU" in result, result
+
+
+def test_a_stop_rule_is_never_blocked_by_the_gpu_guard(store, repo, monkeypatch):
+    """The guard is for starts only — refusing to *stop* because something is training
+    would be exactly backwards."""
+    sched = Schedule(repo, repo / "schedule.json")
+    scheduler = Scheduler(store, sched, tick=0.01)
+    monkeypatch.setattr(store, "trainer_pid", lambda run: 999 if run == "demo" else None)
+    stopped = {}
+    monkeypatch.setattr(store, "stop", lambda run, mode: stopped.setdefault("run", run)
+                        or {"pid": 999})
+    rule = Rule(run="demo", action="stop", at="06:30")
+    sched.add(rule)
+    scheduler.fire(rule, at(MON, 6, 30))
+    assert stopped["run"] == "demo"
+
+
+def test_a_launched_stage_appears_before_its_first_log_line(store, repo):
+    """`run.meta` is written by the launcher; the step log does not exist until the first
+    logged step. Keying only on the log meant a stage was missing from the run picker while
+    it was already training, and appeared minutes later."""
+    d = repo / "checkpoints" / "demo-sft"
+    d.mkdir(parents=True)
+    (d / "run.meta").write_text("pid     123\nconfig  sft on demo\n")
+    assert "demo-sft" in store.runs()
+
+
+def test_scheduling_a_stage_is_allowed_by_the_same_list_the_picker_shows(store, repo,
+                                                                         monkeypatch):
+    """The picker offered `demo-grpo` and rule creation then rejected it, because the two
+    were validated against different lists. They must be the same list."""
+    from aksharallm.portal.server import RunError as ServerRunError  # noqa: F401
+    monkeypatch.setitem(runs_mod.LAUNCHERS, "demo", {})
+    scheduler = Scheduler(store, Schedule(repo, repo / "schedule.json"))
+    offered = scheduler.startable()
+    assert "demo-grpo" in offered
+    # the run is not a known run yet (no log, no run.meta) — scheduling it must still work
+    assert "demo-grpo" not in store.runs()

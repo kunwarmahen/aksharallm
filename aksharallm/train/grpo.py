@@ -37,9 +37,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -51,7 +53,7 @@ from ..config import ModelConfig
 from ..infer.generate import generate
 from ..model.transformer import Transformer
 from ..tokenizer.tokenizer import Tokenizer
-from . import report, stopfile
+from . import report, resume, stopfile
 from .pretrain import fmt_dur, human, save_checkpoint
 from .sft import _rebuild_cfg
 
@@ -213,6 +215,11 @@ def main():
     ap.add_argument("--stop-in", default=None, metavar="DURATION",
                     help="train for this long, then save and exit: 30m / 90s / 2h / 1h30m, "
                          "or a bare number read as minutes.")
+    ap.add_argument("--resume", default=None, metavar="PATH|auto",
+                    help="continue a stopped run: 'auto' picks <out-dir>/grpo_last.pt if it "
+                         "exists, so the same command starts and resumes. Restores the "
+                         "POLICY, its optimizer, the step, the best reward and the prompt "
+                         "sampler. The reference model always stays --init.")
     args = ap.parse_args()
 
     sys.stdout.reconfigure(line_buffering=True)
@@ -248,6 +255,19 @@ def main():
             prompts.append((tok.encode(seed, bos=True), seed, rf))
 
     optimizer, _ = policy.configure_optimizers(0.0, args.lr, (0.9, 0.95), args.device)
+
+    # ---- resume -----------------------------------------------------------------------
+    # `ref` above was built from `--init` and is deliberately NOT touched here. It is the
+    # anchor the KL penalty measures drift from; re-pointing it at the resumed policy would
+    # make the run measure itself against itself, so the KL collapses toward zero and the
+    # policy is free to wander arbitrarily far from the SFT model — while the logged `kl`
+    # still looks small. Nothing about the numbers would tell you.
+    resumed = resume.resolve(args.resume, out_dir / "grpo_last.pt")
+    start_step, resumed_state = 0, None
+    if resumed:
+        prev = resume.load(resumed, policy, optimizer, args.device)
+        resumed_state = prev.get("grpo_progress") or {}
+        start_step = int(resumed_state.get("step", prev.get("step", -1))) + 1
     ctx = (torch.autocast("cuda", dtype=torch.bfloat16)
            if args.device.startswith("cuda") else torch.autocast("cpu", enabled=False))
 
@@ -261,9 +281,27 @@ def main():
     print("=" * 78)
 
     logf = open(out_dir / "grpo_log.jsonl", "a")
+
+    def log_session(event: str, **kw):
+        """Same bracketing as sft.py/dpo.py — it is what gives the Sessions table its rows
+        and the dashboard a `max_steps` for progress and ETA."""
+        rec = {"event": event, "time": time.time(),
+               "iso": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+               "run": out_dir.name, **kw}
+        logf.write(json.dumps(rec) + "\n")
+        logf.flush()
+
     policy.train()
     rng = np.random.default_rng(0)
     best_reward = -1.0
+    if resumed_state:
+        # best_reward must carry across sessions. Letting it reset to -1.0 makes the *first*
+        # step of the next session "the best so far", overwriting grpo_best.pt with a policy
+        # that has just been perturbed — the one failure mode here that destroys work.
+        best_reward = float(resumed_state.get("best", -1.0))
+        resume.restore_rng(rng, resumed_state.get("rng_state"), "the prompt sampler")
+        print(f"resumed from {resumed} at step {start_step}, best reward "
+              f"{best_reward:.3f} (reference still {args.init})")
     t0 = time.time()
 
     # ---- stopping early ------------------------------------------------------------
@@ -289,10 +327,19 @@ def main():
     if stop_by is not None:
         print(f"budget  {fmt_dur(stop_by - run_t0)} of training, then save and exit")
 
+    # No throughput or MFU here on purpose: most of a GRPO step is *sampling* a group and
+    # running it in the sandbox, not the one training update. A tokens/second taken from the
+    # update would describe a few percent of the wall-clock and read as a throughput
+    # collapse; reward and solve-rate are this run's real headline.
+    log_session("session_start", pid=os.getpid(), start_step=start_step,
+                max_steps=args.steps, params=policy.num_params(), reward=args.reward,
+                group_size=args.group_size, lr=args.lr, stage="grpo",
+                resumed=bool(resumed))
+
     why = None
     announced = None
     last_step = args.steps - 1
-    for step in range(args.steps):
+    for step in range(start_step, args.steps):
         # 1-2. pick prompts, sample a group each
         idx = rng.choice(len(prompts), size=min(args.prompts_per_step, len(prompts)),
                          replace=False)
@@ -351,23 +398,32 @@ def main():
                                    "loss": loss.item(), **m}) + "\n")
             logf.flush()
 
+        progress = resume.step_progress(step, rng.bit_generator.state, best_reward)
         if mean_r > best_reward:
             best_reward = mean_r
+            progress = resume.step_progress(step, rng.bit_generator.state, best_reward)
             save_checkpoint(out_dir / "grpo_best.pt", policy, optimizer,
-                            _rebuild_cfg(ckpt, mcfg, args), step, best_reward)
+                            _rebuild_cfg(ckpt, mcfg, args), step, best_reward,
+                            extra={"grpo_progress": progress})
         if step > 0 and step % args.ckpt_every == 0:
             save_checkpoint(out_dir / "grpo_last.pt", policy, optimizer,
-                            _rebuild_cfg(ckpt, mcfg, args), step, best_reward)
+                            _rebuild_cfg(ckpt, mcfg, args), step, best_reward,
+                            extra={"grpo_progress": progress})
         if why:
             print(f"[stop] {why} -- saving at step {step}")
             last_step = step
             break
 
     save_checkpoint(out_dir / "grpo_last.pt", policy, optimizer,
-                    _rebuild_cfg(ckpt, mcfg, args), last_step, best_reward)
+                    _rebuild_cfg(ckpt, mcfg, args), last_step, best_reward,
+                    extra={"grpo_progress": resume.step_progress(
+                        last_step, rng.bit_generator.state, best_reward)})
     # Clear the honoured request: a stop file left behind would end the *next* run at step 0.
     if why and stop_file.exists():
         stop_file.unlink(missing_ok=True)
+    log_session("session_end", reason=why or "steps", last_step=last_step,
+                steps=last_step - start_step + 1, best_reward=best_reward,
+                elapsed=time.time() - run_t0)
     print(f"\ndone. best mean reward {best_reward:.3f}"
           f"{f' (stopped early: {why})' if why else ''}. checkpoints in {out_dir}")
     logf.close()

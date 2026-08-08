@@ -285,6 +285,77 @@ SFT defaults to `BS=8 ACCUM=8` — 65,536 tokens per step, measured at ~21 GB pe
 300M model on a 24 GB card. `BS` is the one to change on different hardware; keep
 `BS × ACCUM` constant and the optimisation is unchanged, only the memory moves.
 
+### Scheduling a post-training stage
+
+GRPO is the stage this is for. A step there samples a whole group, runs every completion in
+the sandbox and scores it, so 500 steps is genuinely long and open-ended — the shape of job
+the Schedule panel already exists for. SFT and DPO can be scheduled too; they are just
+usually short enough not to need it.
+
+```bash
+# in the portal: Schedule → run: small-code-grpo → window 22:00–06:30
+```
+
+Three things had to be true first, and each is worth knowing:
+
+**The stage must resume, or a window is worse than nothing.** Without it every night
+restarts from the SFT checkpoint at step 0, and because `best_reward` resets to `-1.0` the
+first step of night two overwrites `grpo_best.pt` with a barely-trained policy. You would
+wake to a worse model than you went to bed with. All three stages now take `--resume auto`
+(which `stage.sh` passes; `RESUME=none` starts over).
+
+**A scheduled start refuses when another run holds the card.** Per-run idempotency does not
+cover this — a 22:00 GRPO rule and a 00:30 base-run rule are *different runs*, and both
+firing puts two trainers on one 3090. The rule is skipped with the reason recorded. It
+applies to scheduled starts only: a human pressing Start may have a reason to double up, an
+unattended clock does not.
+
+**Three gates, and I only fixed two the first time.** The picker is built from
+`Scheduler.startable()`, firing goes through `Scheduler._start`, and rule *creation* is
+validated in `server._schedule_post.check_run` — which had its own `run not in LAUNCHERS`
+test. So the dropdown offered `small-code-grpo` and saving the rule refused it. Both now
+read the same `startable()` list; if you add a fourth way to name a run, make it read that
+list too.
+
+**The clock does not learn a second launcher.** A stage is launched by `stage.sh`, so
+`RunStore.start` refuses it — and rather than add it to `LAUNCHERS` (which would also put a
+second Start button on the dashboard beside the Post-training panel's, duplicating the
+dependency gate), the scheduler dispatches on the run's shape and calls the same
+`Pipeline.start` the panel's button calls. The gate comes free: a GRPO rule written before
+its SFT exists skips with "run SFT first" and the clock keeps running. That is deliberate —
+writing a rule for something that finishes next week is what a schedule is *for*, so stages
+are listed whether or not their prerequisite exists yet. Only language-model bases get
+stages in the picker; a codec has no SFT.
+
+### A stage writes the same log a base run does
+
+The dashboard's throughput, MFU, ETA, progress and Sessions panels all read named keys out
+of the step log and render nothing when a key is absent. SFT used to log only `step`,
+`epoch`, `loss`, `lr`, `s_per_step` and `elapsed` — so a finished fine-tune showed a loss
+curve and four empty tiles, which reads as "the panel is broken" rather than "nobody wrote
+that number".
+
+All three stages now write the pretraining record shape: `tok_per_sec`, `mfu`, `grad_norm`
+and `eta_s` per step, bracketed by `session_start` / `session_end` records carrying
+`max_steps`, `tokens_per_step` and `params`. The brackets are what `runlog.split_sessions`
+turns into the Sessions table, and where progress and ETA get their denominator.
+
+Two deliberate omissions, because a wrong number is worse than a blank tile. **DPO** runs
+four forward passes per step (chosen/rejected × policy/reference), so a tokens/second taken
+from one of them would flatter it and an MFU derived from `6N` would simply be wrong.
+**GRPO** spends most of a step *sampling* a group and running it in the sandbox, not on the
+single training update; its headline is reward and solve-rate, and a throughput number
+would describe a few percent of the wall-clock.
+
+One naming rule, learned by breaking it: a session record must not carry a bare `val_loss`.
+Every reader that scans for evals matches on that key and then indexes the record by a
+`step` it does not have — it turned the whole run report into `KeyError: 'step'`. Session
+records spell it `final_val_loss`. `report.py` now also requires a `step` before treating a
+record as an eval, so the next writer to forget loses a field rather than the report.
+
+This only applies to logs written from now on. A run finished before the change cannot grow
+the fields retroactively; its loss curve and validation numbers are all there is.
+
 ### When a stage dies, and the panel says "ready"
 
 The first real SFT run on the 300M model exposed two bugs at once, and the second one hid
@@ -381,7 +452,8 @@ The panels, in plain terms:
 - **GPU** — what the card is doing, during a run and between runs.
 - **Cost** — what that cost, per run and in total. See [below](#what-a-run-cost).
 - **Schedule** — recurring start/stop windows (e.g. "train 8pm–7am"), from the browser or
-  the shell.
+  the shell. **Post-training stages can be scheduled too** — `small-code-grpo` is in the
+  picker alongside the base runs. See [scheduling a stage](#scheduling-a-post-training-stage).
 - **Playground** — send the current checkpoint a prompt *while it is still training*, so you
   can watch it get better week over week (for a code model, it runs the generated function
   in the sandbox and shows pass/fail). See [doc 6](06-inference.md).

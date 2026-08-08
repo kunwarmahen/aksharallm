@@ -460,6 +460,7 @@ Three stages, three trainers, and they share the pretraining loop's shape — re
 | 1 | [`aksharallm/tokenizer/tokenizer.py`](../aksharallm/tokenizer/tokenizer.py) | `render_chat` — where the mask is *born*, one token at a time |
 | 2 | [`aksharallm/data/prepare_sft.py`](../aksharallm/data/prepare_sft.py) | the dataset adapters (`_smoltalk`, `_openhermes`, `jsonl_rows`), `is_valid`, then `main` — packing into fixed blocks, dropping over-long conversations, and the "% trainable tokens" number it prints |
 | 3 | [`aksharallm/train/sft.py`](../aksharallm/train/sft.py) | `SFTDataset.batch` — `m = msk[:, 1:]`, `y[m == 0] = -100`. That is the whole chapter. Then `main` for the different LR/epochs/dropout defaults and the LoRA branch |
+| 4 | [`aksharallm/train/resume.py`](../aksharallm/train/resume.py) | the contract all three stages share, and the three things that make a resume *correct*: the optimizer, the position in the shuffled epoch, and the reference model that must **not** move. Read the module docstring before the functions — the failure modes are the point |
 
 **Part 2 — DPO**
 
