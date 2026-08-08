@@ -185,6 +185,23 @@ def _stage_of_run(run: str) -> tuple[str, str] | None:
     return None
 
 
+def _stage_startable(root: Path, run: str) -> bool:
+    """Can this post-training stage be launched right now?
+
+    Imported lazily because `pipeline` imports from this module; asking it, rather than
+    re-deriving the rule, is what keeps one implementation of the dependency gate. A stage
+    whose prerequisite is missing stays un-startable here exactly as it is in the panel.
+    """
+    if _stage_of_run(run) is None:
+        return False
+    from .pipeline import Pipeline
+    base, stage = _stage_of_run(run)
+    try:
+        return bool(Pipeline(root).stage_status(base, stage)["can_start"])
+    except (RunError, KeyError, OSError):
+        return False
+
+
 def _stage_hint(run: str) -> str:
     """How the Post-training panel names this stage, for a tooltip that points at it."""
     parsed = _stage_of_run(run)
@@ -468,8 +485,13 @@ class RunStore:
             "series": runlog.series(records, max_points=max_points),
             "checkpoints": self._checkpoints(run),
             "logs": self._logs(run),
-            "can_start": (run in LAUNCHERS and phase == PHASE_IDLE and not finished
-                          and not archived),
+            # A post-training stage is startable from here too. It used to be refused, so
+            # selecting `small-code-grpo` in the picker gave a button reading "Resume from
+            # 17" that did nothing -- an inviting label on a dead control, which is the same
+            # failure as a paused schedule counting down. The start itself is *delegated* to
+            # `Pipeline`, so the dependency gate has exactly one implementation.
+            "can_start": ((run in LAUNCHERS or _stage_startable(self.root, run))
+                          and phase == PHASE_IDLE and not finished and not archived),
             # A pre-flight is stoppable too — that aborts the launch. Bounded stops are not:
             # there is no step count to count from until the trainer exists.
             "can_stop": phase in (PHASE_TRAINING, PHASE_STOPPING, PHASE_LAUNCHING),
@@ -481,7 +503,18 @@ class RunStore:
                  f"steps. Start fresh to archive it and begin again from step 0, or raise "
                  f"train.max_steps in configs/{run}.yaml to carry on training this one."
                  ) if finished and run in LAUNCHERS else
-                None if run in LAUNCHERS else
+                # The same sentence for a finished *stage*, which has no YAML to raise — its
+                # budget is a command-line argument. Without this branch a completed SFT or
+                # DPO fell through to `None` and left a disabled button with nothing said
+                # about it, which is the dead-control-with-no-explanation this hint exists
+                # to prevent.
+                (f"'{run}' has trained its whole budget: {max_steps:,} steps. Re-run it from "
+                 f"the Post-training panel ({_stage_hint(run)}) with Start fresh…, which "
+                 f"archives this one and begins again at step 0. To train it further "
+                 f"instead, give it a bigger budget: scripts/stage.sh "
+                 f"{_stage_of_run(run)[1]} {_stage_of_run(run)[0]}"
+                 ) if finished and _stage_of_run(run) else
+                None if run in LAUNCHERS or _stage_startable(self.root, run) else
                 # A post-training stage is startable — just not from here. Its Start lives
                 # in the Post-training panel, which is the only place that can also show the
                 # dependency gate, and there is deliberately no second copy of it on this

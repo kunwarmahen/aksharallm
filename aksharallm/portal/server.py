@@ -62,7 +62,8 @@ from .longctx import LongContext
 from .serving import ServeJobs
 from .learn import Learn
 from .synth import SynthJobs
-from .runs import PHASE_LAUNCHING, PHASE_TRAINING, LAUNCHERS, RunError, RunStore, repo_root
+from .runs import (PHASE_LAUNCHING, PHASE_TRAINING, LAUNCHERS, RunError, RunStore,
+                   _stage_of_run, repo_root)
 from .schedule import Rule, Schedule, Scheduler, parse_days
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -212,6 +213,15 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 4 and parts[:2] == ["api", "run"]:
                 run, action = parts[2], parts[3]
                 if action == "start":
+                    # A post-training stage goes through `Pipeline`, which is the only place
+                    # the SFT -> DPO/GRPO gate is enforced. The run controls and the
+                    # Post-training panel are then two doors onto one implementation rather
+                    # than two implementations that can disagree about what is allowed.
+                    staged = _stage_of_run(run)
+                    if staged:
+                        base, stage = staged
+                        return self._json(self.pipeline.start(
+                            base, stage, fresh=bool(data.get("fresh"))))
                     return self._json(self.store.start(
                         run, stop_after=self._int(data, "stop_after"),
                         stop_after_s=self._int(data, "stop_after_s"),

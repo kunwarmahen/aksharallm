@@ -251,3 +251,121 @@ def test_dpo_and_grpo_are_named_as_alternatives_to_each_other(tmp_path):
     # and each carries the rule for picking it
     assert "no program can tell" in st["dpo"]["guidance"]["choose"]
     assert "program CAN tell" in st["grpo"]["guidance"]["choose"]
+
+
+# --- stopped is not finished ---------------------------------------------------------------
+# Every trainer here writes `<stage>_best.pt` the first time anything improves, so a run
+# stopped at step 16 of 500 has one. Reading "a checkpoint exists" as "this stage is done"
+# made the card offer **Start fresh…** — which archives the run and restarts at zero — to
+# someone who had just stopped it and wanted to carry on.
+
+def _stage_log(tmp_path, stage: str, last_step: int, max_steps: int, ended: bool = True):
+    d = tmp_path / "checkpoints" / f"small-code-{stage}"
+    d.mkdir(parents=True, exist_ok=True)
+    rows = [f'{{"event": "session_start", "max_steps": {max_steps}, "stage": "{stage}"}}']
+    rows += [f'{{"step": {s}, "loss": 0.5, "reward": 0.3}}' for s in range(last_step + 1)]
+    if ended:
+        # the record that used to be read as "the latest reading" — it has no step at all
+        rows.append(f'{{"event": "session_end", "last_step": {last_step}, "reason": "stop"}}')
+    (d / f"{stage}_log.jsonl").write_text("\n".join(rows) + "\n")
+    return d
+
+
+def test_a_stage_stopped_part_way_offers_to_resume_not_to_start_over(tmp_path):
+    _touch(tmp_path / "checkpoints" / "small-code" / "ckpt_best.pt")
+    _touch(tmp_path / "checkpoints" / "small-code-sft" / "sft_best.pt")
+    d = _stage_log(tmp_path, "grpo", last_step=16, max_steps=500)
+    _touch(d / "grpo_best.pt")          # exists after the first improvement, always
+
+    st = stages(Pipeline(tmp_path), "small-code")["grpo"]
+    assert st["phase"] == "stopped", "a run that never reached its budget is not 'done'"
+    assert st["finished"] is False
+    assert st["can_start"], "resuming it is the whole point"
+    assert st["step"] == 16 and st["step_of"] == 500
+
+
+def test_a_stage_that_reached_its_budget_is_done(tmp_path):
+    _touch(tmp_path / "checkpoints" / "small-code" / "ckpt_best.pt")
+    _touch(tmp_path / "checkpoints" / "small-code-sft" / "sft_best.pt")
+    d = _stage_log(tmp_path, "dpo", last_step=1723, max_steps=1724)
+    _touch(d / "dpo_best.pt")
+
+    st = stages(Pipeline(tmp_path), "small-code")["dpo"]
+    assert st["phase"] == "done" and st["finished"] is True
+
+
+def test_the_last_reading_survives_the_session_end_record(tmp_path):
+    """`session_end` is the literal last line of a stopped run's log and carries no `step`.
+
+    Taking the last line verbatim made a stopped stage show no step and no metric at all —
+    blank exactly when you are looking to find out where it got to.
+    """
+    _touch(tmp_path / "checkpoints" / "small-code" / "ckpt_best.pt")
+    _touch(tmp_path / "checkpoints" / "small-code-sft" / "sft_best.pt")
+    _stage_log(tmp_path, "grpo", last_step=16, max_steps=500, ended=True)
+
+    st = stages(Pipeline(tmp_path), "small-code")["grpo"]
+    assert st["step"] == 16, "the session_end record shadowed the real last step"
+    assert st["metric"]["value"] == 0.3
+
+
+def test_resume_does_not_archive(tmp_path):
+    """The button for a stopped stage must not carry `fresh`, or pressing it renames the run
+    aside and restarts at zero — the opposite of what 'continue this' means."""
+    _touch(tmp_path / "checkpoints" / "small-code" / "ckpt_best.pt")
+    _touch(tmp_path / "checkpoints" / "small-code-sft" / "sft_best.pt")
+    d = _stage_log(tmp_path, "grpo", last_step=16, max_steps=500)
+    _touch(d / "grpo_best.pt")
+    _touch(d / "grpo_last.pt")
+    (tmp_path / "scripts").mkdir(exist_ok=True)
+    (tmp_path / "scripts" / "stage.sh").write_text("#!/bin/sh\nexit 0\n")
+
+    res = Pipeline(tmp_path).start("small-code", "grpo")     # no fresh=True
+    assert res["archived"] is None
+    assert (d / "grpo_last.pt").exists(), "the checkpoint a resume needs was moved aside"
+
+
+# --- the run controls and the panel are two doors onto one gate ----------------------------
+# Selecting `small-code-grpo` in the run picker gave a button labelled "Resume from 17" that
+# was disabled: post-training stages were refused by the main controls and only startable
+# from the Post-training panel. An inviting label on a dead control is the same failure as a
+# paused schedule counting down — the UI describing an action it will not perform.
+
+def test_a_stopped_stage_is_startable_from_the_run_controls(tmp_path):
+    from aksharallm.portal.runs import RunStore
+
+    _touch(tmp_path / "checkpoints" / "small-code" / "ckpt_best.pt")
+    _touch(tmp_path / "checkpoints" / "small-code-sft" / "sft_best.pt")
+    d = _stage_log(tmp_path, "grpo", last_step=16, max_steps=500)
+    _touch(d / "grpo_best.pt")
+
+    st = RunStore(tmp_path).status("small-code-grpo")
+    assert st["can_start"], "the run controls still refuse a stage they now know how to start"
+    assert st["start_hint"] is None, "a startable run needs no excuse"
+
+
+def test_a_stage_whose_prerequisite_is_missing_stays_refused_everywhere(tmp_path):
+    """The gate must not have two implementations. With no SFT checkpoint, GRPO is
+    un-startable from the run controls for the same reason it is in the panel."""
+    from aksharallm.portal.runs import RunStore
+
+    _touch(tmp_path / "checkpoints" / "small-code" / "ckpt_best.pt")
+    _stage_log(tmp_path, "grpo", last_step=3, max_steps=500)   # no sft_best.pt anywhere
+
+    assert not RunStore(tmp_path).status("small-code-grpo")["can_start"]
+    assert stages(Pipeline(tmp_path), "small-code")["grpo"]["phase"] == "blocked"
+
+
+def test_a_finished_stage_says_why_it_cannot_start(tmp_path):
+    """It has no configs/<run>.yaml to point at, so it needed its own sentence — otherwise
+    a completed SFT is a disabled button with nothing said about it."""
+    from aksharallm.portal.runs import RunStore
+
+    _touch(tmp_path / "checkpoints" / "small-code" / "ckpt_best.pt")
+    d = _stage_log(tmp_path, "sft", last_step=1447, max_steps=1448)
+    _touch(d / "sft_best.pt")
+
+    st = RunStore(tmp_path).status("small-code-sft")
+    assert not st["can_start"]
+    assert st["start_hint"], "a disabled button with no explanation is the bug being fixed"
+    assert "budget" in st["start_hint"] and "stage.sh" in st["start_hint"]

@@ -23,6 +23,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from ..train import runlog
 from .runs import (RUN_NAME_RE, RunError, RunStore, _alive, _cmdline, _read_int,
                    _read_meta, repo_root)
 
@@ -138,20 +139,38 @@ class Pipeline:
         return lines[-1] if lines else f"the trainer exited without writing to {log}"
 
     def _last(self, base: str, stage: str) -> dict:
-        """The most recent logged line (step + the stage's headline metric)."""
+        """The newest reading worth putting on the card, via the shared log reader.
+
+        This used to take the literal last line of the file, which is wrong the moment a run
+        ends: the last line is a `session_end` record, which carries no `step` and no metric.
+        So a stage that had just been stopped showed **no step and no number at all** — the
+        panel went blank exactly when you were looking at it to find out where it got to.
+
+        `runlog.latest` already solves this for the dashboard (it filters to real step
+        records and reads backwards), and using it also gets `max_steps` and `trained_to`,
+        which is what `_finished` needs below.
+        """
         log = self.stage_dir(base, stage) / STAGES[stage][1]
         if not log.exists():
             return {}
-        import json
-        last = {}
         try:
-            for line in log.read_text().splitlines():
-                line = line.strip()
-                if line:
-                    last = json.loads(line)
+            return runlog.latest(runlog.load_records(log))
         except (OSError, ValueError):
             return {}
-        return last
+
+    @staticmethod
+    def _finished(last: dict) -> bool | None:
+        """Did the run reach its budget, as opposed to merely producing a checkpoint?
+
+        None when the log cannot say. The distinction is the whole of the bug below: every
+        trainer here writes its `<stage>_best.pt` as soon as anything improves, so a run
+        stopped at step 16 of 500 has one — and "a checkpoint exists" was being read as
+        "this stage is done".
+        """
+        trained, budget = last.get("trained_to"), last.get("max_steps")
+        if trained is None or not budget:
+            return None
+        return trained + 1 >= budget
 
     def _data(self, stage: str) -> dict | None:
         """Whether this stage's dataset is already on disk, and what making it would cost.
@@ -187,6 +206,8 @@ class Pipeline:
         prereq_ok = prereq.exists()
         running = pid is not None
         preparing = None if running else self._preparing(base, stage)
+        last = self._last(base, stage)
+        finished = self._finished(last)
 
         if running:
             phase, can_start, reason = "running", False, None
@@ -203,6 +224,14 @@ class Pipeline:
             phase = "blocked"
             can_start = False
             reason = f"needs {prereq.relative_to(self.root)} — {how}"
+        elif done and finished is False:
+            # A checkpoint exists but the budget was never reached: this run was *stopped*,
+            # and the only sane offer is to continue it. Reading "a checkpoint exists" as
+            # "this stage is finished" is how a GRPO run stopped at step 16 of 500 came back
+            # offering "Start fresh…" — which archives the run and restarts at zero. The
+            # trainers all write `<stage>_best.pt` the first time anything improves, so
+            # *every* interrupted run has one from its first few steps.
+            phase, can_start, reason = "stopped", True, None
         elif done:
             phase, can_start, reason = "done", True, None
         elif (err := self._crash(base, stage)) is not None:
@@ -215,7 +244,6 @@ class Pipeline:
         else:
             phase, can_start, reason = "ready", True, None
 
-        last = self._last(base, stage)
         # each stage's headline number: reward for GRPO, val loss for SFT/DPO
         metric = ({"key": "reward", "value": last.get("reward")} if stage == "grpo"
                   else {"key": "val_loss", "value": last.get("val_loss")})
@@ -230,6 +258,11 @@ class Pipeline:
             # why it can't start (the disabled tooltip), or — when it failed — what killed it
             "reason": reason,
             "done": done,
+            # `done` only means a checkpoint exists. `finished` is whether the budget was
+            # reached, and None when the log cannot say — the two are what separate "Resume"
+            # from "Start fresh…", and conflating them archives a run someone meant to continue.
+            "finished": finished,
+            "step_of": last.get("max_steps"),
             "pid": pid,
             "step": last.get("step"),
             "metric": metric,

@@ -165,6 +165,22 @@ SERIES_KEYS = ("loss", "ema", "lr", "grad_norm", "tok_per_sec", "mfu", "s_per_st
                "acc", "reward", "solved")
 
 
+#: Metrics that make a line a per-step training record. GRPO logs no `loss`-shaped headline
+#: worth filtering on -- its number is `reward` -- and requiring `loss` specifically made a
+#: GRPO step invisible to every reader here.
+STEP_METRICS = ("loss", "reward", "acc")
+
+
+def is_step_record(r: dict) -> bool:
+    """A per-step training row, as opposed to a validation row or a session bracket.
+
+    Validation rows carry `step` too (`{step, val_loss}`) and must not be mistaken for one;
+    session records carry `event` and either no step or a `last_step`.
+    """
+    return ("step" in r and "event" not in r and "val_loss" not in r
+            and any(k in r for k in STEP_METRICS))
+
+
 def series(records: Iterable[dict], max_points: int = 2000) -> dict[str, Any]:
     """Columnar per-step series for charting, plus the validation curve.
 
@@ -173,7 +189,7 @@ def series(records: Iterable[dict], max_points: int = 2000) -> dict[str, Any]:
     series so a 40,000-step run at `log_every=1` can't hand the browser a megabyte — the
     *last* point is always kept, because the newest reading is the one being watched.
     """
-    steps = [r for r in records if "step" in r and "loss" in r]
+    steps = [r for r in records if is_step_record(r)]
     vals = [r for r in records if "val_loss" in r]
 
     if max_points and len(steps) > max_points:
@@ -211,7 +227,7 @@ def latest(records: Iterable[dict]) -> dict:
     a best-known val loss from an earlier session instead of a blank.
     """
     records = list(records)
-    step_recs = [r for r in records if "step" in r and "loss" in r]
+    step_recs = [r for r in records if is_step_record(r)]
     val_recs = [r for r in records if "val_loss" in r]
     last = step_recs[-1] if step_recs else {}
     starts = [r for r in records if r.get("event") == "session_start"]

@@ -141,10 +141,12 @@
 .badge-pipe-ready     { background: var(--series-1); color: #fff; }
 .badge-pipe-preparing { background: #7c3aed; color: #fff; }
 .badge-pipe-running   { background: #d97706; color: #fff; }
+.badge-pipe-stopped   { background: #0891b2; color: #fff; }
 .badge-pipe-done      { background: #059669; color: #fff; }
 .badge-pipe-failed    { background: #b91c1c; color: #fff; }
 .stage-running   { border-color: #d97706; }
 .stage-preparing { border-color: #7c3aed; }
+.stage-stopped   { border-color: #0891b2; }
 .stage-done      { border-color: #059669; }
 .stage-failed    { border-color: #b91c1c; }
 

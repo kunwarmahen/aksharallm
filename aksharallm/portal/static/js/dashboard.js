@@ -430,17 +430,20 @@ function renderPipeline(p) {
     // so the full text goes in the tooltip and the box shows what fits. `preparing` shows
     // its reason for the same purpose in reverse: the stage has *not* stalled, it is
     // downloading, and saying so is the difference between waiting and pressing Start again.
+    const ofN = s.step_of ? ` / ${fmt.int(s.step_of)}` : '';
     const sub = (s.phase === 'failed' || s.phase === 'preparing')
       ? (s.reason || 'the trainer exited without a checkpoint')
       : s.step == null ? s.blurb
-      : `step ${fmt.int(s.step)}${val ? ` · ${val}` : ''}`;
+      : `step ${fmt.int(s.step)}${ofN}${val ? ` · ${val}` : ''}`;
     /* One `title` either way: the reason it is disabled, or what pressing it will do.
      * Two title attributes on one element silently keeps the first. */
     const g = s.guidance || {};
     const data = s.data || {};
     const willDownload = data.needed && !data.ready;
     const startAttrs = s.can_start
-      ? `title="${escHtml(s.done
+      ? `title="${escHtml(s.phase === 'stopped'
+          ? `continues from step ${fmt.int(s.step ?? 0)} — the optimizer, the RNG and the best-so-far all come back`
+          : s.done
           ? 'archives this run and starts again from step 0 — nothing is deleted'
           : willDownload
             ? `launches scripts/stage.sh, which ${data.cost} — expect several minutes before step 1`
@@ -475,7 +478,7 @@ function renderPipeline(p) {
           ${g.metric ? `<div><b>watch</b> ${escHtml(g.metric)}${g.watch_for ? ` <span title="${escHtml(g.watch_for)}">ⓘ</span>` : ''}</div>` : ''}
         </div>
         <div class="stage-actions">
-          <button data-base="${escHtml(p.base)}" data-stage="${s.stage}" data-action="start" ${startAttrs} ${s.done ? 'data-fresh="1"' : ''}>${s.done ? 'Start fresh…' : s.phase === 'failed' ? 'Try again' : 'Start'}</button>
+          <button data-base="${escHtml(p.base)}" data-stage="${s.stage}" data-action="start" ${startAttrs} ${s.done && s.phase !== 'stopped' ? 'data-fresh="1"' : ''}>${s.phase === 'stopped' ? 'Resume' : s.done ? 'Start fresh…' : s.phase === 'failed' ? 'Try again' : 'Start'}</button>
           <button data-base="${escHtml(p.base)}" data-stage="${s.stage}" data-action="stop" ${s.can_stop ? '' : 'disabled'}>Stop</button>
         </div>
       </div>`;
