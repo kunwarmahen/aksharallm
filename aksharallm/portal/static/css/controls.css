@@ -27,7 +27,14 @@ button.ghost { border-color: transparent; color: var(--ink-2); }
 button.ghost:hover:not(:disabled) { border-color: var(--border); }
 :focus-visible { outline: 2px solid var(--series-1); outline-offset: 2px; }
 
-.field { display: flex; flex-direction: column; gap: 3px; }
+/* `min-width: 0` for the same reason the panel grids need it (base.css): a flex item's
+ * automatic minimum size is its min-content width, and for a `<select>` that is its
+ * LONGEST OPTION — which here is filled from disk, not from the markup. One
+ * `train_20260807-082049.log (0.1 MB)` in the Log picker held the whole document at 317px
+ * on a 320px screen. The field is the flex item, so both it and the control need the
+ * floor removed; `max-width: 100%` then keeps the control inside the column it was
+ * given. Invisible until real data arrives and one name gets long. */
+.field { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .field-label {
   font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--ink-muted);
@@ -35,6 +42,7 @@ button.ghost:hover:not(:disabled) { border-color: var(--border); }
 select, input[type="number"] {
   font: inherit; color: var(--ink); background: var(--surface);
   border: 1px solid var(--axis); border-radius: 8px; padding: 6px 9px;
+  min-width: 0; max-width: 100%;
 }
 input[type="number"] { width: 120px; font-variant-numeric: tabular-nums; }
 .check { display: flex; align-items: center; gap: 6px; color: var(--ink-2); padding-bottom: 7px; }

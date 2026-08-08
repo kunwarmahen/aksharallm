@@ -154,3 +154,50 @@ def test_every_clipping_column_can_actually_be_read(path: Path, prefix: str):
     assert any(SCROLLS.search(b) for b in others), (
         f"{path.name}: the `.{prefix}-layout` panels clip their content and no rule in this "
         f"stylesheet scrolls anything — content past the fold cannot be reached at all.")
+
+
+# ---- the second silent-width bug: a control that sets a floor under the page -------------
+#
+# Same family as the trap above (invisible until real data arrives), different mechanism. A
+# flex/grid item's automatic minimum size is its min-content width, and for a `<select>` that
+# is its LONGEST OPTION. The portal fills its pickers from disk — log filenames, checkpoint
+# paths, corpus names — so the markup gives no hint how wide they get. One
+# `train_20260807-082049.log (0.1 MB)` in the Log picker held the whole document at 317px on a
+# 320px screen: the page scrolled sideways and every panel came along with it.
+#
+# base.css already does this for the panel grids. Controls need it for the same reason.
+
+CONTROLS = CSS / "controls.css"
+
+
+def _rule_body(text: str, selector: str) -> str:
+    """The declarations of the first top-level rule whose selector list names `selector`.
+
+    Comments are stripped first: prose commas would otherwise be read as selector
+    separators, and a comment sitting above a rule becomes part of its selector text.
+    """
+    text = re.sub(r"/\*.*?\*/", " ", strip_media(text), flags=re.S)
+    for match in re.finditer(r"([^{}]+)\{([^}]*)\}", text):
+        names = [" ".join(s.split()) for s in match.group(1).split(",")]
+        if selector in names:
+            return match.group(2)
+    return ""
+
+
+@pytest.mark.parametrize("selector", [".field", "select"])
+def test_a_control_cannot_set_a_floor_under_the_page(selector: str):
+    """`min-width: 0` on the field and the control it holds.
+
+    Without it a long option name is a hard minimum: it cannot shrink, so it pushes the
+    document wider than the viewport and the whole page scrolls sideways on a phone.
+    """
+    body = _rule_body(CONTROLS.read_text(), selector)
+    assert body, f"no `{selector}` rule in controls.css — has it been renamed?"
+    assert re.search(r"min-width\s*:\s*0", body), (
+        f"`{selector}` lost `min-width: 0`; a long <option> will widen the whole page again")
+
+
+def test_a_control_stays_inside_the_column_it_was_given():
+    body = _rule_body(CONTROLS.read_text(), "select")
+    assert re.search(r"max-width\s*:\s*100%", body), (
+        "`select` lost `max-width: 100%`; min-width:0 lets it shrink, this stops it growing")

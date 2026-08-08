@@ -713,13 +713,30 @@ too, which is worse:
   23px past a 320px phone, because a grid item's automatic minimum is its content's
   min-content width and the content here is a fixed 120px. `min-width: 0` on the item is
   half the fix — the control also needs `width: 100%`.
+- **A `<select>`'s min-content width is its longest `<option>`, and the options come from
+  disk.** This is the same rule as the bullet above with the width nowhere in the markup:
+  the Log picker is filled with real filenames, and one
+  `train_20260807-082049.log (0.1 MB)` held the document at 317px on a 320px screen. Nothing
+  in the HTML or the CSS says how wide that control wants to be — only the contents of
+  `logs/<run>/` do, so it appears the day a run produces a long-named log and never before.
+  `.field` and `select` both carry `min-width: 0` in `controls.css` (the field is the flex
+  item, the select is what refuses to shrink), and `select` adds `max-width: 100%` so
+  removing the floor cannot let it grow instead. Guarded by
+  `test_a_control_cannot_set_a_floor_under_the_page`.
 
 The check, when touching this stylesheet: point a browser at a **running portal with a real
-run selected**, at a 390px viewport, and `document.body.scrollWidth` must equal
-`document.documentElement.clientWidth`. If it is larger, find the floor by hiding each
+run selected**, at a **320px** viewport, and `document.body.scrollWidth` must equal
+`document.documentElement.clientWidth`. 320 rather than 390 — the select above cleared 390
+comfortably and still broke a small phone. If it is larger, find the floor by hiding each
 section in turn and re-measuring — the section whose removal shrinks the document is the one
 holding it open. (`width: min-content` is a tempting way to measure this and it lies about
 scroll containers, reporting their contents' width rather than zero.)
+
+**Do not trust a plain "which elements stick out?" sweep.** Every descendant of a working
+`.scroll-x` sticks out by design, so the widest offender it reports is usually a table that
+is behaving perfectly — the sessions table shows up at 821px while its scroller sits at
+249px and scrolls exactly as intended. Filter out anything with a scrolling ancestor first;
+what remains is the real floor, and in this case it was twelve pixels of `<select>`.
 
 Note that Chrome's `--window-size` will not go below about 485px and so cannot trigger a
 `max-width: 640px` media query at all. A real phone viewport needs
