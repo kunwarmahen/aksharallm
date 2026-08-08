@@ -48,6 +48,22 @@ from ..infer.checkpoints import CheckpointStore, InferError
 from ..infer.engine import InferConfig, plan_device
 from .runs import RunError, _alive, _cmdline, _read_int, repo_root
 
+
+def _proc_cmdline(pid: int) -> str:
+    """A just-launched process's command line, from /proc and nowhere else.
+
+    `runs._cmdline` falls back to shelling out to `ps`, which is right when identifying a
+    stranger's pid and wrong here: this process is one we started a microsecond ago, so
+    either /proc has it or the platform has no /proc and the recorded command line is the
+    best available. The fallback would also shell out on every single job start — through
+    `subprocess.Popen`, which is exactly what a test stubs.
+    """
+    try:
+        return Path(f"/proc/{pid}/cmdline").read_bytes().replace(
+            b"\0", b" ").decode(errors="replace")
+    except OSError:
+        return ""
+
 _JOB_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[A-Za-z0-9_.-]+$")
 #: A suite name from the browser is interpolated into a command line, so it is checked
 #: against the registry rather than merely escaped. Nothing that is not a known suite runs.
@@ -339,6 +355,13 @@ class EvalJobs:
         self.dir.mkdir(parents=True, exist_ok=True)
         job = f"{time.strftime('%Y%m%d-%H%M%S')}-{kind}"
 
+        # One branch per kind, and no `else`. This used to be `if contaminate: ... else: ...`
+        # where the `else` was really the *domains* branch, with calibrate and dedup
+        # overriding `cmd` afterwards — so both fell through the domains code first. Dedup
+        # scans a corpus and has no checkpoint by design, so it died on the domains branch's
+        # "pick a checkpoint" before ever reaching its own block: **the Scan for duplicates
+        # button could not start anything at all.** A dispatch that a new audit cannot fall
+        # into by accident is the fix; the shape is the bug, not the missing case.
         if kind == "contaminate":
             cfg = str(spec.get("config") or "configs/small-code.yaml")
             # A config name, not a path: this decides which .bin files get opened.
@@ -356,26 +379,17 @@ class EvalJobs:
             if spec.get("against"):
                 cmd += ["--against", str(self.json_path(str(spec["against"])))]
             meta = {"kind": "contaminate", "config": cfg}
-        else:
-            ref = str(spec.get("checkpoint") or "").strip()
-            if not ref:
-                raise RunError("pick a checkpoint")
-            info = self.store.get(self.store.identify(ref))
-            if info.error:
-                raise RunError(f"{info.rel} cannot be loaded: {info.error}")
+
+        elif kind == "domains":
+            info = self._audit_checkpoint(spec)
             cmd = [sys.executable, "-u", "-m", "aksharallm.eval", "domains", str(info.path),
                    "--device", self.device().get("device", "cpu")]
             if spec.get("batches"):
                 cmd += ["--batches", str(int(spec["batches"]))]
             meta = {"kind": "domains", "checkpoint": info.rel}
 
-        if kind == "calibrate":
-            ref = str(spec.get("checkpoint") or "").strip()
-            if not ref:
-                raise RunError("pick a checkpoint")
-            info = self.store.get(self.store.identify(ref))
-            if info.error:
-                raise RunError(f"{info.rel} cannot be loaded: {info.error}")
+        elif kind == "calibrate":
+            info = self._audit_checkpoint(spec)
             cmd = [sys.executable, "-u", "-m", "aksharallm.eval", "calibrate", str(info.path),
                    "--device", self.device().get("device", "cpu"),
                    # Deliberately modest. Calibration keeps the FULL logit vector per
@@ -385,7 +399,7 @@ class EvalJobs:
                    "--batch", str(int(spec.get("batch") or 2))]
             meta = {"kind": "calibrate", "checkpoint": info.rel}
 
-        if kind == "dedup":
+        elif kind == "dedup":
             source = str(spec.get("source") or "")
             # A path into `data/`, resolved and contained: this opens a file on disk.
             path = (self.root / source).resolve()
@@ -402,7 +416,21 @@ class EvalJobs:
             meta = {"kind": "dedup", "source": source,
                     "start_token": int(spec.get("start_token") or 0)}
 
+        else:  # unreachable — the guard above lists the kinds — but not silently so
+            raise RunError(f"audit {kind!r} has no launcher")
+
         return self._launch(cmd, job, meta)
+
+    def _audit_checkpoint(self, spec: dict):
+        """The checkpoint an audit runs against, resolved and checked. Shared by the two
+        audits that measure a *model* rather than the data."""
+        ref = str(spec.get("checkpoint") or "").strip()
+        if not ref:
+            raise RunError("pick a checkpoint")
+        info = self.store.get(self.store.identify(ref))
+        if info.error:
+            raise RunError(f"{info.rel} cannot be loaded: {info.error}")
+        return info
 
     def audits(self, limit: int = 10) -> dict:
         """The latest contamination report, and where to find the rest.
@@ -475,8 +503,16 @@ class EvalJobs:
                 cmd, cwd=self.root, env={**os.environ}, stdin=subprocess.DEVNULL,
                 stdout=fh, stderr=subprocess.STDOUT, start_new_session=True)
         self.pid_file.write_text(str(proc.pid))
+        # The job's identity, read back from /proc in the same shape `_pid()` reads any other
+        # pid — so a job this panel launched is recognised as live whatever module it runs.
+        # Without it `_pid()` fell back to `"aksharallm.eval" in <cmdline>`, and a dedup scan
+        # runs `aksharallm.data.dedup`: the scan was invisible the moment it started. Not
+        # merely cosmetic — an invisible job holds no lock, so every click started another
+        # 90-second scan of the same corpus, and `status()` saw a job with no process and
+        # called it **failed** while it was still running.
         current = {"job": job, "state": "running", "pid": proc.pid,
-                   "started": time.time(), "cmd": " ".join(cmd[2:]), **meta}
+                   "started": time.time(), "cmd": " ".join(cmd[2:]),
+                   "cmdline": _proc_cmdline(proc.pid) or " ".join(cmd), **meta}
         self.current_file.write_text(json.dumps(current))
         return {"ok": True, "action": "start", **current}
 

@@ -397,8 +397,20 @@ def scan_bin(path: str | Path, eos_id: int, *, params: LSHParams | None = None,
             docs.append(doc)
             index.add(doc)
             total += int(doc.size)
-            if progress and len(docs) % 20_000 == 0:
-                progress(f"  {len(docs):,} documents, {total / 1e6:.1f}M tokens")
+            # Tagged and counted, in the one shape every job in this repo reports progress
+            # in — `[tag] label done/total (pct%)`. The portal parses that line and nothing
+            # else, so a scan printing its own format had no progress bar at all: 90 seconds
+            # of a blank panel, which reads as a button that did nothing. Reported every
+            # 5,000 rather than every 20,000 documents for the same reason.
+            if progress and len(docs) % 5_000 == 0:
+                # A full pass is measured in tokens read, and both ends of that are counted
+                # from `start_token` — the scan begins there, so a percentage measured from
+                # zero would start partway along and never reach 100.
+                done, whole = ((len(docs), limit) if limit
+                               else (pos + b - int(start_token),
+                                     int(tokens.size) - int(start_token)))
+                progress(f"[dedup] {'documents' if limit else 'tokens'} "
+                         f"{done:,}/{whole:,} ({done / max(1, whole) * 100:.0f}%)")
         pos += chunk
 
     pairs = index.duplicates()

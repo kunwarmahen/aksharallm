@@ -742,6 +742,39 @@ The general rule, which is cheap to state and was expensive to find: **a measure
 only printed does not exist**, and *whoever judges a job must be looking for the thing that
 job actually writes*.
 
+#### And then the duplicates button did nothing at all
+
+Three more faults, in the same panel, all reported as one symptom: pressing **Scan for
+duplicates** appeared to do nothing. They are worth writing down together because none of
+them is a mistake in the scanning code, and each hid the next.
+
+- **A dispatch shaped as `if contaminate: … else: …`.** That `else` was really the *domains*
+  branch, with calibrate and dedup overriding `cmd` afterwards — so both fell through the
+  domains code first, and dedup, which scans a corpus and has no checkpoint by design, died
+  on the domains branch's `pick a checkpoint` before reaching its own block. The scan could
+  not start. It is now one branch per kind with no fall-through, so a new audit cannot be
+  reached through another one's validation.
+- **`_pid()` recognised a live job only if its command line contained `aksharallm.eval`** —
+  and a scan runs `aksharallm.data.dedup`. The job was therefore invisible from the moment
+  it started: it held no lock, so every click launched another ninety-second scan of the
+  same corpus, and `status()`, seeing a job with no process, called it *failed* while it was
+  running. `_launch` now records the process's real command line, which is the identity
+  check the announced-from-a-terminal path already used.
+- **The panel polls every ten seconds when idle, and the audit buttons did not repoll.**
+  `startEval` had always called `pollEval()` on starting; the four audit handlers only
+  raised a toast. So a click produced no change to the job header, the log or the progress
+  bar for up to ten seconds — on a job that then runs for a minute and a half. All four go
+  through one `startAudit()` helper now, and the page reacts in about **0.3s**.
+
+The scan also had no progress bar, because it printed `20,000 documents, 18.1M tokens` while
+the portal parses one shape and one shape only — `[tag] label done/total (pct%)`. It now
+prints `[dedup] documents 5,000/60,000 (8%)` like every other job here, every 5,000 documents
+rather than every 20,000, and a full pass reports tokens read instead.
+
+Four faults between a button and a scan, and the failure a person sees is the same in every
+case: nothing happened. **Check the producer, the reader, the renderer, and whether the page
+was ever told to look again.**
+
 One rendering detail that is not a detail: **a clean corpus is a result, not an empty state.**
 Scanning TinyStories finds *no* near-duplicates in 20,000 documents, and the card says so in
 those words. The first version read `largest_clusters[0]` on an empty list and printed the

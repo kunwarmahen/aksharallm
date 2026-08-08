@@ -406,10 +406,14 @@ def test_every_audit_button_is_gated_on_the_shared_job_lock():
     """
     js = JS.read_text()
 
+    # A handler either posts to the endpoint itself or goes through `startAudit`, which is
+    # the shared post-flash-repoll wrapper. Both count: what this test is really asking is
+    # "which buttons can start an audit", and that must not depend on how the posting is
+    # spelled.
     posts_audit = set()
     for match in re.finditer(r"\$\('(#[\w-]+)'\)\.addEventListener\('click',", js):
         body = js[match.end(): match.end() + 700]
-        if "/api/eval/audit" in body:
+        if "/api/eval/audit" in body or "startAudit(" in body:
             posts_audit.add(match.group(1))
     assert posts_audit, "no audit buttons found — has the panel been rewritten?"
 
@@ -541,3 +545,80 @@ def test_a_split_is_not_a_phantom_evaluation(repo):
     _result(repo, "20260101-000000-tiny-eval.json", 100, {"piqa": 0.6})
     _domains(repo)
     assert [r["step"] for r in EvalJobs(repo).status()["results"]] == [100]
+
+
+# ---- starting an audit -----------------------------------------------------------------
+
+def test_a_corpus_scan_does_not_ask_for_a_checkpoint(repo, spy_popen):
+    """`start_audit` was `if contaminate: ... else: <domains> ...` with calibrate and dedup
+    overriding `cmd` afterwards — so both fell through the domains branch first, and dedup,
+    which scans a corpus and has no checkpoint by design, died on its "pick a checkpoint"
+    before reaching its own block. **The Scan for duplicates button could not start
+    anything**, and the only sign was a corner toast asking for a checkpoint the card does
+    not have a picker for."""
+    (repo / "data" / "blend").mkdir(parents=True)
+    (repo / "data" / "blend" / "corpus.bin").write_bytes(b"\x01\x00" * 64)
+    res = EvalJobs(repo).start_audit({"kind": "dedup", "source": "data/blend/corpus.bin",
+                                      "start_token": 0, "limit": 60_000})
+    assert res["kind"] == "dedup"
+    assert "aksharallm.data.dedup" in " ".join(spy_popen["cmd"])
+    assert "--out" in spy_popen["cmd"]
+
+
+def test_each_audit_launches_its_own_command(repo, spy_popen):
+    """One branch per kind, so no audit can be reached through another one's validation."""
+    _ckpt(repo, "tiny", "ckpt_best.pt")
+    (repo / "configs" / "tiny.yaml").write_text("data: {}\n")
+    (repo / "data" / "blend").mkdir(parents=True)
+    (repo / "data" / "blend" / "corpus.bin").write_bytes(b"\x01\x00" * 64)
+
+    for spec, expect in [
+        ({"kind": "domains", "checkpoint": "tiny/ckpt_best.pt"}, "aksharallm.eval domains"),
+        ({"kind": "calibrate", "checkpoint": "tiny/ckpt_best.pt"}, "aksharallm.eval calibrate"),
+        ({"kind": "dedup", "source": "data/blend/corpus.bin"}, "aksharallm.data.dedup"),
+        ({"kind": "contaminate", "config": "configs/tiny.yaml"}, "aksharallm.eval contaminate"),
+    ]:
+        (repo / "logs" / "eval" / "eval.pid").unlink(missing_ok=True)
+        EvalJobs(repo).start_audit(spec)
+        assert expect in " ".join(spy_popen["cmd"]), spec["kind"]
+
+
+def test_a_launched_job_is_recognised_whatever_module_it_runs(repo, monkeypatch):
+    """`_pid()` trusted a live pid only if its command line contained `aksharallm.eval`, and
+    a dedup scan runs `aksharallm.data.dedup`. The scan was therefore invisible the instant
+    it started: no lock, so every click launched another 90-second scan of the same corpus,
+    and `status()` — seeing a job with no process — called it **failed** while it ran.
+
+    `_launch` now records the process's real command line, which is the identity check the
+    announced-from-a-terminal path already used.
+    """
+    (repo / "data" / "blend").mkdir(parents=True)
+    (repo / "data" / "blend" / "corpus.bin").write_bytes(b"\x01\x00" * 64)
+
+    launched = {}
+
+    class Proc:
+        pid = 424242
+
+    def fake_popen(cmd, **kw):
+        launched["cmd"] = cmd
+        return Proc()
+
+    # A live process whose command line names dedup, not eval. Both readers answer the
+    # same, which is what /proc does on the machine this runs on — `_proc_cmdline` at
+    # launch and `_cmdline` when checking liveness later.
+    live = "python -u -m aksharallm.data.dedup corpus.bin "
+    monkeypatch.setattr("aksharallm.portal.evals.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("aksharallm.portal.evals._alive", lambda pid: pid == 424242)
+    monkeypatch.setattr("aksharallm.portal.evals._cmdline", lambda pid: live)
+    monkeypatch.setattr("aksharallm.portal.evals._proc_cmdline", lambda pid: live)
+
+    jobs = EvalJobs(repo)
+    jobs.start_audit({"kind": "dedup", "source": "data/blend/corpus.bin"})
+
+    st = jobs.status()
+    assert st["running"] is True, "a running scan was reported as not running"
+    assert st["current"]["state"] == "running", "a running scan was reported as failed"
+
+    with pytest.raises(RunError, match="already running"):
+        jobs.start_audit({"kind": "dedup", "source": "data/blend/corpus.bin"})

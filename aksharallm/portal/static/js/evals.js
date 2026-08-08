@@ -627,51 +627,54 @@ async function loadAudits() {
   } catch (err) { /* likewise */ }
 }
 
+/* Start an audit and make the page admit it. The four handlers below were four copies of
+ * post-then-flash, and none of them repolled: the panel keeps a 10-second timer while idle,
+ * so after clicking, the job header, the log and the progress bar stayed exactly as they
+ * were for up to ten seconds. `startEval` had always called `pollEval()` for precisely this
+ * reason. A button whose only feedback is a corner toast, on a scan that then runs for
+ * ninety seconds, is a button that "does nothing". */
+async function startAudit(spec, message) {
+  try {
+    await post('/api/eval/audit', spec);
+    flash(message, 'ok');
+    $('#ev-log').textContent = 'starting…';
+    pollEval();
+  } catch (err) {
+    flash(err.message, 'error');
+  }
+}
+
 function wireAudit() {
-  $('#ev-con-run').addEventListener('click', async () => {
-    try {
-      const scan = $('#ev-con-scan').value;
-      await post('/api/eval/audit', {
-        kind: 'contaminate',
-        config: $('#ev-con-config').value,
-        suites: $('#ev-con-suites').value,
-        max_tokens: scan === '' ? null : Number(scan),
-        verify: true,
-      });
-      flash(scan === ''
-        ? 'Checking for leakage — a full pass over 10B tokens takes about half an hour.'
-        : 'Quick look started. It reads part of the corpus, so the result is a lower '
-          + 'bound — run the full pass before quoting a number.', 'ok');
-    } catch (err) { flash(err.message, 'error'); }
+  $('#ev-con-run').addEventListener('click', () => {
+    const scan = $('#ev-con-scan').value;
+    startAudit({
+      kind: 'contaminate',
+      config: $('#ev-con-config').value,
+      suites: $('#ev-con-suites').value,
+      max_tokens: scan === '' ? null : Number(scan),
+      verify: true,
+    }, scan === ''
+      ? 'Checking for leakage — a full pass over 10B tokens takes about half an hour.'
+      : 'Quick look started. It reads part of the corpus, so the result is a lower '
+        + 'bound — run the full pass before quoting a number.');
   });
-  $('#ev-dom-run').addEventListener('click', async () => {
-    try {
-      await post('/api/eval/audit', {
-        kind: 'domains', checkpoint: $('#ev-ckpt').value, batches: 16,
-      });
-      flash('Splitting the validation loss by source.', 'ok');
-    } catch (err) { flash(err.message, 'error'); }
+  $('#ev-dom-run').addEventListener('click', () => {
+    startAudit({ kind: 'domains', checkpoint: $('#ev-ckpt').value, batches: 16 },
+      'Splitting the validation loss by source.');
   });
-  $('#ev-cal-run').addEventListener('click', async () => {
-    try {
-      await post('/api/eval/audit', {
-        kind: 'calibrate', checkpoint: $('#ev-ckpt').value, batches: 24,
-      });
-      flash('Measuring calibration. It keeps the full logits, so this is deliberately '
-        + 'a small sample.', 'ok');
-    } catch (err) { flash(err.message, 'error'); }
+  $('#ev-cal-run').addEventListener('click', () => {
+    startAudit({ kind: 'calibrate', checkpoint: $('#ev-ckpt').value, batches: 24 },
+      'Measuring calibration. It keeps the full logits, so this is deliberately a small '
+      + 'sample.');
   });
-  $('#ev-dd-run').addEventListener('click', async () => {
-    try {
-      await post('/api/eval/audit', {
-        kind: 'dedup',
-        source: $('#ev-dd-source').value,
-        start_token: Number($('#ev-dd-start').value) || 0,
-        limit: 60000,
-      });
-      flash('Scanning for near-duplicates. Run it again from a different offset before '
-        + 'quoting the number.', 'ok');
-    } catch (err) { flash(err.message, 'error'); }
+  $('#ev-dd-run').addEventListener('click', () => {
+    startAudit({
+      kind: 'dedup',
+      source: $('#ev-dd-source').value,
+      start_token: Number($('#ev-dd-start').value) || 0,
+      limit: 60000,
+    }, 'Scanning for near-duplicates. Run it again from a different offset before quoting '
+      + 'the number.');
   });
 }
 
