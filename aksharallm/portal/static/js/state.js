@@ -4,6 +4,9 @@
 
 export const state = {
   run: null,
+  awaitRun: null,   // a stage just started: switch to this run once it exists
+  awaitFrom: null,  // ...unless the user has picked something else meanwhile
+
   status: null,
   schedule: null,
   gpu: null,

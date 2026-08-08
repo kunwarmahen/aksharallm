@@ -63,15 +63,15 @@ before the real run. Skipping is only sane when resuming a config that has alrea
   </section>
 
   <section class="tiles" aria-label="latest readings">
-    <div class="tile"><div class="tile-label">loss (ema)</div>
+    <div class="tile"><div class="tile-label" id="t-ema-label">loss (ema)</div>
       <div class="tile-value" id="t-ema">–</div><div class="tile-note" id="t-ema-note">–</div></div>
     <div class="tile"><div class="tile-label">best val loss</div>
       <div class="tile-value" id="t-val">–</div><div class="tile-note" id="t-val-note">–</div></div>
-    <div class="tile"><div class="tile-label">throughput</div>
+    <div class="tile"><div class="tile-label" id="t-tok-label">throughput</div>
       <div class="tile-value" id="t-tok">–</div><div class="tile-note" id="t-tok-note">–</div></div>
-    <div class="tile"><div class="tile-label">MFU</div>
+    <div class="tile"><div class="tile-label" id="t-mfu-label">MFU</div>
       <div class="tile-value" id="t-mfu">–</div><div class="tile-note" id="t-mfu-note">–</div></div>
-    <div class="tile"><div class="tile-label">tokens seen</div>
+    <div class="tile"><div class="tile-label" id="t-tokens-label">tokens seen</div>
       <div class="tile-value" id="t-tokens">–</div><div class="tile-note" id="t-tokens-note">–</div></div>
     <div class="tile"><div class="tile-label">session up</div>
       <div class="tile-value" id="t-up">–</div><div class="tile-note" id="t-up-note">–</div></div>
@@ -90,8 +90,8 @@ before the real run. Skipping is only sane when resuming a config that has alrea
 
     <figure class="panel chart-card" id="card-tok">
       <figcaption>
-        <span class="chart-title">Throughput</span>
-        <span class="chart-note">thousand tokens per second · MFU is this same curve as a % of peak</span>
+        <span class="chart-title" id="chart-tok-title">Throughput</span>
+        <span class="chart-note" id="chart-tok-note">thousand tokens per second · MFU is this same curve as a % of peak</span>
         <button class="ghost view-toggle" data-target="tok" type="button">table</button>
       </figcaption>
       <div class="chart" data-chart="tok"></div>

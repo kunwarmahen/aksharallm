@@ -157,7 +157,12 @@ def summarise_sessions(sessions: Iterable[dict]) -> list[dict]:
 
 
 #: Per-step numeric fields worth plotting, in the order the portal charts them.
-SERIES_KEYS = ("loss", "ema", "lr", "grad_norm", "tok_per_sec", "mfu", "s_per_step")
+#: Every per-step number a chart may want, across all four trainers. Extra keys cost one
+#: array of `None` for the runs that do not log them, and a missing key costs an empty chart
+#: on the stage that needed it — `acc` (DPO) and `reward`/`solved` (GRPO) are each that
+#: stage's headline, and neither was here, so the Throughput card had nothing to repoint to.
+SERIES_KEYS = ("loss", "ema", "lr", "grad_norm", "tok_per_sec", "mfu", "s_per_step",
+               "acc", "reward", "solved")
 
 
 def series(records: Iterable[dict], max_points: int = 2000) -> dict[str, Any]:
@@ -222,6 +227,10 @@ def latest(records: Iterable[dict]) -> dict:
         "tok_per_sec": last.get("tok_per_sec"),
         "mfu": last.get("mfu"),
         "s_per_step": last.get("s_per_step"),
+        # DPO's and GRPO's headline numbers. A pretraining run simply has none of them.
+        "acc": last.get("acc"),
+        "reward": last.get("reward"),
+        "solved": last.get("solved"),
         "elapsed": last.get("elapsed"),
         "eta_s": last.get("eta_s"),
         "step_time": last.get("time"),

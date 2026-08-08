@@ -295,6 +295,12 @@ def main():
     t0 = time.time()  # current log window
     run_t0 = t0  # whole invocation
     prev_log_step = -1
+    # Smoothed training loss, for the dashboard's headline tile. DPO's raw loss is noisy —
+    # it is a mean over a handful of pairs — so the unsmoothed number jitters either side of
+    # ln(2) and reads as "not learning". Not restored across a resume: an EMA is a display
+    # aid, and re-seeding it from the first step after a restart costs one log line of
+    # accuracy rather than anything the model depends on.
+    ema: float | None = None
 
     # ---- stopping early ------------------------------------------------------------
     # Identical contract to sft.py: a signal or a file, whichever arrives first, breaks out
@@ -393,13 +399,25 @@ def main():
                 s_per_step = dt / (step - prev_log_step)   # measured, not assumed
                 prev_log_step = step
                 up = time.time() - run_t0
+                eta = (max_steps - step) * s_per_step
                 print(f"[{stamp()}] epoch {epoch} step {step:>5}/{max_steps} | "
                       f"loss {agg_loss:.4f} | acc {agg_acc*100:.1f}% | lr {lr:.2e} | "
                       f"gnorm {gnorm:.2f} | {s_per_step:.2f}s/step | up {fmt_dur(up)} | "
-                      f"eta {fmt_dur((max_steps - step) * s_per_step)}")
-                logf.write(json.dumps({"step": step, "loss": agg_loss, "acc": agg_acc,
-                                       "lr": lr, "time": time.time(),
-                                       "s_per_step": s_per_step, "elapsed": up}) + "\n")
+                      f"eta {fmt_dur(eta)}")
+                # Every field the line above prints, and in the same breath. These two used
+                # to be separate lists and they drifted: the terminal showed `gnorm 30.02`
+                # and `eta 2h17m` while the dashboard's ETA and grad-norm chart sat empty,
+                # because the browser only ever reads this file. `ema` is here for the same
+                # reason -- the headline loss tile reads it, and a DPO run that logged only a
+                # raw loss rendered as a blank tile with the number hiding in its subtitle.
+                # Throughput and MFU stay out on purpose: a DPO step is four forward passes
+                # over two sequences, so a tokens/sec taken from `s_per_step` would be wrong
+                # rather than missing. `stage` tells the reader which of those it is.
+                ema = agg_loss if ema is None else 0.9 * ema + 0.1 * agg_loss
+                logf.write(json.dumps({"step": step, "loss": agg_loss, "ema": ema,
+                                       "acc": agg_acc, "lr": lr, "time": time.time(),
+                                       "grad_norm": float(gnorm), "s_per_step": s_per_step,
+                                       "elapsed": up, "eta_s": eta}) + "\n")
                 logf.flush()
 
             if step > 0 and step % args.eval_every == 0:

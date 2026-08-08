@@ -6,7 +6,7 @@ import { $, $$, api, flash, fmt, live, post } from './core.js';
 import { state } from './state.js';
 import { VIEWS, showView } from './router.js';
 import { closeNav, wireNav } from './nav.js';
-import { UNIT_MINUTES, UNIT_MORE_STEPS, act, boundPicker, drawCharts, fmtMins, fmtWhen, refresh, renderRuns, renderSessionBudget, schedule, secPerStep, selectRun, wireGpu, wireReport, wireSchedule, wireServe } from './dashboard.js';
+import { UNIT_MINUTES, UNIT_MORE_STEPS, act, boundPicker, drawCharts, followStage, fmtMins, fmtWhen, refresh, renderRuns, renderSessionBudget, schedule, secPerStep, selectRun, wireGpu, wireReport, wireSchedule, wireServe } from './dashboard.js';
 import { wireCode } from './code.js';
 import { wireQuantTab } from './quantize.js';
 import { wireLoraTab } from './lora.js';
@@ -142,9 +142,15 @@ function wire() {
       `Start '${base} · ${stage}' again from step 0?\n\n`
       + `The current run is renamed to '${base}-${stage}.<timestamp>' — checkpoints, log `
       + 'and report all kept, nothing deleted. It stays readable in the run picker.')) return;
+    /* Follow a start to its own run. Registered before the request rather than after, so
+     * the switch is armed even if the response is slow; `followStage` only remembers a
+     * name, and the dashboard claims it when that run actually appears. */
+    if (action === 'start') followStage(`${base}-${stage}`);
     act(() => post(`/api/pipeline/${encodeURIComponent(base)}/${stage}/${action}`,
                    fresh ? { fresh: true } : {}),
-      action === 'start' ? `Starting ${stage.toUpperCase()}.` : 'Stop requested.');
+      action === 'start'
+        ? `Starting ${stage.toUpperCase()} — switching to it when it appears.`
+        : 'Stop requested.');
   });
 
   $('#btn-stop').addEventListener('click', () => {

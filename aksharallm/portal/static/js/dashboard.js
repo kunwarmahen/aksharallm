@@ -93,8 +93,17 @@ function renderProgress(s) {
       s.phase === 'idle' ? `resumes at step ${fmt.int(s.step + 1)}` : null,
     ].filter(Boolean).join(' · ');
 
-  /* ETA is only meaningful while stepping; a stale one from last night is a lie. */
-  $('#eta').textContent = s.phase === 'idle' || last.eta_s == null ? '–' : fmt.dur(last.eta_s);
+  /* ETA is only meaningful while stepping; a stale one from last night is a lie.
+   *
+   * Derived when the trainer did not log one. dpo.py and grpo.py printed an ETA to the
+   * terminal for a whole run without writing it to the jsonl, so the tile sat empty beside
+   * a log line that had the answer in it. Both trainers log it now — but a run *already in
+   * progress* is executing the old code, and so is every log already on disk, and neither
+   * should have to be restarted to get an ETA back. `s_per_step` and `max_steps` are enough:
+   * it is the same arithmetic the trainer does. */
+  const etaS = last.eta_s ?? (last.s_per_step != null && last.max_steps != null
+    && s.step != null ? Math.max(0, (last.max_steps - s.step) * last.s_per_step) : null);
+  $('#eta').textContent = s.phase === 'idle' || etaS == null ? '–' : fmt.dur(etaS);
   $('#meter-fill').style.width = `${(pct || 0) * 100}%`;
 
   /* The finish line on the meter. A step target is exact; a deadline has to be projected
@@ -126,21 +135,103 @@ function renderProgress(s) {
     : '';
 }
 
+/** Which post-training stage a run is, or null for a pretraining run.
+ *
+ * Read from the trainer's own `session_start` record rather than parsed off the run name,
+ * because the name is a convention and the record is a fact. The name is the fallback for
+ * a log written before the record carried a stage. */
+function stageOf(s) {
+  const declared = s.last && s.last.session_start && s.last.session_start.stage;
+  if (declared && declared !== 'base') return declared;
+  const m = /-(sft|dpo|grpo)$/.exec(s.run || '');
+  return m ? m[1] : null;
+}
+
+/* Three of the six tiles describe a pretraining run and mean nothing for DPO or GRPO —
+ * tokens/sec, MFU and tokens seen. They are deliberately not logged by those trainers: a
+ * DPO step is four forward passes over two sequences and most of a GRPO step is sampling
+ * and sandbox execution, so a rate derived from `s_per_step` would be wrong rather than
+ * missing. But three blank tiles read as a broken page, which is exactly how this was
+ * reported. So the stage relabels them onto the numbers it *does* have — and DPO's
+ * headline, preference accuracy, gets a tile instead of appearing nowhere at all. */
+/* The work-done tile, per stage. Neither trainer records a running total, and neither needs
+ * to: the batch shape is fixed for the whole run and sits in `session_start`, so the count
+ * is `step x per-step`. Deriving it beats "not tracked", which is what this tile said first
+ * and which is indistinguishable from something being broken. `null` when the record
+ * predates the fields — an absent number must stay absent rather than become a zero. */
+const seenPerStep = {
+  // four forward passes over a (chosen, rejected) pair, batch_size x grad_accum of them
+  dpo: (ss) => (ss.batch_size && ss.grad_accum ? ss.batch_size * ss.grad_accum : null),
+  // one group of completions per prompt, several prompts per step
+  grpo: (ss) => (ss.group_size ? ss.group_size * (ss.prompts_per_step || 1) : null),
+};
+
+function seenTile(stage, unit) {
+  return {
+    label: unit,
+    value: (l, ss) => {
+      const per = seenPerStep[stage](ss);
+      return per == null || l.step == null ? '–' : fmt.compact(per * (l.step + 1));
+    },
+    note: (l, ss) => {
+      const per = seenPerStep[stage](ss);
+      return per == null ? 'the log predates this count' : `${fmt.compact(per)} per step`;
+    },
+  };
+}
+
+const STAGE_TILES = {
+  dpo: {
+    tok: { label: 'pref accuracy', value: (l) => fmt.pct(l.acc, 1),
+           note: () => 'pairs it ranks the way the data does' },
+    mfu: { label: 'seconds/step', value: (l) => (l.s_per_step == null ? '–' : `${fmt.num(l.s_per_step, 2)}s`),
+           note: () => 'throughput and MFU are not measured for DPO' },
+    tokens: seenTile('dpo', 'pairs seen'),
+  },
+  grpo: {
+    tok: { label: 'reward', value: (l) => fmt.num(l.reward, 3),
+           note: (l) => (l.solved == null ? 'mean over the group' : `${fmt.pct(l.solved, 0)} solved`) },
+    mfu: { label: 'seconds/step', value: (l) => (l.s_per_step == null ? '–' : `${fmt.num(l.s_per_step, 2)}s`),
+           note: () => 'most of a step is sampling and sandbox, not the update' },
+    tokens: seenTile('grpo', 'completions'),
+  },
+};
+
 function renderTiles(s) {
   const l = s.last || {};
+  const stage = stageOf(s);
   const set = (id, value, note) => {
     $(`#t-${id}`).textContent = value;
     $(`#t-${id}-note`).textContent = note;
   };
-  set('ema', fmt.num(l.ema, 3), l.loss == null ? '–'
-    : `raw ${fmt.num(l.loss, 3)} · ppl ${fmt.num(Math.exp(Math.min(l.ema ?? 20, 20)), 1)}`);
+  const label = (id, text) => { const e = $(`#t-${id}-label`); if (e) e.textContent = text; };
+
+  /* `l.ema ?? l.loss`: GRPO logs no EMA, and any DPO log written before the trainer started
+   * recording one has only a raw loss. Falling back keeps the headline tile populated
+   * instead of showing a dash with the real number hiding in the subtitle underneath it. */
+  const headline = l.ema ?? l.loss;
+  label('ema', l.ema == null && l.loss != null ? 'loss' : 'loss (ema)');
+  set('ema', fmt.num(headline, 3), l.loss == null ? '–'
+    : `raw ${fmt.num(l.loss, 3)} · ppl ${fmt.num(Math.exp(Math.min(headline ?? 20, 20)), 1)}`);
   set('val', fmt.num(l.best_val, 4), l.val_step == null ? 'no eval yet'
     : `latest ${fmt.num(l.val_loss, 4)} at step ${fmt.int(l.val_step)}`);
-  set('tok', l.tok_per_sec == null ? '–' : `${(l.tok_per_sec / 1000).toFixed(1)}k/s`,
-    l.s_per_step == null ? '–' : `${fmt.num(l.s_per_step, 2)}s per step`);
-  set('mfu', fmt.pct(l.mfu, 1), 'of the GPU’s peak bf16');
-  set('tokens', fmt.compact(s.tokens_seen),
-    s.tokens_per_step ? `${fmt.compact(s.tokens_per_step)} per step` : '–');
+
+  const spec = STAGE_TILES[stage];
+  if (spec) {
+    const ss = l.session_start || {};
+    for (const id of ['tok', 'mfu', 'tokens']) {
+      label(id, spec[id].label);
+      set(id, spec[id].value(l, ss), spec[id].note(l, ss));
+    }
+  } else {
+    label('tok', 'throughput'); label('mfu', 'MFU'); label('tokens', 'tokens seen');
+    set('tok', l.tok_per_sec == null ? '–' : `${(l.tok_per_sec / 1000).toFixed(1)}k/s`,
+      l.s_per_step == null ? '–' : `${fmt.num(l.s_per_step, 2)}s per step`);
+    set('mfu', fmt.pct(l.mfu, 1), 'of the GPU’s peak bf16');
+    set('tokens', fmt.compact(s.tokens_seen),
+      s.tokens_per_step ? `${fmt.compact(s.tokens_per_step)} per step` : '–');
+  }
+
   set('up', s.uptime_s == null ? '–' : fmt.dur(s.uptime_s),
     `${(s.sessions || []).length} session${(s.sessions || []).length === 1 ? '' : 's'} logged`);
 }
@@ -161,6 +252,8 @@ function renderCharts(s) {
         { name: 'validation loss', color: '--series-2', x: ser.val_step || [], y: ser.val_loss || [], dots: true, fmt: (v) => v.toFixed(4) },
       ],
     },
+    /* Replaced wholesale for DPO/GRPO below — those runs log no tokens/sec on purpose, so
+     * this card would be an empty axis on the stage that runs longest. */
     tok: {
       label: 'throughput in thousands of tokens per second',
       yFmt: (v) => (v / 1000).toFixed(0) + 'k',
@@ -181,6 +274,46 @@ function renderCharts(s) {
       zeroFloor: true,
     },
   };
+
+  /* The Throughput card, repointed for the two stages that do not measure throughput. Same
+   * argument as the tiles: the alternative is a titled, axis-drawn, permanently empty chart,
+   * which reads as a broken page rather than as an absent measurement. What goes there is
+   * the stage's own headline — the number you actually watch to know it is working. */
+  const stage = stageOf(s);
+  const tokTitle = $('#chart-tok-title');
+  const tokNote = $('#chart-tok-note');
+  if (stage === 'dpo') {
+    if (tokTitle) tokTitle.textContent = 'Preference accuracy';
+    if (tokNote) {
+      tokNote.textContent = 'share of pairs ranked the way the data does · starts near 50% '
+        + 'by construction, 65–80% is the target, past 90% is overfitting';
+    }
+    state.charts.tok = {
+      label: 'preference accuracy by step',
+      yFmt: (v) => `${(100 * v).toFixed(0)}%`,
+      series: [{ name: 'accuracy', color: '--series-1', x: step, y: ser.acc || [], label: true,
+                 fmt: (v) => `${(100 * v).toFixed(1)}%` }],
+      rules: [{ y: 0.5, label: 'chance' }],
+      zeroFloor: true,
+    };
+  } else if (stage === 'grpo') {
+    if (tokTitle) tokTitle.textContent = 'Reward';
+    if (tokNote) tokNote.textContent = 'mean reward over each group, and the share of prompts solved';
+    state.charts.tok = {
+      label: 'mean reward and solved share by step',
+      yFmt: (v) => v.toFixed(2),
+      series: [
+        { name: 'reward', color: '--series-1', x: step, y: ser.reward || [], label: true, fmt: (v) => v.toFixed(3) },
+        { name: 'solved', color: '--series-2', x: step, y: ser.solved || [], fmt: (v) => `${(100 * v).toFixed(0)}%` },
+      ],
+      zeroFloor: true,
+    };
+  } else {
+    if (tokTitle) tokTitle.textContent = 'Throughput';
+    if (tokNote) {
+      tokNote.textContent = 'thousand tokens per second · MFU is this same curve as a % of peak';
+    }
+  }
 
   /* Mixture of experts only. A dense run has no `moe_shares` and the card stays hidden —
    * rather than showing an empty chart that reads as a broken one. */
@@ -889,6 +1022,12 @@ export async function refresh() {
     state.log = log;
     document.body.classList.remove('stale');
     renderRuns(runs.runs);
+    /* A stage started from the panel below moves the page to that run as soon as there is
+     * one to move to. Not at the moment of the click: `stage.sh dpo` can spend minutes
+     * downloading a dataset before any trainer exists, and switching to an empty run would
+     * replace a working dashboard with a blank one and look like a bug. So the target is
+     * remembered and claimed here, on the first poll where the run is real. */
+    if (claimPendingRun(runs.runs)) return;
     $('#foot-root').textContent = runs.root;
     renderPhase(status);
     renderControls(status);
@@ -1239,6 +1378,35 @@ export function selectRun(run) {
   clearReport();
   $('#log-select').dataset.run = '';
   schedule(0);
+}
+
+/** Follow a just-started stage to its own run, once that run exists.
+ *
+ * `awaitRun` is set when a stage is started from the Post-training panel. It is claimed on
+ * the first poll where the run is actually in the list — which for DPO can be minutes after
+ * the click, because the launcher downloads and tokenizes a dataset first.
+ *
+ * It gives up if the user picks a different run in the meantime: following them somewhere
+ * they did not ask to go, several minutes after they pressed a button, would be worse than
+ * not following at all. Returns true when it switched, so the caller abandons a render
+ * whose data describes the run being navigated away from.
+ */
+function claimPendingRun(runs) {
+  const want = state.awaitRun;
+  if (!want) return false;
+  if (state.run !== state.awaitFrom) { state.awaitRun = null; return false; }
+  if (!(runs || []).some((r) => r.run === want)) return false;
+  state.awaitRun = null;
+  state.awaitFrom = null;
+  flash(`Now showing '${want}'.`, 'ok');
+  selectRun(want);
+  return true;
+}
+
+/** Called by the Post-training panel's Start button. */
+export function followStage(run) {
+  state.awaitRun = run;
+  state.awaitFrom = state.run;
 }
 
 registerTab('dashboard', { open: () => { schedule(0); drawCharts(); } });

@@ -386,10 +386,10 @@ of the step log and render nothing when a key is absent. SFT used to log only `s
 curve and four empty tiles, which reads as "the panel is broken" rather than "nobody wrote
 that number".
 
-All three stages now write the pretraining record shape: `tok_per_sec`, `mfu`, `grad_norm`
-and `eta_s` per step, bracketed by `session_start` / `session_end` records carrying
-`max_steps`, `tokens_per_step` and `params`. The brackets are what `runlog.split_sessions`
-turns into the Sessions table, and where progress and ETA get their denominator.
+All three stages write `grad_norm`, `s_per_step`, `elapsed` and `eta_s` per step, bracketed
+by `session_start` / `session_end` records carrying `max_steps` and `params`. The brackets
+are what `runlog.split_sessions` turns into the Sessions table, and where progress and ETA
+get their denominator.
 
 Two deliberate omissions, because a wrong number is worse than a blank tile. **DPO** runs
 four forward passes per step (chosen/rejected × policy/reference), so a tokens/second taken
@@ -397,6 +397,43 @@ from one of them would flatter it and an MFU derived from `6N` would simply be w
 **GRPO** spends most of a step *sampling* a group and running it in the sandbox, not on the
 single training update; its headline is reward and solve-rate, and a throughput number
 would describe a few percent of the wall-clock.
+
+#### The paragraph above was wrong for a year, and that is the lesson
+
+It used to say all three stages logged `tok_per_sec`, `mfu`, `grad_norm` and `eta_s`. Only
+SFT did. `dpo.py` and `grpo.py` *printed* `gnorm` and `eta` to the terminal and wrote
+neither to the jsonl — and the browser reads the jsonl and nothing else, so a DPO run showed
+a live terminal line ending `eta 2h17m` beside a dashboard whose ETA tile was a dash.
+
+The mechanism is worth naming because it will happen again: the `print(...)` and the
+`logf.write(json.dumps({...}))` beside it are **two independent lists of fields**, written
+at the same moment and never compared. Adding a number to the terminal line is the natural
+thing to do while debugging, and it costs nothing to forget the other one.
+`tests/test_portal.py::test_a_trainer_logs_every_number_its_dashboard_draws` now reads each
+trainer's step-record source and fails if a key the dashboard draws is missing from it.
+
+**A stage is not a small pretraining run, so three of the six tiles were meaningless.**
+Throughput, MFU and tokens-seen describe a base run; DPO's real headline — preference
+accuracy — had nowhere to appear at all, and GRPO's reward and solve-rate likewise. The
+tiles and the Throughput chart are stage-aware now:
+
+| tile | base run | DPO | GRPO |
+|---|---|---|---|
+| 1 | loss (ema) | loss (ema) | loss |
+| 3 | throughput | **pref accuracy** | **reward** |
+| 4 | MFU | seconds/step | seconds/step |
+| 5 | tokens seen | **pairs seen** | **completions** |
+| chart 2 | Throughput | **Preference accuracy**, with a chance rule at 50% | **Reward** and solved-share |
+
+"Pairs seen" and "completions" are **derived, not logged**: the batch shape is fixed for a
+whole run and already sits in `session_start`, so the count is `step × batch_size ×
+grad_accum` for DPO and `step × group_size × prompts_per_step` for GRPO. A trainer keeping a
+running total would be one more thing to carry across a resume correctly.
+
+The ETA is derived the same way when a log has no `eta_s` — `(max_steps − step) ×
+s_per_step`, the same arithmetic the trainer does. That is what makes a run *already in
+progress* under the old code show an ETA without being restarted, and it is the general
+rule: **prefer deriving a number from what is on disk over asking the user to restart.**
 
 One naming rule, learned by breaking it: a session record must not carry a bare `val_loss`.
 Every reader that scans for evals matches on that key and then indexes the record by a

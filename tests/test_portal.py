@@ -16,6 +16,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -1250,3 +1251,60 @@ def test_progress_and_finished_agree_on_a_completed_run(store, repo):
     st = store.status("demo-sft")
     assert st["finished"] is True
     assert st["progress"] == 1.0, f"finished but {st['progress']:.0%}"
+
+
+# --- the trainers must log what they print ------------------------------------------------
+# The browser only ever reads `<stage>_log.jsonl`. A trainer's terminal line and its jsonl
+# write are two separate field lists sitting next to each other, and they drift: dpo.py
+# printed `gnorm 30.02` and `eta 2h17m` for a whole run while the dashboard's ETA tile and
+# grad-norm chart stayed empty, and grpo.py logged no timing at all. Both looked like a
+# broken portal and were a missing dict key.
+#
+# Static, because running four trainers in a unit test is not worth it: find the step-logging
+# `logf.write(json.dumps({...}))` in each module and check the keys are there.
+
+import re as _re
+
+TRAINER_STEP_KEYS = {
+    # module -> keys its per-step record must carry for the dashboard to draw a run
+    "sft":  ("step", "loss", "grad_norm", "s_per_step", "eta_s"),
+    "dpo":  ("step", "loss", "ema", "acc", "grad_norm", "s_per_step", "eta_s"),
+    "grpo": ("step", "reward", "solved", "loss", "grad_norm", "s_per_step", "eta_s"),
+}
+
+
+def _step_record_source(module: str) -> str:
+    """The `logf.write(json.dumps({...}))` call that writes a per-step row.
+
+    The val/session writes in the same file are excluded by requiring a `"step"` key
+    alongside something that is not `val_loss` — a val row is `{step, val_loss}` and must not
+    satisfy the per-step contract.
+    """
+    src = (Path(__file__).resolve().parents[1] / "aksharallm" / "train" / f"{module}.py").read_text()
+    best = ""
+    for m in _re.finditer(r"logf\.write\(json\.dumps\(\{(.*?)\}\)", src, _re.S):
+        body = m.group(1)
+        if '"step"' in body and '"val_loss"' not in body and len(body) > len(best):
+            best = body
+    return best
+
+
+@pytest.mark.parametrize("module,keys", sorted(TRAINER_STEP_KEYS.items()))
+def test_a_trainer_logs_every_number_its_dashboard_draws(module: str, keys: tuple):
+    body = _step_record_source(module)
+    assert body, f"no per-step logf.write found in train/{module}.py — has it been rewritten?"
+    missing = [k for k in keys if f'"{k}"' not in body]
+    assert not missing, (
+        f"train/{module}.py prints these but does not log them: {missing}. The portal reads "
+        f"the jsonl and nothing else, so a key missing here is a blank tile or an empty "
+        f"chart that reads as a broken page.")
+
+
+@pytest.mark.parametrize("key", ["acc", "reward", "solved"])
+def test_the_post_training_headline_metrics_are_chartable(key: str):
+    """DPO's accuracy and GRPO's reward are those stages' headline numbers, and the
+    dashboard repoints its Throughput card at them (neither stage measures throughput). A
+    key missing from SERIES_KEYS is an empty chart on the stage that needed it most."""
+    assert key in runlog.SERIES_KEYS, f"{key!r} dropped from SERIES_KEYS"
+    assert key in runlog.latest([{"step": 1, "loss": 0.0, key: 0.5}]), \
+        f"{key!r} is charted but `latest()` does not report it for the tiles"

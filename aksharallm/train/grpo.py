@@ -311,6 +311,7 @@ def main():
     # too, not just the update. Checkpoints are already written on every improvement, so
     # breaking out of the loop leaves the best model behind.
     run_t0 = t0
+    prev_log_step = start_step - 1   # so the first window divides by the steps it covered
     stop_file = Path(args.stop_file) if args.stop_file else out_dir / "STOP"
     stop_by = run_t0 + stopfile.parse_duration(args.stop_in) if args.stop_in else None
     stop = {"now": False}
@@ -331,10 +332,14 @@ def main():
     # running it in the sandbox, not the one training update. A tokens/second taken from the
     # update would describe a few percent of the wall-clock and read as a throughput
     # collapse; reward and solve-rate are this run's real headline.
+    # `prompts_per_step` alongside `group_size` because the two multiply into the only
+    # "work done" figure this stage has: completions sampled and executed. The dashboard
+    # derives it as `step x group_size x prompts_per_step` rather than the trainer keeping a
+    # running total, so a resumed run needs nothing carried across.
     log_session("session_start", pid=os.getpid(), start_step=start_step,
                 max_steps=args.steps, params=policy.num_params(), reward=args.reward,
-                group_size=args.group_size, lr=args.lr, stage="grpo",
-                resumed=bool(resumed))
+                group_size=args.group_size, prompts_per_step=args.prompts_per_step,
+                lr=args.lr, stage="grpo", resumed=bool(resumed))
 
     why = None
     announced = None
@@ -392,10 +397,23 @@ def main():
         if step % args.log_every == 0 or why:
             dt = time.time() - t0
             t0 = time.time()
-            print(f"step {step:>5} | reward {mean_r:.3f} | solved {solve*100:4.0f}% | "
-                  f"loss {loss.item():+.4f} | kl {m['kl']:.4f} | gnorm {gnorm:.2f} | {dt:.1f}s")
+            s_per_step = dt / max(1, step - prev_log_step)   # measured, not assumed
+            prev_log_step = step
+            up = time.time() - run_t0
+            eta = (args.steps - step) * s_per_step
+            print(f"step {step:>5}/{args.steps} | reward {mean_r:.3f} | solved {solve*100:4.0f}% | "
+                  f"loss {loss.item():+.4f} | kl {m['kl']:.4f} | gnorm {gnorm:.2f} | "
+                  f"{s_per_step:.1f}s/step | up {fmt_dur(up)} | eta {fmt_dur(eta)}")
+            # Same rule as dpo.py: the browser only reads this file, so anything the line
+            # above prints has to be in it. This one had drifted further — no gnorm, no
+            # timing at all — so the dashboard could show neither an ETA nor a rate for the
+            # longest-running stage of the three. Throughput/MFU stay out deliberately:
+            # most of a GRPO step is sampling and sandbox execution rather than the update,
+            # so tokens/sec would describe the wrong thing.
             logf.write(json.dumps({"step": step, "reward": mean_r, "solved": solve,
-                                   "loss": loss.item(), **m}) + "\n")
+                                   "loss": loss.item(), "grad_norm": float(gnorm),
+                                   "time": time.time(), "s_per_step": s_per_step,
+                                   "elapsed": up, "eta_s": eta, **m}) + "\n")
             logf.flush()
 
         progress = resume.step_progress(step, rng.bit_generator.state, best_reward)
