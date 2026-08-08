@@ -346,6 +346,21 @@ steps) or to overwrite `<stage>_best.pt` — and the second silently destroys th
 pressed the button to improve on. Archiving is the only version of "again" that is safe by
 construction.
 
+### Why a finished stage did not say "finished"
+
+`finished` is `max_steps and reached + 1 >= max_steps` — and `max_steps` has to come from
+somewhere. A base run has `configs/<run>.yaml`, so it is known before the run starts. A
+stage has no config, so the **only** place its budget is written down is the `session_start`
+record. An SFT whose log predates those records has no `max_steps`, therefore no `finished`
+flag and no progress bar, however completely it ran. Nothing is wrong with the run; the
+number was never recorded. Stages logged from now on carry it and report `finished` like any
+other run.
+
+One inconsistency fixed while looking: `finished` read `trained_to` (the last step actually
+trained, from the session record) and progress read `step` (the last step *logged*, up to
+`log_every` behind). A completed run could therefore say "finished" beside an 88% bar. Both
+read `reached` now.
+
 ### Which stages appear in the run picker
 
 Only the ones that exist on disk. A stage has no `configs/<run>.yaml`, so — unlike a base

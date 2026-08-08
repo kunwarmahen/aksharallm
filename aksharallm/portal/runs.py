@@ -447,7 +447,11 @@ class RunStore:
             "uptime_s": uptime,
             "step": step,
             "max_steps": max_steps,
-            "progress": ((step + 1) / max_steps) if (step is not None and max_steps) else None,
+            # `reached`, not `step`, for the same reason `finished` uses it: the last
+            # *logged* step lags the last *trained* one by up to log_every. Using the two
+            # different numbers here produced a run that said "finished" beside an 88% bar.
+            "progress": (min(1.0, (reached + 1) / max_steps)
+                         if (reached is not None and max_steps) else None),
             "tokens_seen": (tokens_per_step * (step + 1)
                             if tokens_per_step and step is not None else None),
             "tokens_per_step": tokens_per_step,

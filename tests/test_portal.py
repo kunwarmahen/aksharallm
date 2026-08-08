@@ -1233,3 +1233,20 @@ def test_a_plain_run_with_no_launcher_still_gets_the_old_hint(store, repo):
     (repo / "checkpoints" / "orphan" / "train_log.jsonl").write_text("")
     hint = store.status("orphan")["start_hint"]
     assert "no launcher" in hint and "Post-training" not in hint
+
+
+def test_progress_and_finished_agree_on_a_completed_run(store, repo):
+    """They read the same number or they contradict each other. `finished` used
+    `trained_to` (the last step actually trained, from the session record) while progress
+    used `step` (the last step *logged*, up to log_every behind), so a completed run could
+    show "finished" beside an 88% bar."""
+    d = repo / "checkpoints" / "demo-sft"
+    d.mkdir(parents=True)
+    (d / "sft_log.jsonl").write_text(
+        '{"event": "session_start", "time": 1.0, "start_step": 0, "max_steps": 100,'
+        ' "tokens_per_step": 64}\n'
+        '{"step": 90, "loss": 1.0, "time": 2.0, "elapsed": 2.0}\n'
+        '{"event": "session_end", "time": 3.0, "last_step": 100, "elapsed": 3.0}\n')
+    st = store.status("demo-sft")
+    assert st["finished"] is True
+    assert st["progress"] == 1.0, f"finished but {st['progress']:.0%}"
