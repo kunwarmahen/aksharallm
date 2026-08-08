@@ -133,9 +133,17 @@ function wire() {
   $('#pipeline-stages').addEventListener('click', (e) => {
     const btn = e.target.closest('button[data-action]');
     if (!btn || btn.disabled) return;
-    const { base, stage, action } = btn.dataset;
+    const { base, stage, action, fresh } = btn.dataset;
     if (action === 'stop' && !confirm(`Stop '${base} · ${stage}'?`)) return;
-    act(() => post(`/api/pipeline/${encodeURIComponent(base)}/${stage}/${action}`, {}),
+    /* "Start fresh" is destructive-looking and is not: it renames the old run aside,
+     * keeping every checkpoint. Say so, because "start again" on a finished stage is
+     * exactly when someone fears for the model they just trained. */
+    if (fresh && !confirm(
+      `Start '${base} · ${stage}' again from step 0?\n\n`
+      + `The current run is renamed to '${base}-${stage}.<timestamp>' — checkpoints, log `
+      + 'and report all kept, nothing deleted. It stays readable in the run picker.')) return;
+    act(() => post(`/api/pipeline/${encodeURIComponent(base)}/${stage}/${action}`,
+                   fresh ? { fresh: true } : {}),
       action === 'start' ? `Starting ${stage.toUpperCase()}.` : 'Stop requested.');
   });
 

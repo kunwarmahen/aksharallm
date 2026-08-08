@@ -164,6 +164,26 @@ def _read_meta(path: Path) -> dict[str, str]:
 RUN_LOGS = ("train_log.jsonl", "sft_log.jsonl", "dpo_log.jsonl", "grpo_log.jsonl")
 
 
+#: `small-code-grpo` -> ("small-code", "grpo"). Kept here beside `RUN_LOGS` because both
+#: answer the same question — "is this directory a post-training stage?" — from the two
+#: pieces of evidence a stage leaves behind: its log name and its run name.
+_STAGE_SUFFIXES = ("sft", "dpo", "grpo")
+
+
+def _stage_of_run(run: str) -> tuple[str, str] | None:
+    """(base, stage) if this run name is a post-training stage, else None."""
+    for stage in _STAGE_SUFFIXES:
+        if run.endswith(f"-{stage}") and len(run) > len(stage) + 1:
+            return run[: -(len(stage) + 1)], stage
+    return None
+
+
+def _stage_hint(run: str) -> str:
+    """How the Post-training panel names this stage, for a tooltip that points at it."""
+    parsed = _stage_of_run(run)
+    return f"the {parsed[1].upper()} card" if parsed else "the panel"
+
+
 def run_log_path(run_dir: Path) -> Path:
     """The step log this run actually writes.
 
@@ -451,6 +471,17 @@ class RunStore:
                  f"train.max_steps in configs/{run}.yaml to carry on training this one."
                  ) if finished and run in LAUNCHERS else
                 None if run in LAUNCHERS else
+                # A post-training stage is startable — just not from here. Its Start lives
+                # in the Post-training panel, which is the only place that can also show the
+                # dependency gate, and there is deliberately no second copy of it on this
+                # panel. Saying so matters more since stages began appearing in the run
+                # picker: selecting one and finding a dead button with no explanation is
+                # worse than not being able to select it at all.
+                (f"'{run}' is post-training, not a base run — start, stop and re-run it "
+                 f"from the Post-training panel ({_stage_hint(run)}), which is also where "
+                 "its prerequisites are enforced. From a terminal: "
+                 f"scripts/stage.sh {_stage_of_run(run)[1]} {_stage_of_run(run)[0]}"
+                 ) if _stage_of_run(run) else
                            f"no launcher for '{run}' — the portal can start "
                            f"{', '.join(sorted(LAUNCHERS))} (scripts/phase2.sh for the base "
                            "model, scripts/experiment.sh for the Phase-1 experiments); "

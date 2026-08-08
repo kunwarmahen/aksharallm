@@ -415,7 +415,8 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 5 and parts[:2] == ["api", "pipeline"]:
                 base, stage, action = parts[2], parts[3], parts[4]
                 if action == "start":
-                    return self._json(self.pipeline.start(base, stage))
+                    return self._json(self.pipeline.start(
+                        base, stage, fresh=bool(data.get("fresh"))))
                 if action == "stop":
                     return self._json(self.pipeline.stop(base, stage))
         except (RunError, InferError) as exc:

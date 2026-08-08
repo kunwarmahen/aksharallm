@@ -290,7 +290,13 @@ function renderPipeline(p) {
     const sub = s.phase === 'failed' ? (s.reason || 'the trainer exited without a checkpoint')
       : s.step == null ? s.blurb
       : `step ${fmt.int(s.step)}${val ? ` · ${val}` : ''}`;
-    const startAttrs = s.can_start ? '' : `disabled title="${escHtml(s.reason || '')}"`;
+    /* One `title` either way: the reason it is disabled, or what pressing it will do.
+     * Two title attributes on one element silently keeps the first. */
+    const startAttrs = s.can_start
+      ? `title="${escHtml(s.done
+          ? 'archives this run and starts again from step 0 — nothing is deleted'
+          : 'launches scripts/stage.sh (resumes if it was stopped part-way)')}"`
+      : `disabled title="${escHtml(s.reason || '')}"`;
     const subAttrs = s.phase === 'failed' ? ` title="${escHtml(s.reason || '')}"` : '';
     return `
       <div class="stage stage-${s.phase}">
@@ -300,7 +306,7 @@ function renderPipeline(p) {
         </div>
         <div class="stage-sub"${subAttrs}>${escHtml(sub)}</div>
         <div class="stage-actions">
-          <button data-base="${escHtml(p.base)}" data-stage="${s.stage}" data-action="start" ${startAttrs}>${s.done ? 'Re-run' : 'Start'}</button>
+          <button data-base="${escHtml(p.base)}" data-stage="${s.stage}" data-action="start" ${startAttrs} ${s.done ? 'data-fresh="1"' : ''}>${s.done ? 'Start fresh…' : s.phase === 'failed' ? 'Try again' : 'Start'}</button>
           <button data-base="${escHtml(p.base)}" data-stage="${s.stage}" data-action="stop" ${s.can_stop ? '' : 'disabled'}>Stop</button>
         </div>
       </div>`;

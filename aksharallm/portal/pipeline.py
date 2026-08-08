@@ -23,7 +23,8 @@ import os
 import subprocess
 from pathlib import Path
 
-from .runs import RUN_NAME_RE, RunError, _alive, _cmdline, _read_int, _read_meta, repo_root
+from .runs import (RUN_NAME_RE, RunError, RunStore, _alive, _cmdline, _read_int,
+                   _read_meta, repo_root)
 
 #: stage -> (best-checkpoint filename, log filename, human blurb)
 STAGES = {
@@ -36,6 +37,9 @@ STAGES = {
 class Pipeline:
     def __init__(self, root: Path | None = None):
         self.root = Path(root) if root else repo_root()
+        # For `start(fresh=True)`, which archives the previous attempt with exactly the same
+        # rename a base run's "Start fresh…" uses. One implementation of "set this aside".
+        self.store = RunStore(self.root)
 
     # ---- paths -----------------------------------------------------------------------
     def base_ckpt(self, base: str) -> Path:
@@ -162,7 +166,21 @@ class Pipeline:
         }
 
     # ---- actions (shell out to the scripts) -------------------------------------------
-    def start(self, base: str, stage: str) -> dict:
+    def start(self, base: str, stage: str, fresh: bool = False) -> dict:
+        """Start a stage. `fresh` sets the previous attempt aside first and begins at step 0.
+
+        Without `fresh`, starting a *finished* stage is a no-op that looks like a bug:
+        `stage.sh` passes `--resume auto`, the trainer loads `<stage>_last.pt`, sees the last
+        epoch is already done, trains nothing and re-saves several GB. "Re-run" that trains
+        zero steps is the wrong answer to the button's own label.
+
+        `fresh` is the same move the dashboard's "Start fresh…" makes for a base run, and it
+        uses the same `RunStore.archive`: a *rename* of `checkpoints/<run>` and
+        `logs/<run>` to `<run>.<timestamp>`, so a 7 GB fine-tune is set aside instantly,
+        nothing is copied and nothing is deleted. The archive keeps its checkpoints, its log
+        and its report, and shows up in the run picker under the timestamped name — read-only,
+        because no launcher knows it.
+        """
         if stage not in STAGES:
             raise RunError(f"unknown stage: {stage}")
         st = self.stage_status(base, stage)
@@ -170,6 +188,12 @@ class Pipeline:
             raise RunError(f"'{st['run']}' is already running (pid {st['pid']}).")
         if not st["can_start"]:
             raise RunError(st["reason"] or f"cannot start {stage}")
+
+        archived_as = None
+        if fresh and self.stage_dir(base, stage).is_dir():
+            # Archive BEFORE launching, so the new run opens on an empty directory and
+            # `--resume auto` finds nothing to resume — which is what makes it start at 0.
+            archived_as = self.store.archive(self.stage_run(base, stage))["archive"]
 
         script = self.root / "scripts" / "stage.sh"
         if not script.exists():
@@ -182,9 +206,13 @@ class Pipeline:
                 ["bash", str(script), stage, base],
                 cwd=self.root, env={**os.environ}, stdin=subprocess.DEVNULL,
                 stdout=fh, stderr=subprocess.STDOUT, start_new_session=True)
+        note = (f"stage.sh {stage} {base}: prepares data if needed, then launches the "
+                "trainer (watch the log).")
+        if archived_as:
+            note = (f"set the previous run aside as '{archived_as}' (checkpoints, log and "
+                    f"report all kept), then started {stage} from step 0. " + note)
         return {"ok": True, "action": "start", "stage": stage, "run": self.stage_run(base, stage),
-                "pid": proc.pid, "note": f"stage.sh {stage} {base}: prepares data if needed, "
-                                         "then launches the trainer (watch the log)."}
+                "pid": proc.pid, "archived": archived_as, "note": note}
 
     def stop(self, base: str, stage: str) -> dict:
         st = self.stage_status(base, stage)

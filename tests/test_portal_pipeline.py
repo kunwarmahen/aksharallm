@@ -136,3 +136,34 @@ def test_a_stage_that_never_ran_is_still_ready(tmp_path):
     _touch(tmp_path / "checkpoints" / "small-code" / "ckpt_best.pt")
     st = stages(Pipeline(tmp_path), "small-code")["sft"]
     assert st["phase"] == "ready" and st["reason"] is None
+
+
+def test_start_fresh_archives_the_previous_stage_and_keeps_everything(tmp_path):
+    """"Start again" on a finished stage must not mean "overwrite the model you just
+    trained", and must not mean "train zero steps" either — which is what a plain restart
+    does, because `--resume auto` sees the last epoch is already done."""
+    _touch(tmp_path / "checkpoints" / "small-code" / "ckpt_best.pt")
+    d = tmp_path / "checkpoints" / "small-code-sft"
+    _touch(d / "sft_best.pt")
+    (d / "sft_log.jsonl").write_text('{"step": 5, "loss": 1.0, "time": 1.0, "elapsed": 1.0}\n')
+    _touch(d / "report.md")
+    (tmp_path / "scripts").mkdir(exist_ok=True)
+    (tmp_path / "scripts" / "stage.sh").write_text("#!/bin/sh\nexit 0\n")
+
+    res = Pipeline(tmp_path).start("small-code", "sft", fresh=True)
+
+    assert res["archived"], "nothing was archived"
+    archive = tmp_path / "checkpoints" / res["archived"]
+    # everything survives, under the timestamped name
+    assert (archive / "sft_best.pt").exists() and (archive / "report.md").exists()
+    assert (archive / "sft_log.jsonl").exists()
+    # ...and the stage restarts from an empty directory, so `--resume auto` finds nothing
+    assert not (tmp_path / "checkpoints" / "small-code-sft" / "sft_best.pt").exists()
+    assert res["archived"] in Pipeline(tmp_path).store.runs(), "the archive must stay visible"
+
+
+def test_a_plain_start_does_not_archive(tmp_path):
+    _touch(tmp_path / "checkpoints" / "small-code" / "ckpt_best.pt")
+    (tmp_path / "scripts").mkdir(exist_ok=True)
+    (tmp_path / "scripts" / "stage.sh").write_text("#!/bin/sh\nexit 0\n")
+    assert Pipeline(tmp_path).start("small-code", "sft")["archived"] is None

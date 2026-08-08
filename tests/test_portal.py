@@ -1211,3 +1211,25 @@ def test_scheduling_a_stage_is_allowed_by_the_same_list_the_picker_shows(store, 
     assert "demo-grpo" in offered
     # the run is not a known run yet (no log, no run.meta) — scheduling it must still work
     assert "demo-grpo" not in store.runs()
+
+
+def test_a_stage_selected_in_the_run_picker_says_where_its_start_button_is(store, repo):
+    """Stages appear in the run picker now, so they can be selected — and the run panel's
+    Start is disabled for them by design (their Start lives in the Post-training panel, the
+    only place that can also show the dependency gate). A disabled button with no
+    explanation is worse than not being able to select the run at all."""
+    d = repo / "checkpoints" / "demo-sft"
+    d.mkdir(parents=True)
+    (d / "sft_log.jsonl").write_text('{"step": 5, "loss": 1.2, "time": 1.0, "elapsed": 1.0}\n')
+    st = store.status("demo-sft")
+    assert st["can_start"] is False
+    hint = st["start_hint"]
+    assert "Post-training panel" in hint and "SFT card" in hint
+    assert "scripts/stage.sh sft demo" in hint, hint
+
+
+def test_a_plain_run_with_no_launcher_still_gets_the_old_hint(store, repo):
+    (repo / "checkpoints" / "orphan").mkdir(parents=True)
+    (repo / "checkpoints" / "orphan" / "train_log.jsonl").write_text("")
+    hint = store.status("orphan")["start_hint"]
+    assert "no launcher" in hint and "Post-training" not in hint

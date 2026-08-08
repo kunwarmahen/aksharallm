@@ -327,6 +327,42 @@ writing a rule for something that finishes next week is what a schedule is *for*
 are listed whether or not their prerequisite exists yet. Only language-model bases get
 stages in the picker; a codec has no SFT.
 
+### Starting a stage again, without losing the last one
+
+A finished stage's button says **Start fresh…**, and it does what the dashboard's button of
+the same name does for a base run: `RunStore.archive` *renames* `checkpoints/<run>` and
+`logs/<run>` to `<run>.<timestamp>`. A rename, so a 7 GB fine-tune is set aside instantly,
+nothing is copied and nothing is deleted. The old run keeps its checkpoints, its log and its
+report, and stays in the run picker under the timestamped name — read-only, because no
+launcher knows it.
+
+It replaced a button labelled "Re-run" that **trained zero steps**. `stage.sh` passes
+`--resume auto`, so on a completed stage the trainer loaded its checkpoint, saw the last
+epoch was already done, trained nothing and re-saved several GB. A verb the code does not
+honour is worse than a disabled button.
+
+Why not just restart in place? Because the only two ways to do that are to resume (zero
+steps) or to overwrite `<stage>_best.pt` — and the second silently destroys the model you
+pressed the button to improve on. Archiving is the only version of "again" that is safe by
+construction.
+
+### Which stages appear in the run picker
+
+Only the ones that exist on disk. A stage has no `configs/<run>.yaml`, so — unlike a base
+run, which is listed from its config before it has ever trained — the only evidence it
+exists is its directory. `checkpoints/small-code-dpo/` is not created until you start DPO,
+so DPO is not in the run picker until then, and that is deliberate: a phantom entry with no
+log, no checkpoint and nothing to chart is the kind of thing you waste an evening on.
+
+The **Post-training panel** is where a stage is visible *before* it exists — all three cards
+are always there, showing `blocked`, `ready`, `running`, `done` or `failed`. The run picker
+is for runs with data; the panel is for the pipeline. A stage joins the picker the moment it
+launches, on the strength of `run.meta`, which the launcher writes before the trainer starts.
+
+The **Schedule** picker is different again, and deliberately so: it lists every stage of
+every language-model base whether or not it exists yet, because scheduling something that
+finishes next week is the entire point of a schedule.
+
 ### A stage writes the same log a base run does
 
 The dashboard's throughput, MFU, ETA, progress and Sessions panels all read named keys out
