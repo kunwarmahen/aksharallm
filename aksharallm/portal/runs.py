@@ -9,7 +9,7 @@ what keeps the button and the terminal honest about each other.
 State lives on disk, never in this process, so the portal can be restarted, or run twice,
 or not run at all, without a training run noticing.
 
-Read with: docs/09-running-and-watching.md -- the chapter this implements; it ends with the
+Read with: docs/10-running-and-watching.md -- the chapter this implements; it ends with the
 order to read these files in.
 """
 
@@ -56,7 +56,14 @@ TRAINERS: tuple[str, ...] = (
 #: Every shell script that pre-flights a run and publishes `launch.pid` / `launch.meta`.
 #: A launcher missing from this tuple makes its run read as **idle while it is pre-flighting**,
 #: with the Start button still enabled -- which invites a second launch on top of the first.
-LAUNCH_SCRIPTS: tuple[str, ...] = ("phase2.sh", "experiment.sh", "audio.sh")
+#:
+#: `stage.sh` was the third omission of exactly this kind, and the most visible one, because
+#: its pre-flight is the longest of the four: `scripts/stage.sh dpo` *downloads and tokenizes
+#: UltraFeedback* before it launches a trainer. With it missing, the Post-training panel
+#: reported the stage as **ready** for the whole download -- no pid, no checkpoint, no crash
+#: -- so pressing Start looked like it had done nothing at all, and the obvious response was
+#: to press it again.
+LAUNCH_SCRIPTS: tuple[str, ...] = ("phase2.sh", "experiment.sh", "audio.sh", "stage.sh")
 
 LAUNCHERS: dict[str, dict] = {
     "small-code": {},                                        # blended 85/15 base (default)
@@ -64,8 +71,8 @@ LAUNCHERS: dict[str, dict] = {
     "tiny-moe": {"script": "scripts/experiment.sh", "args": ["tiny-moe"]},
     "tiny": {"script": "scripts/experiment.sh", "args": ["tiny"]},
     "tiny-diffusion": {"script": "scripts/experiment.sh",
-                       "args": ["tiny-diffusion"]},   # docs/19
-    # Audio and vision: a different launcher, the same pid/meta/log contract. docs/20, 21.
+                       "args": ["tiny-diffusion"]},   # docs/20
+    # Audio and vision: a different launcher, the same pid/meta/log contract. docs/21, 22.
     "codec-synth": {"script": "scripts/audio.sh", "args": ["codec-synth"]},
     "codec-lj": {"script": "scripts/audio.sh", "args": ["codec-lj"]},
     "audiolm-synth": {"script": "scripts/audio.sh", "args": ["audiolm-synth"]},
@@ -129,7 +136,7 @@ def _cmdline(pid: int) -> str:
 
 #: A top-level section that some trainer in this repo would recognise — the cheap, text-only
 #: test for "this is a run and not a settings file". `model:` is a language model, `codec:`
-#: and `audiolm:` are docs/20, `vision:` is docs/21. Deliberately not a YAML parse: `runs()`
+#: and `audiolm:` are docs/21, `vision:` is docs/22. Deliberately not a YAML parse: `runs()`
 #: is called on every poll of every open page.
 _RUN_CONFIG_RE = re.compile(r"^(model|codec|audiolm|vision):", re.MULTILINE)
 
@@ -267,7 +274,7 @@ class RunStore:
 
         Not every YAML under `configs/` is a run: `portal.yaml` configures the portal's own
         code explainer. A run config is one *some* trainer could read — a `model:` section
-        (a language model), a `codec:` or `audiolm:` one (docs/20), or `vision:` (docs/21).
+        (a language model), a `codec:` or `audiolm:` one (docs/21), or `vision:` (docs/22).
         Anything else is a settings file that happens to live next door, and a phantom run in
         the picker with no log and no launcher is the kind of thing you waste an evening on.
         """

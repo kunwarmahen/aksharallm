@@ -188,7 +188,7 @@ before the real run. Skipping is only sane when resuming a config that has alrea
   <section class="panel" aria-label="post-training">
     <div class="panel-head">
       <h2>Post-training</h2>
-      <span class="panel-note">SFT → DPO / GRPO — each unlocks when its prerequisite finishes; everything runs scripts/stage.sh</span>
+      <span class="panel-note">SFT first, then <b>DPO <i>or</i> GRPO</b> — those two are alternatives, both starting from the SFT checkpoint. Pick GRPO when a program can decide whether the answer is right; DPO when only a person can. Everything runs scripts/stage.sh.</span>
     </div>
     <div id="pipeline-stages" class="pipeline-stages"></div>
   </section>

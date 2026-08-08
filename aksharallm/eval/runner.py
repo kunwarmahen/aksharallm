@@ -19,7 +19,7 @@ Ordering inside a run is deliberate: the cheap deterministic suites first, gener
 An evaluation that is going to fail on a missing dataset or a bad checkpoint should fail in
 the first ten seconds, not after twenty minutes of HumanEval.
 
-Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/13-eval.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 
@@ -225,11 +225,24 @@ class Harness:
         raise EvalError(f"suite {name!r} has an unknown kind {suite.kind!r}")
 
     def _answer(self, loaded, prompt: str, opts: Options) -> str:
-        """One answer, in whatever form this checkpoint understands.
+        """One answer, in whatever form this checkpoint understands. **Judge suite only.**
 
         A chat model is asked through its chat template; a base model is handed the prompt
         as text. Sending ChatML to a base model produces noise — the same reason the
         Playground refuses to chat with one — so the stage decides, not the caller.
+
+        The scope matters, because the obvious reading of that paragraph is wrong: this is
+        called from `_run_judge` and nowhere else. `_run_gen` (GSM8K) and `_run_code`
+        (HumanEval) also generate, and they hand the model `item.prompt` verbatim even when
+        `loaded.stage` is `sft` — deliberately. GSM8K is a 5-shot chain-of-thought prompt and
+        HumanEval is a signature to complete; wrapping either in ChatML makes it a *different
+        benchmark*, and gotcha 1 in docs/13-eval.md is that a prompt format may not change
+        without renaming the suite. Keeping them raw is what makes a base-vs-SFT comparison
+        like-for-like. The judge suite is open-ended, has no base-model score worth
+        preserving, and is the one measurement that is *about* being a chat model — so it is
+        the one that speaks the template.
+
+        See docs/13-eval.md § "Evaluating a chat model: what changes, and what must not".
         """
         if loaded.stage in ("sft", "dpo", "chat"):
             text = self.engine.build_prompt(loaded, "chat", prompt=prompt)

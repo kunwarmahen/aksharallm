@@ -167,3 +167,87 @@ def test_a_plain_start_does_not_archive(tmp_path):
     (tmp_path / "scripts").mkdir(exist_ok=True)
     (tmp_path / "scripts" / "stage.sh").write_text("#!/bin/sh\nexit 0\n")
     assert Pipeline(tmp_path).start("small-code", "sft")["archived"] is None
+
+
+# --- pre-flight: the window between pressing Start and the trainer existing ----------------
+# `scripts/stage.sh dpo` downloads and tokenizes UltraFeedback before it launches anything.
+# That is minutes with no pid, no checkpoint and no crash — the exact state that used to fall
+# through to "ready", so the button looked like it had done nothing and the natural response
+# was to press it again, on top of the download already running.
+
+def _preflighting(tmp_path, stage: str, step: str = "data"):
+    """A live `stage.sh` in pre-flight, publishing the files the real script publishes."""
+    import subprocess
+
+    _touch(tmp_path / "checkpoints" / "small-code" / "ckpt_best.pt")
+    _touch(tmp_path / "checkpoints" / "small-code-sft" / "sft_best.pt")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir(exist_ok=True)
+    script = scripts / "stage.sh"          # the name is what `LAUNCH_SCRIPTS` matches on
+    script.write_text("#!/bin/sh\nsleep 30\n")
+    script.chmod(0o755)
+    proc = subprocess.Popen(["bash", str(script)], stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
+    d = tmp_path / "checkpoints" / f"small-code-{stage}"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "launch.pid").write_text(str(proc.pid))
+    (d / "launch.meta").write_text(f"pid     {proc.pid}\nstage   {step}\n")
+    return proc
+
+
+def test_a_stage_downloading_its_dataset_reports_preparing_not_ready(tmp_path):
+    proc = _preflighting(tmp_path, "dpo")
+    try:
+        st = stages(Pipeline(tmp_path), "small-code")["dpo"]
+        assert st["phase"] == "preparing", "a live pre-flight must not read as 'ready'"
+        assert not st["can_start"], "Start stays disabled or it invites a second launch"
+        assert not st["can_stop"], "there is no trainer to stop yet"
+        # and it says what it is doing, so waiting is obviously the right move
+        assert "UltraFeedback" in st["reason"]
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_pre_flight_stops_reading_as_preparing_once_the_launcher_is_gone(tmp_path):
+    proc = _preflighting(tmp_path, "dpo")
+    proc.kill()
+    proc.wait()
+    # a stale launch.pid must not pin the card at "preparing" forever
+    assert stages(Pipeline(tmp_path), "small-code")["dpo"]["phase"] == "ready"
+
+
+def test_the_panel_says_which_dataset_is_missing_before_you_press_start(tmp_path):
+    _touch(tmp_path / "checkpoints" / "small-code" / "ckpt_best.pt")
+    _touch(tmp_path / "checkpoints" / "small-code-sft" / "sft_best.pt")
+    st = stages(Pipeline(tmp_path), "small-code")
+
+    # DPO needs a dataset and this tree has none, so Start means "download, then train"
+    assert st["dpo"]["data"] == {"needed": True, "ready": False,
+                                 "path": "data/dpo/train_chosen_tokens.npy",
+                                 "recipe": "ultrafeedback",
+                                 "cost": st["dpo"]["data"]["cost"]}
+    # GRPO never needs one — the sandbox computes the reward
+    assert st["grpo"]["data"]["needed"] is False
+
+    _touch(tmp_path / "data" / "dpo" / "train_chosen_tokens.npy")
+    assert stages(Pipeline(tmp_path), "small-code")["dpo"]["data"]["ready"] is True
+
+
+def test_dpo_and_grpo_are_named_as_alternatives_to_each_other(tmp_path):
+    """Side by side and gated on the same checkpoint, they look like a sequence. They are
+    not: neither reads the other's output, and the card has to say so."""
+    _touch(tmp_path / "checkpoints" / "small-code" / "ckpt_best.pt")
+    _touch(tmp_path / "checkpoints" / "small-code-sft" / "sft_best.pt")
+    st = stages(Pipeline(tmp_path), "small-code")
+
+    assert st["dpo"]["alternative"] == "grpo"
+    assert st["grpo"]["alternative"] == "dpo"
+    assert st["sft"]["alternative"] is None          # SFT is not optional
+    # both read the same file, which is what makes them alternatives rather than a chain
+    assert st["dpo"]["starts_from"] == st["grpo"]["starts_from"] == \
+        "checkpoints/small-code-sft/sft_best.pt"
+    assert st["dpo"]["writes"] != st["grpo"]["writes"]
+    # and each carries the rule for picking it
+    assert "no program can tell" in st["dpo"]["guidance"]["choose"]
+    assert "program CAN tell" in st["grpo"]["guidance"]["choose"]

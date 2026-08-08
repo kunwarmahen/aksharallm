@@ -120,7 +120,11 @@
 
 /* Post-training pipeline panel (SFT -> DPO / GRPO) */
 .pipeline-stages { display: flex; flex-wrap: wrap; gap: .75rem; }
-.stage { flex: 1 1 180px; border: 1px solid var(--border); border-radius: 8px;
+/* `min-width: 0` with the flex-basis, not just the basis: the cards carry file paths now,
+   and a long unbroken path in a flex item defaults to `min-width: auto` — it refuses to
+   shrink below its content and pushes the page sideways on a phone. Same trap as the
+   number inputs in controls.css. */
+.stage { flex: 1 1 260px; min-width: 0; border: 1px solid var(--border); border-radius: 8px;
          padding: .6rem .7rem; background: var(--wash); }
 .stage-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 .stage-name { font-weight: 600; letter-spacing: .02em; }
@@ -133,14 +137,31 @@
 .stage-actions { display: flex; gap: .4rem; }
 .stage-actions button { flex: 1; }
 .stage-actions button:disabled { opacity: .45; cursor: not-allowed; }
-.badge-pipe-blocked { background: #4b5563; color: #e5e7eb; }
-.badge-pipe-ready   { background: var(--series-1); color: #fff; }
-.badge-pipe-running { background: #d97706; color: #fff; }
-.badge-pipe-done    { background: #059669; color: #fff; }
-.badge-pipe-failed  { background: #b91c1c; color: #fff; }
-.stage-running { border-color: #d97706; }
-.stage-done    { border-color: #059669; }
-.stage-failed  { border-color: #b91c1c; }
+.badge-pipe-blocked   { background: #4b5563; color: #e5e7eb; }
+.badge-pipe-ready     { background: var(--series-1); color: #fff; }
+.badge-pipe-preparing { background: #7c3aed; color: #fff; }
+.badge-pipe-running   { background: #d97706; color: #fff; }
+.badge-pipe-done      { background: #059669; color: #fff; }
+.badge-pipe-failed    { background: #b91c1c; color: #fff; }
+.stage-running   { border-color: #d97706; }
+.stage-preparing { border-color: #7c3aed; }
+.stage-done      { border-color: #059669; }
+.stage-failed    { border-color: #b91c1c; }
+
+/* The decision line — "pick this one when…". It is the reason the panel exists rather than
+   three buttons: DPO and GRPO are gated on the same checkpoint and look interchangeable. */
+.stage-choose { font-size: .78rem; line-height: 1.45; opacity: .85; margin: 0 0 .5rem;
+         padding-left: .5rem; border-left: 2px solid var(--border); }
+.stage-alt { display: block; margin-top: .3rem; opacity: .7; font-style: italic; }
+/* Facts that are always true of the stage, whatever it is doing: what it reads, what it
+   writes, whether its dataset exists. Small, and it wraps rather than widening the card —
+   these are file paths, which do not break on their own. */
+.stage-facts { font-size: .74rem; opacity: .7; margin: 0 0 .55rem; display: grid;
+         gap: .15rem; overflow-wrap: anywhere; min-width: 0; }
+.stage-facts b { font-weight: 600; opacity: .85; }
+.stage-facts code { font-size: .95em; }
+.stage-data-missing { color: #b45309; opacity: 1; }
+.stage-preparing .stage-sub { opacity: .95; }
 
 /* Cost panel. Same tile grid as the GPU panel above it — it is the same measurement, one
    step further along (watts -> watt-hours -> money), and it should not look like a

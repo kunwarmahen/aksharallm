@@ -275,7 +275,15 @@ function baseOf(run) {
 
 /** The post-training panel: SFT -> DPO / GRPO, each gated on its prerequisite checkpoint.
  * Buttons post to /api/pipeline/<base>/<stage>/<action>, which shells out to stage.sh.  A
- * blocked stage's Start is disabled with the reason as its tooltip. */
+ * blocked stage's Start is disabled with the reason as its tooltip.
+ *
+ * The card carries three things past the buttons, because the question people arrive with is
+ * *which of these do I run*, and three identically-shaped cards cannot answer it:
+ *   - the decision rule ("pick this when…"), and a note that DPO and GRPO are alternatives;
+ *   - what the stage reads and writes, so the checkpoint chain is visible rather than implied;
+ *   - whether its dataset already exists — because on this machine SFT's does and DPO's does
+ *     not, which makes the same-looking Start button mean "train" on one card and "download
+ *     for several minutes, then train" on the other. */
 function renderPipeline(p) {
   const host = $('#pipeline-stages');
   if (!host) return;
@@ -286,18 +294,39 @@ function renderPipeline(p) {
       ? `reward ${fmt.num(m.value, 3)}` : `val ${fmt.num(m.value, 4)}`);
     // A failed stage shows what killed it, not its blurb — that line is the whole reason
     // the panel exists after a crash. It is long (a CUDA OOM names every number it had),
-    // so the full text goes in the tooltip and the box shows what fits.
-    const sub = s.phase === 'failed' ? (s.reason || 'the trainer exited without a checkpoint')
+    // so the full text goes in the tooltip and the box shows what fits. `preparing` shows
+    // its reason for the same purpose in reverse: the stage has *not* stalled, it is
+    // downloading, and saying so is the difference between waiting and pressing Start again.
+    const sub = (s.phase === 'failed' || s.phase === 'preparing')
+      ? (s.reason || 'the trainer exited without a checkpoint')
       : s.step == null ? s.blurb
       : `step ${fmt.int(s.step)}${val ? ` · ${val}` : ''}`;
     /* One `title` either way: the reason it is disabled, or what pressing it will do.
      * Two title attributes on one element silently keeps the first. */
+    const g = s.guidance || {};
+    const data = s.data || {};
+    const willDownload = data.needed && !data.ready;
     const startAttrs = s.can_start
       ? `title="${escHtml(s.done
           ? 'archives this run and starts again from step 0 — nothing is deleted'
-          : 'launches scripts/stage.sh (resumes if it was stopped part-way)')}"`
+          : willDownload
+            ? `launches scripts/stage.sh, which ${data.cost} — expect several minutes before step 1`
+            : 'launches scripts/stage.sh (resumes if it was stopped part-way)')}"`
       : `disabled title="${escHtml(s.reason || '')}"`;
-    const subAttrs = s.phase === 'failed' ? ` title="${escHtml(s.reason || '')}"` : '';
+    const subAttrs = (s.phase === 'failed' || s.phase === 'preparing')
+      ? ` title="${escHtml(s.reason || '')}"` : '';
+    // Watch-for is the failure this stage's own metric shows, and it is only actionable once
+    // there is a number to read it against — so it rides on the metric line, not the pitch.
+    const choose = g.choose
+      ? `<p class="stage-choose">${escHtml(g.choose)}${s.alternative
+          ? `<span class="stage-alt">An alternative to ${escHtml(s.alternative.toUpperCase())}, not a step after it — both start from the same SFT checkpoint.</span>`
+          : ''}</p>`
+      : '';
+    const dataFact = !data.needed
+      ? '<div><b>data</b> none needed — the sandbox computes the reward</div>'
+      : data.ready
+        ? `<div><b>data</b> <code>${escHtml(data.path)}</code> ready</div>`
+        : `<div class="stage-data-missing"><b>data</b> not built yet — ${escHtml(data.cost)}</div>`;
     return `
       <div class="stage stage-${s.phase}">
         <div class="stage-head">
@@ -305,6 +334,13 @@ function renderPipeline(p) {
           <span class="badge badge-pipe-${s.phase}">${s.phase}</span>
         </div>
         <div class="stage-sub"${subAttrs}>${escHtml(sub)}</div>
+        ${choose}
+        <div class="stage-facts">
+          <div><b>reads</b> <code>${escHtml(s.starts_from || '')}</code></div>
+          <div><b>writes</b> <code>${escHtml(s.writes || '')}</code></div>
+          ${dataFact}
+          ${g.metric ? `<div><b>watch</b> ${escHtml(g.metric)}${g.watch_for ? ` <span title="${escHtml(g.watch_for)}">ⓘ</span>` : ''}</div>` : ''}
+        </div>
         <div class="stage-actions">
           <button data-base="${escHtml(p.base)}" data-stage="${s.stage}" data-action="start" ${startAttrs} ${s.done ? 'data-fresh="1"' : ''}>${s.done ? 'Start fresh…' : s.phase === 'failed' ? 'Try again' : 'Start'}</button>
           <button data-base="${escHtml(p.base)}" data-stage="${s.stage}" data-action="stop" ${s.can_stop ? '' : 'disabled'}>Stop</button>

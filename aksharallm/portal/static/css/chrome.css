@@ -27,7 +27,15 @@
 }
 .brand-name { font-weight: 650; letter-spacing: -0.01em; }
 .brand-sub { color: var(--ink-muted); }
-.topbar-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+/* `min-width: 0`, and it is load-bearing. This is a flex item, so its default `min-width:
+ * auto` is its *min-content* width -- and it contains the run picker, whose min-content
+ * width is its widest <option>. Archiving a run ("Start fresh…") names it
+ * `small-code-sft.20260808-074957 — archived`, which is 330px of option text, so the bar
+ * refused to shrink below 330 and a 320px phone scrolled sideways by 23px. The select's own
+ * `max-width: 100%` could not help: it resolves against a parent that had already been
+ * stretched to fit it. Same trap as the number inputs in controls.css and the stage cards
+ * in dashboard.css -- a long unbreakable child plus a flex item that may not shrink. */
+.topbar-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; }
 
 /* ---- the menu button ------------------------------------------------------------------
  * The views used to be a strip across the bar. Fourteen of them no longer fit anywhere —

@@ -13,7 +13,7 @@ prerequisite whether it's launched from here or a terminal.
               ├─ DPO   (checkpoints/<base>-dpo/dpo_best.pt)
               └─ GRPO  (checkpoints/<base>-grpo/grpo_best.pt)
 
-Read with: docs/09-running-and-watching.md -- the chapter this implements; it ends with the
+Read with: docs/10-running-and-watching.md -- the chapter this implements; it ends with the
 order to read these files in.
 """
 
@@ -31,6 +31,50 @@ STAGES = {
     "sft":  ("sft_best.pt",  "sft_log.jsonl",  "supervised fine-tune: base → follows instructions"),
     "dpo":  ("dpo_best.pt",  "dpo_log.jsonl",  "preference tuning: sharpen with chosen/rejected pairs"),
     "grpo": ("grpo_best.pt", "grpo_log.jsonl", "RL on the code sandbox: reward = tests pass"),
+}
+
+#: What the panel has to say beyond "press Start", because the question a person actually
+#: arrives with is *which of these two*, and the cards alone cannot answer it: DPO and GRPO
+#: sit side by side, are gated on the same checkpoint, and look interchangeable.
+#:
+#: `choose` is the one-line decision rule; `metric` names the number to watch once it is
+#: running, and `watch_for` the failure that number shows. Kept here rather than in the
+#: browser so the API answers the question too -- docs/06-posttraining.md § "Choosing between
+#: them" is the long version and must not drift from these lines. Plain text only:
+#: the browser inserts these through `escHtml`, so `*emphasis*` renders as asterisks.
+GUIDANCE: dict[str, dict[str, str]] = {
+    "sft": {
+        "choose": "Always. Every route to a model you can talk to goes through here.",
+        "metric": "val loss",
+        "watch_for": "Not comparable with the base run's val loss — different data, and the "
+                     "loss counts assistant tokens only.",
+    },
+    "dpo": {
+        "choose": "Pick DPO when no program can tell whether an answer is right — tone, "
+                  "length, helpfulness, refusals. It learns from pairs someone ranked.",
+        "metric": "acc — 50% → 65–80%",
+        "watch_for": "Past 90% is overfitting the preference set; the model starts hedging "
+                     "or rambling. Stop early.",
+    },
+    "grpo": {
+        "choose": "Pick GRPO when a program CAN tell — do the tests pass, is the number "
+                  "right. The sandbox computes the reward, so there is nothing to download.",
+        "metric": "reward, solved%",
+        "watch_for": "Reward flat at zero means no completion ever passed: the task is "
+                     "beyond the model, so improve SFT rather than the learning rate.",
+    },
+}
+
+#: A stage that must build a dataset before it can train, and the file that proves it already
+#: has one. `scripts/stage.sh` runs the same check and prepares the data when it is missing --
+#: which is a *download*, minutes before step 1, and the reason a stage can sit in pre-flight
+#: for a long time. SFT's data is prepared on this machine; DPO's is not.
+STAGE_DATA: dict[str, tuple[str, str, str]] = {
+    # stage: (file that proves it exists, default recipe, what preparing it costs)
+    "sft": ("data/sft/train_tokens.npy", "smoltalk",
+            "downloads and tokenizes SmolTalk first"),
+    "dpo": ("data/dpo/train_chosen_tokens.npy", "ultrafeedback",
+            "downloads and tokenizes UltraFeedback (~61k pairs) first"),
 }
 
 
@@ -109,6 +153,32 @@ class Pipeline:
             return {}
         return last
 
+    def _data(self, stage: str) -> dict | None:
+        """Whether this stage's dataset is already on disk, and what making it would cost.
+
+        The panel needs this *before* the button is pressed. `scripts/stage.sh dpo` prepares
+        `data/dpo/` when it is missing, which means a download — so on this machine, where
+        SFT's data exists and DPO's does not, the same-looking Start button means "begin
+        training" on one card and "begin a download, then train" on the other.
+        """
+        spec = STAGE_DATA.get(stage)
+        if spec is None:
+            return {"needed": False}
+        path, recipe, cost = spec
+        return {"needed": True, "ready": (self.root / path).exists(),
+                "path": path, "recipe": recipe, "cost": cost}
+
+    def _preparing(self, base: str, stage: str) -> str | None:
+        """The pre-flight step `scripts/stage.sh` is on, or None if it is not running.
+
+        Read from `launch.pid` + `launch.meta`, the files the script itself writes, through
+        the same `RunStore.launcher` the dashboard uses for a base run — so a stage launched
+        from a terminal reports its pre-flight here too, and there is one implementation of
+        "what is the launcher doing" rather than two that can disagree.
+        """
+        live = self.store.launcher(self.stage_run(base, stage))
+        return (live.get("stage") or "starting") if live else None
+
     # ---- status -----------------------------------------------------------------------
     def stage_status(self, base: str, stage: str) -> dict:
         pid = self._pid(base, stage)
@@ -116,9 +186,19 @@ class Pipeline:
         prereq, how = self.prerequisite(base, stage)
         prereq_ok = prereq.exists()
         running = pid is not None
+        preparing = None if running else self._preparing(base, stage)
 
         if running:
             phase, can_start, reason = "running", False, None
+        elif preparing is not None:
+            # The launcher is alive and no trainer exists yet. Before `stage.sh` was in
+            # `LAUNCH_SCRIPTS` this fell through to "ready", so a DPO launch spent its whole
+            # dataset download looking like a button that had done nothing — with Start
+            # still enabled, inviting a second launch on top of the first.
+            phase, can_start = "preparing", False
+            data = self._data(stage)
+            reason = (f"{preparing}: {data['cost']}" if preparing == "data" and data
+                      and data.get("needed") else f"pre-flight ({preparing})")
         elif not prereq_ok:
             phase = "blocked"
             can_start = False
@@ -143,7 +223,8 @@ class Pipeline:
             "stage": stage,
             "run": self.stage_run(base, stage),
             "blurb": STAGES[stage][2],
-            "phase": phase,          # blocked | ready | running | done | failed
+            # blocked | preparing | ready | running | done | failed
+            "phase": phase,
             "can_start": can_start,
             "can_stop": running,
             # why it can't start (the disabled tooltip), or — when it failed — what killed it
@@ -154,6 +235,15 @@ class Pipeline:
             "metric": metric,
             "ckpt": str(self.stage_ckpt(base, stage).relative_to(self.root)) if done else None,
             "log": f"train_{self.stage_run(base, stage)}.log",
+            # --- what the panel needs in order to be more than three buttons ---
+            "guidance": GUIDANCE[stage],
+            "data": self._data(stage),
+            # Both alignment stages read the SFT checkpoint and neither reads the other, so
+            # they are a choice rather than a sequence. Saying so on the card is the whole
+            # point: side by side and identically gated, they look interchangeable.
+            "alternative": {"dpo": "grpo", "grpo": "dpo"}.get(stage),
+            "starts_from": str(prereq.relative_to(self.root)),
+            "writes": str(self.stage_ckpt(base, stage).relative_to(self.root)),
         }
 
     def status(self, base: str) -> dict:

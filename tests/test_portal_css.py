@@ -21,7 +21,7 @@ learn.css has carried a comment explaining this since it was fixed there. The co
 not stop it happening in three more tabs, because a comment is only read by someone already
 looking at that file. So: a test.
 
-Read with: docs/09-running-and-watching.md -- the chapter on the portal.
+Read with: docs/10-running-and-watching.md -- the chapter on the portal.
 """
 
 from __future__ import annotations
@@ -201,3 +201,27 @@ def test_a_control_stays_inside_the_column_it_was_given():
     body = _rule_body(CONTROLS.read_text(), "select")
     assert re.search(r"max-width\s*:\s*100%", body), (
         "`select` lost `max-width: 100%`; min-width:0 lets it shrink, this stops it growing")
+
+
+CHROME = CSS / "chrome.css"
+
+
+def test_the_top_bar_can_shrink_around_its_run_picker():
+    """The same floor, one level up — and `max-width: 100%` on the select cannot catch it.
+
+    `.field` and `select` already carry `min-width: 0`, so the picker itself will shrink.
+    But it sits inside `.topbar-right`, which is a flex item of `.topbar` and so has its own
+    automatic minimum of min-content — the widest option again. The parent is stretched to
+    fit the option, and the select's `max-width: 100%` then resolves against that stretched
+    parent and clamps nothing.
+
+    Real instance: archiving a run ("Start fresh…") names it
+    `small-code-sft.20260808-074957 — archived`. That option made `.topbar-right` 330px wide
+    and a 320px phone scrolled sideways by 23px. Every ancestor between a picker and the
+    page needs `min-width: 0`, not just the one holding it.
+    """
+    body = _rule_body(CHROME.read_text(), ".topbar-right")
+    assert body, "no `.topbar-right` rule in chrome.css — has it been renamed?"
+    assert re.search(r"min-width\s*:\s*0", body), (
+        "`.topbar-right` lost `min-width: 0`; an archived run name in the picker will push "
+        "the whole page sideways on a 320px screen again")
