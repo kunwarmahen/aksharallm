@@ -137,3 +137,61 @@ def test_substring_reward():
     r = SubstringReward(" dragon")
     assert r("prompt", "there was a dragon here") == 1.0
     assert r("prompt", "there was a cat here") == 0.0
+
+
+# --- splitting the group across backward passes must not change the step -------------------
+# The whole group is one optimizer step: advantages are normalised *within* it, so splitting
+# the group would change the algorithm. What is split is only when the activations exist.
+# Scoring all P*G completions at once materialises `(B, L-1, vocab)` logits — 1.15 GiB at
+# 32 x 294 x 32768 fp32 — and `log_softmax` allocates another, three times over (old,
+# reference, new). That OOMed a 24 GB card at 300M; the weights were never the problem.
+
+def test_a_chunked_update_is_gradient_identical_to_the_undivided_one():
+    """The property the whole micro-batching change rests on.
+
+    `grpo_loss` is a masked *sum* over a denominator. Hold the denominator at the group's
+    total and each chunk contributes its own share of the same fraction, so the chunk losses
+    add to the undivided loss and their gradients accumulate into the same step.
+    """
+    torch.manual_seed(0)
+    B, T = 12, 9
+    mask = torch.zeros(B, T)
+    for i in range(B):            # deliberately uneven: completions stop at different lengths
+        mask[i, : 2 + (i * 3) % (T - 1)] = 1.0
+    old, ref, adv = torch.randn(B, T), torch.randn(B, T), torch.randn(B)
+    p = torch.randn(B, T, requires_grad=True)
+
+    loss_full, m_full = grpo_loss(p, old, ref, adv, mask)
+    loss_full.backward()
+    g_full, p.grad = p.grad.clone(), None
+
+    denom = mask.sum().clamp(min=1)
+    total, kl_sum, n_sum = 0.0, 0.0, 0.0
+    for i in range(0, B, 5):      # 5 does not divide 12, so the last chunk is short
+        sl = slice(i, i + 5)
+        loss_c, m_c = grpo_loss(p[sl], old[sl], ref[sl], adv[sl], mask[sl], denom=denom)
+        loss_c.backward()
+        total += loss_c.item()
+        kl_sum += m_c["kl_sum"]
+        n_sum += m_c["n_tokens"]
+
+    assert torch.allclose(g_full, p.grad, atol=1e-6), "chunking changed the gradient"
+    assert abs(total - loss_full.item()) < 1e-6, "chunk losses do not sum to the whole"
+    assert abs(kl_sum / n_sum - m_full["kl"]) < 1e-6, "KL metric is not recovered exactly"
+
+
+def test_the_denominator_is_what_makes_it_exact():
+    """Without a shared denominator the chunks are means of means, and that is not the mean
+    when they hold different numbers of completion tokens — which they always do."""
+    torch.manual_seed(1)
+    B, T = 12, 9
+    mask = torch.zeros(B, T)
+    for i in range(B):
+        mask[i, : 2 + (i * 3) % (T - 1)] = 1.0
+    old, ref, adv, p = torch.randn(B, T), torch.randn(B, T), torch.randn(B), torch.randn(B, T)
+
+    whole = grpo_loss(p, old, ref, adv, mask)[0].item()
+    naive = sum(grpo_loss(p[i:i + 5], old[i:i + 5], ref[i:i + 5], adv[i:i + 5],
+                          mask[i:i + 5])[0].item() for i in range(0, B, 5)) / 3
+    assert abs(naive - whole) > 0.01, (
+        "the uneven-chunk trap has stopped biting, so this test no longer guards anything")

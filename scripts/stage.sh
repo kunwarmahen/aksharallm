@@ -19,6 +19,8 @@
 #   DATA=smoltalk|ultrafeedback  override the dataset recipe
 #   SEQ=1024   EPOCHS=2   LR=...   extra trainer args passed through
 #   BS=8  ACCUM=8                  SFT micro-batch and accumulation (BS*ACCUM*SEQ = tokens/step)
+#   MICRO=8                        GRPO completions scored at once (memory only)
+#   GROUP=8  STEPS=500  REWARD=code   GRPO group size, budget and reward
 #   RESUME=auto|none|<path>        continue a stopped stage (default auto); none starts over
 #   CRASH_WINDOW=30                seconds to watch a new trainer before declaring success
 set -euo pipefail
@@ -143,9 +145,13 @@ case "$STAGE" in
         ;;
     grpo)
         # Code reward uses the built-in sandbox tasks -- no dataset to prepare.
+        # MICRO is memory only: the optimizer still steps once per group, whatever it is.
+        # Scoring all P*G completions at once asks for ~1.15 GiB of logits per copy and
+        # there are three (old/reference/new), which OOMs a 24 GB card at 300M. Lower it
+        # further on a smaller card; it cannot change the result, only the peak.
         CMD=($PY -m aksharallm.train.grpo --init "$SFT_CKPT" --tokenizer "$TOK"
              --out-dir "$RUN_DIR" --reward "${REWARD:-code}" --group-size "${GROUP:-8}"
-             --lr "${LR:-1e-6}" --steps "${STEPS:-500}"
+             --lr "${LR:-1e-6}" --steps "${STEPS:-500}" --micro-batch "${MICRO:-8}"
              --stop-file "$STOP_FILE" --resume "${RESUME:-auto}")
         ;;
 esac

@@ -402,11 +402,66 @@ loop optimises anything** before the code model existed: point GRPO at the 13.8M
 model with a reward for the word "friend", and its rate of saying "friend" climbs while KL
 stays bounded. If the machinery is right, that number goes up; it does.
 
+## The memory: the logits, not the weights
+
+GRPO holds a policy, a frozen reference, and AdamW's states — about 5 GB at 300M, which is
+not the problem. The problem is what sits between the model and the answer.
+
+`token_logprobs` scores the whole group at once, and the tensor it needs is
+`(B, L-1, vocab)`. With the defaults that is **32 completions × ~294 tokens × 32,768** —
+1.15 GiB in fp32, and `log_softmax` allocates another of the same shape, for each of the
+three passes (old, reference, new). Plus the activations the backward pass keeps alive. On
+a 24 GB card at 300M this OOMs, in `log_softmax`, on the very first update:
+
+```
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 1.15 GiB.
+```
+
+`--micro-batch` (default **8**, `MICRO=` through `scripts/stage.sh`) scores the group a few
+completions at a time. **It changes memory and nothing else**, and that is worth being
+precise about, because a group is not divisible in the way a pretraining batch is:
+advantages are normalised *within* the group, so splitting the group would change the
+algorithm. What is split is only *when the activations exist*.
+
+The trick is the denominator. The loss is a masked **sum** over a token count:
+
+```
+loss = (per_tok * mask).sum() / denom
+```
+
+Compute `denom` across the entire group first and hand it to every chunk, and each chunk
+contributes its own share of the same fraction — so the chunk losses add up to the
+undivided loss, and their gradients accumulate into one identical optimizer step. A test
+asserts the gradients are equal, and a second test asserts the *naive* version is not:
+letting each chunk use its own denominator is a mean of means, and completions stop at
+different lengths, so on an uneven split it is wrong by over 20%.
+
+This is the same bargain `scripts/stage.sh` strikes for SFT with `BS × ACCUM`: hold the
+product fixed and you have changed only the memory, not the optimisation.
+
+> **Watch what else is on the card.** A local Ollama model (the Code tab, the judge, a synth
+> teacher) holds several GB for as long as it is loaded — 4.8 GB is typical — and GRPO will
+> not get it back. Lower `MICRO` rather than wondering why the same command fit yesterday.
+
+**Measured on the 300M SFT checkpoint, defaults (G=8 × 4 prompts = 32 completions,
+`MICRO=8`), on a 3090:** peak **16.6 GB of 24**, against an OOM at 23.5 GB before the split.
+**171–173 s/step.** At the default 500 steps that is **~24 hours**, and essentially all of it
+is sampling: `sample_group` generates the 32 completions **one at a time**, and the 300M
+model decodes at ~50 tok/s on its own against 236 tok/s at batch 32 ([chapter 17](17-serving.md)).
+Batching the group would be roughly a 4–5x cut on the whole run; it is the obvious next
+optimisation and is not done.
+
+The first two steps also show what a healthy start looks like: reward **0.056 → 0.216** and
+solved **0% → 19%**. Reward leaving zero at all is the thing to check in the first hundred
+steps — flat zero means no completion ever passes, and that is a signal to improve SFT
+rather than to touch the learning rate.
+
 ## Hyperparameters
 
 | knob | typical | why |
 |---|---|---|
 | `group-size` G | 8 | more = lower-variance advantage, linearly more sampling cost |
+| `micro-batch` | 8 | completions scored at once. **Memory only** — never changes the step |
 | `lr` | 1e-6 | RL is even twitchier than DPO — very low |
 | `beta` (KL) | 0.04 | the leash; raise it if the model starts to babble |
 | `temperature` | ≥ 0.7 | RL *needs* exploration; greedy sampling learns nothing |

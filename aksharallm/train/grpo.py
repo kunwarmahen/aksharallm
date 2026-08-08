@@ -73,10 +73,21 @@ def group_advantages(rewards: torch.Tensor, eps: float = 1e-4) -> torch.Tensor:
     return (rewards - mean) / (std + eps)
 
 
-def grpo_loss(new_lp, old_lp, ref_lp, adv, mask, beta: float = 0.04, clip_eps: float = 0.2):
+def grpo_loss(new_lp, old_lp, ref_lp, adv, mask, beta: float = 0.04, clip_eps: float = 0.2,
+              denom=None):
     """Per-token GRPO surrogate. All of new_lp/old_lp/ref_lp/mask are (B, T); adv is (B,).
 
     Returns (loss, metrics). `mask` is 1 on completion tokens (we never train on the prompt).
+
+    `denom` is the token count to divide by, and passing one is what makes the whole group
+    splittable across several backward passes. The loss is a masked *sum* over a global
+    denominator, so with that denominator held fixed the chunks' losses add up to exactly the
+    loss of the undivided batch — and therefore so do their gradients. Left None it is the
+    mask's own sum, i.e. this batch is the whole batch.
+
+    The metrics come back as sums as well as means for the same reason: a mean of means is
+    not the mean when the chunks hold different numbers of completion tokens, and here they
+    always do -- completions stop at different lengths.
     """
     adv = adv[:, None]  # broadcast one advantage across a completion's tokens
     ratio = torch.exp(new_lp - old_lp)  # = 1 on the first inner step; carries the gradient
@@ -88,17 +99,38 @@ def grpo_loss(new_lp, old_lp, ref_lp, adv, mask, beta: float = 0.04, clip_eps: f
     kl = torch.exp(diff) - diff - 1.0
 
     per_tok = -(surr - beta * kl)
-    denom = mask.sum().clamp(min=1)
-    loss = (per_tok * mask).sum() / denom
+    n_tokens = mask.sum()
+    scale = n_tokens.clamp(min=1) if denom is None else denom
+    loss = (per_tok * mask).sum() / scale
+    kl_sum = (kl * mask).sum().item()
+    ratio_sum = (ratio * mask).sum().item()
+    n = n_tokens.item()
     metrics = {
-        "kl": (kl * mask).sum().item() / denom.item(),
-        "ratio": (ratio * mask).sum().item() / denom.item(),
+        "kl": kl_sum / max(n, 1.0),
+        "ratio": ratio_sum / max(n, 1.0),
+        "kl_sum": kl_sum,
+        "ratio_sum": ratio_sum,
+        "n_tokens": n,
     }
     return loss, metrics
 
 
-def token_logprobs(model, seq, ctx) -> torch.Tensor:
-    """(B, L) token ids -> (B, L-1) log p(token_{t+1} | tokens_{<=t}) under `model`."""
+def token_logprobs(model, seq, ctx, micro_batch: int | None = None) -> torch.Tensor:
+    """(B, L) token ids -> (B, L-1) log p(token_{t+1} | tokens_{<=t}) under `model`.
+
+    `micro_batch` splits the rows and concatenates the results, for the two no-grad passes
+    where the whole group is scored at once. It is not an approximation: each row's
+    log-probabilities depend only on that row.
+
+    The reason it is needed is the size of what sits between the model and the answer. The
+    logits are `(B, L-1, vocab)`, `.float()` doubles them, and `log_softmax` allocates
+    another of the same shape -- so scoring 32 completions of ~294 tokens against a 32,768
+    vocabulary asks for **1.15 GiB per copy**, three times over (old, reference, new). That
+    is the OOM this function used to hit, and the weights were never the problem.
+    """
+    if micro_batch and seq.shape[0] > micro_batch:
+        return torch.cat([token_logprobs(model, seq[i:i + micro_batch], ctx)
+                          for i in range(0, seq.shape[0], micro_batch)], dim=0)
     x, y = seq[:, :-1], seq[:, 1:]
     with ctx:
         logits, _ = model(x, targets=y)
@@ -196,6 +228,11 @@ def main():
     ap.add_argument("--chat", action="store_true", help="prompt code tasks in chat form")
     ap.add_argument("--group-size", type=int, default=8, help="G: completions per prompt")
     ap.add_argument("--prompts-per-step", type=int, default=4)
+    # Memory only. The optimizer still steps once per group of P*G completions, whatever
+    # this is set to -- see the update loop. 8 keeps the 300M model inside a 24 GB card;
+    # scoring all 32 at once asks for 1.15 GiB of logits per copy and there are three.
+    ap.add_argument("--micro-batch", type=int, default=8, metavar="N",
+                    help="completions scored at once (memory only; does not change the step)")
     ap.add_argument("--steps", type=int, default=500)
     ap.add_argument("--max-new-tokens", type=int, default=256)
     ap.add_argument("--temperature", type=float, default=1.0, help="exploration; keep >=0.7")
@@ -368,14 +405,35 @@ def main():
 
         # old (sampling-time) and reference logprobs -- no grad
         with torch.no_grad():
-            old_lp = token_logprobs(policy, seq, ctx)
-            ref_lp = token_logprobs(ref, seq, ctx)
-        # 4-5. one on-policy update
-        new_lp = token_logprobs(policy, seq, ctx)
-        loss, m = grpo_loss(new_lp, old_lp, ref_lp, adv, mask, args.beta, args.clip_eps)
+            old_lp = token_logprobs(policy, seq, ctx, args.micro_batch)
+            ref_lp = token_logprobs(ref, seq, ctx, args.micro_batch)
 
+        # 4-5. one on-policy update, taken `micro_batch` completions at a time.
+        #
+        # The whole group is one optimizer step -- the advantages were normalised within it
+        # and splitting that would change the algorithm. What is split is only *when* the
+        # activations exist: the denominator is computed across the entire group first, so
+        # each chunk contributes its own masked sum over that fixed total, the chunk losses
+        # add up to the undivided loss, and their gradients accumulate into the same step.
+        # Identical optimisation, a quarter of the peak memory. This is the same bargain
+        # `scripts/stage.sh` strikes for SFT with BS x ACCUM.
+        denom = mask.sum().clamp(min=1)
+        micro = args.micro_batch or seq.shape[0]
         optimizer.zero_grad(set_to_none=True)
-        loss.backward()
+        loss_total, kl_sum, ratio_sum, tok_sum = 0.0, 0.0, 0.0, 0.0
+        for i in range(0, seq.shape[0], micro):
+            sl = slice(i, i + micro)
+            new_lp_c = token_logprobs(policy, seq[sl], ctx)
+            loss_c, m_c = grpo_loss(new_lp_c, old_lp[sl], ref_lp[sl], adv[sl], mask[sl],
+                                    args.beta, args.clip_eps, denom=denom)
+            loss_c.backward()          # frees this chunk's graph before the next is built
+            loss_total += loss_c.item()
+            kl_sum += m_c["kl_sum"]
+            ratio_sum += m_c["ratio_sum"]
+            tok_sum += m_c["n_tokens"]
+        loss = torch.tensor(loss_total)
+        m = {"kl": kl_sum / max(tok_sum, 1.0), "ratio": ratio_sum / max(tok_sum, 1.0)}
+
         gnorm = torch.nn.utils.clip_grad_norm_(policy.parameters(), args.grad_clip)
         optimizer.step()
 
