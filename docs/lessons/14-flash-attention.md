@@ -1,7 +1,7 @@
 ---
 id: flash-attention
 title: Writing the kernel, and the decision that makes it safe to ship
-doc: docs/03-model.md
+doc: docs/04-model.md
 files:
   - aksharallm/model/flash.py
   - aksharallm/model/transformer.py

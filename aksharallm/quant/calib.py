@@ -33,7 +33,7 @@ A warning worth stating plainly: calibrate on data that resembles what the model
 damage shows up exactly where you care. Our blended run has both in `val.bin`, so the
 default draws from there.
 
-Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+Read with: docs/11-quantization.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

@@ -16,7 +16,7 @@ flowchart LR
 Everything expensive is already trained. The only new parameters are the tower, and the only
 *required* new parameters are the projector — under a million of them.
 
-Read with: docs/21-vision.md -- the chapter this implements; it ends with the order to read
+Read with: docs/22-vision.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

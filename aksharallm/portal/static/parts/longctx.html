@@ -18,7 +18,7 @@
       between words becomes noise.</p>
     <p>The fix is arithmetic, not training: change how positions map to angles.
       <strong>No weights change</strong> — which is why you can try all of it on a finished
-      checkpoint in an afternoon. <a href="#docs" data-doc="docs/18-long-context.md">The full
+      checkpoint in an afternoon. <a href="#docs" data-doc="docs/19-long-context.md">The full
       chapter is in doc 18.</a></p>
   </div>
 </section>
@@ -122,7 +122,7 @@
     <p><strong>FlashAttention</strong> never builds the grid. It walks the text in blocks and
       keeps a running total, rescaling as it goes, so the answer is <em>exactly</em> the same
       and the memory stops growing. We wrote our own, in Triton, forward and backward —
-      <a href="#docs" data-doc="docs/03-model.md">doc 3 has the derivation</a>.</p>
+      <a href="#docs" data-doc="docs/04-model.md">doc 3 has the derivation</a>.</p>
   </div>
   <dl class="lc-facts">
     <div><dt>at 8,192 tokens, ours</dt><dd>422 MB</dd></div>

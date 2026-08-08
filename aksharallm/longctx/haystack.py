@@ -37,13 +37,13 @@ failure means "could not retrieve", not "was confused by the noise we built".
 What to expect, and why a bad grid is still a result
 -----------------------------------------------------
 A base model of a few hundred million parameters, never fine-tuned on retrieval and never
-trained past 1k, is **expected to score near chance** — and it does; `docs/18` has our
+trained past 1k, is **expected to score near chance** — and it does; `docs/19` has our
 numbers. That is not a broken test. It separates the two claims that get conflated
 constantly: *the positions are legible* (which scaling fixes, and `curve.py` measures) and
 *the model can use them* (which scaling does not fix, and this measures). Publishing the
 second number honestly is the point of building it.
 
-Read with: docs/18-long-context.md -- the chapter this implements; it ends with the order to
+Read with: docs/19-long-context.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

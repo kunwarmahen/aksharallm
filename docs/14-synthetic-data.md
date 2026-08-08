@@ -1,4 +1,4 @@
-# 13. Synthetic data: making the training set instead of downloading it
+# 14. Synthetic data: making the training set instead of downloading it
 
 Every dataset in this project so far was written by people and downloaded: FineWeb-Edu for
 prose, Python from The Stack for code, SmolTalk for chat. That is the right default, and it
@@ -26,7 +26,7 @@ L = KL( student(x) || teacher(x) )
 ```
 
 — and a KL between two distributions requires both to be over **the same vocabulary**. Our
-tokenizer is a 32k byte-level BPE trained on our blend (docs/02). gemma4:31b has its own,
+tokenizer is a 32k byte-level BPE trained on our blend (docs/03). gemma4:31b has its own,
 qwen3.5:27b another, starcoder2:3b another. Token 5,142 means a different piece of text in
 each. Aligning probability mass across two tokenizations is a research problem, not a
 weekend's build.
@@ -57,7 +57,7 @@ two of *our own* models, and that is `train/distil.py`'s job, not this chapter's
 Duplicate-heavy, low-diversity or subtly wrong data trains *beautifully*. The loss curve is
 smooth, the validation loss falls, and the model that comes out is fluent and useless.
 Nothing in the training run can see it happen, which is precisely why the eval harness
-(docs/12) was built before this and why the `judge` suite is the one to run afterwards.
+(docs/13) was built before this and why the `judge` suite is the one to run afterwards.
 
 Everything in `aksharallm/synth/` follows from taking that sentence seriously:
 
@@ -110,7 +110,7 @@ variety that fails.
 
 This is the reason the Python recipe was built first: **correctness is checked, not
 assumed.** The teacher writes a problem, a solution and a set of asserts; the sandbox from
-docs/06 — subprocess, `-I` isolated, `RLIMIT_CPU`, throwaway working directory — runs them.
+docs/07 — subprocess, `-I` isolated, `RLIMIT_CPU`, throwaway working directory — runs them.
 If they fail, the sample is dropped.
 
 That is worth a lot and it is weaker than it sounds. Ask a model for a function and some
@@ -328,7 +328,7 @@ python -m aksharallm.synth export py-v1
 …or the portal's **Synth** tab, which shells out to exactly those commands.
 
 A generation run is a long job, so it obeys the **same STOP contract as the trainers**
-(docs/09): an empty file means stop now, a number means stop at that many kept samples, and
+(docs/10): an empty file means stop now, a number means stop at that many kept samples, and
 `@<epoch>` means stop at a wall-clock time — with *kept samples* standing in for training
 steps. Stopping is how these runs are meant to end: every sample already written is filtered,
 verified, deduplicated and recorded, so a stopped run leaves a complete smaller dataset and
@@ -354,7 +354,7 @@ packing are behaving. `pref-v1` gave 12 pairs, chosen 58 tokens against rejected
 
 `prepare_sft` and `prepare_dpo` gained one recipe each — `jsonl` — and that is the entire
 integration. Packing, the assistant-only loss mask, the DPO triples: all of it is the code
-from docs/05, untouched. The only thing that differs about generated data is where the rows
+from docs/06, untouched. The only thing that differs about generated data is where the rows
 came from, and that is recorded in `meta.json` rather than in the trainer.
 
 ---
@@ -371,7 +371,7 @@ Perplexity and multiple choice cannot see the thing synthetic data damages first
 diversity of expression, instruction-following, not looping. The judge can, and comparing
 the judge score before and after is the only honest answer to "did this data help?".
 
-The other measurement worth doing, once Phase 2 is finished, is the one docs/10 left open:
+The other measurement worth doing, once Phase 2 is finished, is the one docs/11 left open:
 **at a matched file size, is a distilled small dense model better than a 4-bit large one?**
 A ~100M student trained on this pipeline's output against `gptq-nf4-g64` of the 300M, both
 around 205 MB, on the same harness. Either answer is interesting.
@@ -386,7 +386,7 @@ diagram at the top of this chapter.
 | # | file | what to look for |
 |---|---|---|
 | 1 | [`synth/prompts.py`](../aksharallm/synth/prompts.py) | `Seed`, the grids themselves, `seeds()` and `grid_size()` — diversity as a walk over 480 (or 1,296) cells rather than a temperature. `TEMPLATE_VERSION` is recorded in every dataset that used it |
-| 2 | [`synth/teacher.py`](../aksharallm/synth/teacher.py) | `Teacher.ask` and `Reply` — the Ollama client, shared with the Code tab ([doc 9](09-running-and-watching.md)) and the judge ([doc 12](12-eval.md)); `SynthConfig` for per-recipe models; `contention()` for the VRAM warning |
+| 2 | [`synth/teacher.py`](../aksharallm/synth/teacher.py) | `Teacher.ask` and `Reply` — the Ollama client, shared with the Code tab ([doc 10](10-running-and-watching.md)) and the judge ([doc 13](13-eval.md)); `SynthConfig` for per-recipe models; `contention()` for the VRAM warning |
 | 3 | [`synth/recipes.py`](../aksharallm/synth/recipes.py) | `Recipe`, then `PythonRecipe` — prompt, `sections()` parser, dedup key, export. Then `ChatRecipe` and `PreferenceRecipe`, which is the one that asks for a deliberately flawed answer |
 | 4 | [`synth/verify.py`](../aksharallm/synth/verify.py) | `verify` — run the tests, then `stub()` the solution through the **AST** and run them again. `Verdict` carries which of the two failed |
 | 5 | [`synth/filters.py`](../aksharallm/synth/filters.py) | `check_text` / `check_code`, then `Deduper` — five-word shingles, Jaccard, and the inverted index that keeps it linear. `REJECT_REASONS` is the tally's vocabulary |

@@ -1,7 +1,7 @@
 ---
 id: codec
 title: Turning sound into integers, and the lie that lets it train
-doc: docs/20-audio.md
+doc: docs/21-audio.md
 files:
   - aksharallm/audio/vq.py
   - aksharallm/audio/codec.py

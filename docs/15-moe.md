@@ -1,4 +1,4 @@
-# 14. Mixture of experts: more parameters than you compute with
+# 15. Mixture of experts: more parameters than you compute with
 
 Every model in this project so far spends the same arithmetic on every token. Doubling its
 knowledge means doubling what each token costs. A **mixture of experts** breaks that link:
@@ -117,7 +117,7 @@ is tokens, not memory: Chinchilla-optimal for the resulting 1.7B model is ~34B t
 blend is 10B, and Phase 2 has spent half of them. A fresh MoE pretrain would produce a badly
 undertrained model *and* burn the run in progress.
 
-**Upcycling is identity-at-init, exactly like LoRA's `B = 0`** (docs/11). If every expert is
+**Upcycling is identity-at-init, exactly like LoRA's `B = 0`** (docs/12). If every expert is
 a copy of the trained FFN, the router's gate is zeros, and the top-k weights are renormalised
 to sum to 1, then the upcycled model computes *exactly* what the dense model computed on
 step 0:
@@ -171,8 +171,8 @@ out would be picking the flattering half.
 
 What it cost: **MFU 52% against the dense run's ~57%**, and 35.0M parameters stored to
 compute with 7.1M of them. That is the trade in one line — *memory for quality at fixed
-compute*, which is the opposite of the trade quantization makes (docs/10) and the same shape
-as the one LoRA makes (docs/11).
+compute*, which is the opposite of the trade quantization makes (docs/11) and the same shape
+as the one LoRA makes (docs/12).
 
 The router stayed balanced the whole run — `experts 0.97 bal (12-13%)`, against a perfect
 12.5% — which is what the auxiliary loss is for and is not something to take for granted.
@@ -249,7 +249,7 @@ Two things to know when reading the numbers:
 
 ## The code, in reading order
 
-One new file, and five places that had to notice it. [doc 3](03-model.md) first — this
+One new file, and five places that had to notice it. [doc 4](04-model.md) first — this
 replaces exactly one component of it.
 
 | # | file | what to look for |

@@ -9,7 +9,7 @@ almost nothing: "perplexity 4.43" is meaningless without the bf16 number beside 
 "int4 works fine" is a claim about a particular group size and a particular method. The
 table puts all of them next to each other on the same evaluation batches.
 
-Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+Read with: docs/11-quantization.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

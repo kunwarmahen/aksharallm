@@ -13,7 +13,7 @@ window at least as long as its longest FFT (2,048 samples = 128 ms) to see the l
 frequencies at all, and memory grows linearly with it. One second is comfortable on a 3090
 at batch 16.
 
-Read with: docs/20-audio.md -- the chapter this implements; it ends with the order to read
+Read with: docs/21-audio.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

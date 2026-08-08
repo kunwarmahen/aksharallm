@@ -1,4 +1,4 @@
-# 15. The learning path: the repo as a course
+# 16. The learning path: the repo as a course
 
 Everything needed to teach this project already existed. `docs/00–14` explain the why, the
 skill playbooks explain the how, seven hundred tests say what is true, the Playground runs a

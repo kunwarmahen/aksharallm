@@ -27,8 +27,8 @@ and a machine without it degrades to an honest "no NVIDIA GPU detected" rather t
 exception. (NVML bindings would be cheaper per sample, but they are a package to install,
 and one subprocess every five seconds is not a real cost.)
 
-Read with: docs/09-running-and-watching.md -- the chapter this implements; it ends with the
-order to read these files in. See also docs/07-scaling.md.
+Read with: docs/10-running-and-watching.md -- the chapter this implements; it ends with the
+order to read these files in. See also docs/08-scaling.md.
 """
 
 from __future__ import annotations

@@ -31,7 +31,7 @@ Two rules the scheduler follows, both of them about *not* disturbing work in fli
   padding. Separating the two phases would be simpler and would leave the card idle during
   every prefill.
 
-Read with: docs/16-serving.md -- the chapter this implements; it ends with the order to read
+Read with: docs/17-serving.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

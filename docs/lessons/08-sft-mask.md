@@ -1,7 +1,7 @@
 ---
 id: sft-mask
 title: Teaching it to answer, not to continue
-doc: docs/05-posttraining.md
+doc: docs/06-posttraining.md
 files:
   - aksharallm/tokenizer/tokenizer.py
   - aksharallm/data/prepare_sft.py

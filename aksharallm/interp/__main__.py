@@ -12,7 +12,7 @@ The portal's Interp tab drives the same functions; this exists so the answers ar
 over ssh, and because a grid of numbers is often easier to read in a terminal than in a
 browser.
 
-Read with: docs/17-interpretability.md -- the chapter this implements; it ends with the order
+Read with: docs/18-interpretability.md -- the chapter this implements; it ends with the order
 to read these files in.
 """
 

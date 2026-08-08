@@ -27,7 +27,7 @@ stays resident and an idle timer unloads it (`idle_unload_s`), returning the mem
 their own KV cache and halve each other's speed for no reason. A lock serialises them, and
 a caller who cannot get it is *told* rather than left hanging.
 
-Read with: docs/06-inference.md -- the chapter this implements; it ends with the order to read
+Read with: docs/07-inference.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 
@@ -622,7 +622,7 @@ class Engine:
         # what a loaded model can actually be asked to do.
         if loaded.model.cfg.is_diffusion:
             raise InferError(
-                f"{loaded.info.rel} is a masked diffusion model (docs/19): it generates by "
+                f"{loaded.info.rel} is a masked diffusion model (docs/20): it generates by "
                 "unmasking a whole sequence, not by extending a prefix. Use the portal's "
                 "Diffusion tab, or `python -m aksharallm.diffusion`.")
         if mode in ("complete", "code"):

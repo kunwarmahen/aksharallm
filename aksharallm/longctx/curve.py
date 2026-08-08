@@ -27,7 +27,7 @@ The measurement is deliberately cheap and needs **no download and no fine-tune**
 windows come from the run's own `val.bin`, so it works on any checkpoint the moment it
 exists, and it is the first thing to run before believing any long-context claim.
 
-Read with: docs/18-long-context.md -- the chapter this implements; it ends with the order to
+Read with: docs/19-long-context.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

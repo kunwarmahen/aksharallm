@@ -1,7 +1,7 @@
 ---
 id: attention
 title: Attention, and the mask that makes it prediction
-doc: docs/03-model.md
+doc: docs/04-model.md
 files:
   - aksharallm/model/transformer.py
 verify: tests/test_model.py::test_causality
@@ -26,7 +26,7 @@ mechanism. "The cat sat on the ___" works because the query at `___` matches the
 `cat`, so the value at `cat` dominates the sum.
 
 Everything else in the block — RMSNorm, RoPE, SwiGLU, the residual stream — is support for
-this one operation. Read `docs/03-model.md` for what each of them does and why.
+this one operation. Read `docs/04-model.md` for what each of them does and why.
 
 ## The mask is not a detail
 

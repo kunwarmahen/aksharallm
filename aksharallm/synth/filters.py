@@ -23,7 +23,7 @@ pass rate is 30% because everything is a near-duplicate needs a bigger seed grid
 alone cannot tell those apart, so every reject is counted by reason and the CLI prints the
 breakdown rather than a single percentage.
 
-Read with: docs/13-synthetic-data.md -- the chapter this implements; it ends with the order to
+Read with: docs/14-synthetic-data.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

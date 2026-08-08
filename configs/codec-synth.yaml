@@ -6,7 +6,7 @@
 #     scripts/audio.sh codec-synth
 #
 # It is deliberately the same shape as codec-lj.yaml with smaller numbers, so diffing the
-# two shows exactly what scaling to real speech costs. See docs/20-audio.md.
+# two shows exactly what scaling to real speech costs. See docs/21-audio.md.
 name: codec-synth
 
 codec:

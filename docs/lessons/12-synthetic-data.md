@@ -1,7 +1,7 @@
 ---
 id: synthetic-data
 title: Making the training set, and checking it twice
-doc: docs/13-synthetic-data.md
+doc: docs/14-synthetic-data.md
 files:
   - aksharallm/synth/verify.py
   - aksharallm/synth/filters.py

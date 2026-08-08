@@ -1,4 +1,4 @@
-# 11. LoRA and QLoRA: fine-tuning without training the model
+# 12. LoRA and QLoRA: fine-tuning without training the model
 
 Chapter 10 made a finished model smaller. This chapter is about *changing* one — teaching
 it to answer questions, or to write Python — without paying for a second copy of it.
@@ -486,7 +486,7 @@ inference. Break `B = 0` on purpose in [lesson 10](lessons/10-lora.md).
 ## Where this sits
 
 ```
-GRPO ✅ → quantization ✅ → LoRA/QLoRA ✅ → eval harness ✅ (docs/12) → synthetic data +
+GRPO ✅ → quantization ✅ → LoRA/QLoRA ✅ → eval harness ✅ (docs/13) → synthetic data +
 distillation → MoE → diffusion → export/serving
 ```
 

@@ -15,7 +15,7 @@ The one thing that *is* slow is activation patching — layers × positions forw
 it is bounded here rather than trusted: a long prompt against a 24-layer model would otherwise
 hold the lock for a minute and look like a hung page.
 
-Read with: docs/17-interpretability.md -- the chapter this implements; it ends with the order
+Read with: docs/18-interpretability.md -- the chapter this implements; it ends with the order
 to read these files in.
 """
 

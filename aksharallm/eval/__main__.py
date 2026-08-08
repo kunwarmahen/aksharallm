@@ -14,7 +14,7 @@ short. A checkpoint reference is a run name (`small-code` → its best checkpoin
 Everything writes to `logs/eval/<timestamp>-<run>-<label>.json`, which the portal's Eval tab
 reads. A run started here appears there, and the other way round.
 
-Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/13-eval.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 
@@ -325,7 +325,7 @@ def cmd_domains(args) -> int:
               f"{(r.get('weight') or 0):>7.2f} {loss:>8} {ppl:>9}  {mark}")
     if any(r.get("verified") is False for r in rows):
         print("\nMISMATCH: a span's content does not match its name, so these boundaries are"
-              "\nderived wrongly and the split above is meaningless. See docs/12.")
+              "\nderived wrongly and the split above is meaningless. See docs/13.")
     b = dom.blended(rows)
     if b is not None:
         print(f"\nweight-blended: {b:.4f}  (compare with the run's own val loss; a big "

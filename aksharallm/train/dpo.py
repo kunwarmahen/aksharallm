@@ -29,7 +29,7 @@ model you are already holding into the model you started from. One boolean inste
 second model. `disable_adapters` in `lora/layer.py` is the whole mechanism, and it is the
 neatest thing LoRA does for this file.
 
-Read with: docs/05-posttraining.md -- the chapter this implements; it ends with the order to
+Read with: docs/06-posttraining.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

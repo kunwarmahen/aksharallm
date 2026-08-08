@@ -19,6 +19,6 @@ asked for a file, and the error surfaces somewhere unrelated. Import from the su
     from aksharallm.longctx.curve import position_curve, cliff
     from aksharallm.longctx.haystack import run
 
-Read with: docs/18-long-context.md -- the chapter this implements; it ends with the order to
+Read with: docs/19-long-context.md -- the chapter this implements; it ends with the order to
 read these files in.
 """

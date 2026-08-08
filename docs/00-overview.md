@@ -59,11 +59,11 @@ flowchart LR
     H -->|output projection| L["probability over 32,768 tokens"]
 ```
 
-- A **tokenizer** maps text ⇄ integers. See [doc 2](02-tokenizer.md).
+- A **tokenizer** maps text ⇄ integers. See [doc 3](03-tokenizer.md).
 - An **embedding table** maps each integer to a learned vector. Similar words end up with
   similar vectors, because that's what makes prediction easier.
 - The **transformer layers** repeatedly let each position look at earlier positions and
-  update itself. This is where the actual thinking happens. See [doc 3](03-model.md).
+  update itself. This is where the actual thinking happens. See [doc 4](04-model.md).
 - The **output projection** turns the final vector back into a score per token.
 
 Every one of those learned numbers is a **parameter**. "A 300M model" means 300 million
@@ -119,38 +119,38 @@ flowchart TD
 Garbage in, garbage out — more literally than anywhere else in software. The single
 biggest quality lever available to a hobbyist is *what text you train on*, not the
 architecture. FineWeb-Edu (educational web pages, filtered by a classifier) beats raw
-CommonCrawl by a wide margin at the same token count. → [doc 1](01-data.md)
+CommonCrawl by a wide margin at the same token count. → [doc 2](02-data.md)
 
 Data can also be **written by a bigger model running on the same machine**, which is how you
 get a dataset nobody published — Python exercises whose tests actually pass, for instance.
 The catch is that generated data is the easiest way to make a model *worse* while its
 training loss improves, so most of that work is checking rather than
-generating. → [doc 13](13-synthetic-data.md)
+generating. → [doc 14](14-synthetic-data.md)
 
 ### 2. Pretraining
 99% of the compute. The model reads billions of tokens and learns language and world
 knowledge. The result is a **base model**: it can *continue* text but has no idea it's
 supposed to be helpful. Ask it "What is the capital of France?" and it may well reply
 with "What is the capital of Germany? What is the capital of Spain?" — because on the
-internet, questions are usually followed by more questions. → [doc 4](04-pretraining.md)
+internet, questions are usually followed by more questions. → [doc 5](05-pretraining.md)
 
 ### 3. Supervised fine-tuning (SFT)
 Show it maybe 100,000 examples of `(instruction, good response)` and train on the
 *response* tokens only. This is a small nudge — hours, not days — but it completely
-changes the model's behaviour. It now answers instead of continuing. → [doc 5](05-posttraining.md)
+changes the model's behaviour. It now answers instead of continuing. → [doc 6](06-posttraining.md)
 
 ### 4. Preference tuning (DPO)
 SFT can only say "imitate this". It can't express "answer A is better than answer B" when
 both are valid. Preference data can. You show the model pairs — one response humans
 preferred, one they didn't — and it learns the *direction* of better. This is where tone,
-appropriate length, and refusal behaviour get shaped. → [doc 5](05-posttraining.md)
+appropriate length, and refusal behaviour get shaped. → [doc 6](06-posttraining.md)
 
 ### 5. Reinforcement learning on a verifiable reward (GRPO)
 For tasks where an answer can be *checked* — does the code pass its tests? is the math
 right? — you don't need human-labelled data at all. Sample several answers, reward the ones
 that pass, and push the model toward them. This is how small models get genuinely good at
 code and math, and it reuses the same sandbox we built to *evaluate* the model as the
-*training signal*. → [doc 5, Part 3](05-posttraining.md)
+*training signal*. → [doc 6, Part 3](06-posttraining.md)
 
 ---
 
@@ -173,12 +173,12 @@ It costs roughly 3–16x the compute of next-token prediction for equal quality,
 never the main model here — it runs at Phase-1 scale as a controlled comparison against the
 13.8M baseline. What it buys is two things autoregression structurally cannot do:
 **infilling** (give it a prefix *and* a suffix and it writes the middle) and **choosing how
-many forward passes to spend** on a given length of text. → [doc 19](19-diffusion.md)
+many forward passes to spend** on a given length of text. → [doc 20](20-diffusion.md)
 
 ## Learning it by breaking it
 
 Reading the chapters that follow is one way through this project. There is another, and it
-is better: [doc 15](15-learning-path.md) turns the repo into twenty-one lessons that each end
+is better: [doc 16](16-learning-path.md) turns the repo into twenty-one lessons that each end
 in *breaking real code* and watching a real test go red. Most of the exercises are bugs that
 actually happened here — a causal mask applied during single-token decoding masks away the
 entire KV cache, and the model trains perfectly while generating garbage.
@@ -235,11 +235,17 @@ Then `configs/tiny.yaml` is one run described in 40 lines, and `tests/` is what 
 claims is true — `tests/test_model.py` is the best short summary of the architecture there
 is.
 
-Reading order for the *chapters* is just their numbers, with two branches: 10–11
+Reading order for the *chapters* is just their numbers, with two branches: 11–12
 (quantization, LoRA) are about making a finished model cheaper and can be read any time
-after 3, and 12 (evaluation) is worth reading before 13–14 because it is the instrument
+after 4, and 13 (evaluation) is worth reading before 14–15 because it is the instrument
 those two experiments are measured with.
+
+**Read [chapter 1](01-journeys.md) next, whatever you plan to do.** This chapter is what a
+language model *is*; that one is the ordered route from an empty folder to a model you can
+talk to, with every side route beside it — each with its real command, where it lives in the
+portal, and how you know it worked. Everything after chapter 1 explains one piece in depth,
+and the map is what tells you which piece you currently need.
 
 ---
 
-Next: [1. Data →](01-data.md)
+Next: [1. The whole journey, end to end →](01-journeys.md)

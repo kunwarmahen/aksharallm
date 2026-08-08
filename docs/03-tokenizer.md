@@ -1,4 +1,4 @@
-# 2. The tokenizer
+# 3. The tokenizer
 
 ## Why not just use letters?
 
@@ -170,7 +170,7 @@ ids, mask = tok.render_chat([
 
 If you built the string first and tried to find the boundary afterwards, you'd be
 searching for substrings in text that may contain the delimiter itself. Token-level
-construction makes it exact. More in [doc 5](05-posttraining.md).
+construction makes it exact. More in [doc 6](06-posttraining.md).
 
 ---
 
@@ -201,7 +201,7 @@ One file, and it is 142 lines — read it top to bottom in this order:
 | 1 | [`aksharallm/tokenizer/tokenizer.py`](../aksharallm/tokenizer/tokenizer.py) | `SPLIT_PATTERN` and `SPECIAL_TOKENS` at the top — the regex above and the four fixed ids |
 | 2 | same file | `train_bpe` — merges learned from a corpus, and the byte-level alphabet that makes `<UNK>` impossible |
 | 3 | same file | `Tokenizer.encode` / `decode` / `encode_batch` — the replay of those merges, and the batch path the data prep uses across processes |
-| 4 | same file | `render_chat` — ChatML built **token by token**, returning `(ids, mask)`. The mask is what [doc 5](05-posttraining.md) trains on; nothing downstream searches for delimiters in a string |
+| 4 | same file | `render_chat` — ChatML built **token by token**, returning `(ids, mask)`. The mask is what [doc 6](06-posttraining.md) trains on; nothing downstream searches for delimiters in a string |
 | 5 | [`aksharallm/data/prepare.py`](../aksharallm/data/prepare.py) | `main` — where the tokenizer is fitted before anything is tokenized, and `_init_worker`, which loads one per process |
 
 What pins it: `tests/test_pipeline.py::test_roundtrip_including_unicode`,
@@ -210,4 +210,4 @@ Break the round trip on purpose in [lesson 2](lessons/02-tokenizer.md).
 
 ---
 
-Next: [3. The model →](03-model.md)
+Next: [4. The model →](04-model.md)

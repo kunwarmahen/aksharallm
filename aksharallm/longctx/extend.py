@@ -19,7 +19,7 @@ been raised to 4,096 there is nothing left in the config to say the weights were
 extend time is what makes an extended checkpoint self-describing, so it reloads correctly
 in the Playground, the eval harness and the server without anyone passing a flag.
 
-Read with: docs/18-long-context.md -- the chapter this implements; it ends with the order to
+Read with: docs/19-long-context.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

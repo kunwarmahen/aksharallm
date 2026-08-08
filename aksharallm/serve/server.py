@@ -21,7 +21,7 @@ What makes this a *server* rather than a loop with sockets attached:
 * **Backpressure is honest.** When the KV pool is full, new requests wait in the queue and
   `/health` says how many; the server never evicts a sequence someone is already reading.
 
-Read with: docs/16-serving.md -- the chapter this implements; it ends with the order to read
+Read with: docs/17-serving.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

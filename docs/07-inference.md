@@ -1,4 +1,4 @@
-# 6. Inference
+# 7. Inference
 
 ## The generation loop
 
@@ -96,9 +96,9 @@ A KV cache works because **position *n*'s keys are settled the moment token *n* 
 generated**. Nothing later can change them, so they are computed once and reused forever.
 That one sentence is what makes generation `O(T)` cached passes instead of `O(T²)`, and
 everything in this chapter — the cache, `IncrementalDecoder`, speculative decoding's
-`rewind`, the paged pool in [doc 16](16-serving.md) — is built on it.
+`rewind`, the paged pool in [doc 17](17-serving.md) — is built on it.
 
-It is an assumption, not a law. The masked diffusion model in [doc 19](19-diffusion.md) may
+It is an assumption, not a law. The masked diffusion model in [doc 20](20-diffusion.md) may
 rewrite any position on any step, so a cached key would belong to a token that no longer
 exists. None of this file transfers to it, and `Transformer.forward` raises rather than
 letting it try.
@@ -256,7 +256,7 @@ for exactly that case, and
 `tests/test_model.py::test_several_tokens_against_a_warm_cache_match_one_at_a_time` pins it
 by feeding a block and the same tokens one at a time and demanding the same logits.
 
-This is the failure mode [doc 8](08-troubleshooting.md) keeps warning about: it trains fine,
+This is the failure mode [doc 9](09-troubleshooting.md) keeps warning about: it trains fine,
 it generates fluent text, and it is wrong.
 
 ## Using the CLI
@@ -464,7 +464,7 @@ Two different jobs, and it is worth keeping them straight.
 
 **The benchmark harness** produces a *number* — comparable to other people's models, on a
 fixed set of questions, kept forever so this checkpoint can be compared with the same
-checkpoint's earlier self. That is [docs/12](12-eval.md), and the whole of it:
+checkpoint's earlier self. That is [docs/13](13-eval.md), and the whole of it:
 
 ```bash
 python -m aksharallm.eval suites          # what can be measured, and what to expect
@@ -498,11 +498,11 @@ with the step that produced it.
 | can it finish a sentence? | `--probes`, or the Playground tab |
 | has this prompt improved since last week? | `--compare <probe>` |
 | can it write working Python? | `--tasks` (executes the code) |
-| **does it know anything? is it any good?** | `python -m aksharallm.eval` → [docs/12](12-eval.md) |
+| **does it know anything? is it any good?** | `python -m aksharallm.eval` → [docs/13](13-eval.md) |
 
 The one trap worth naming here, because it catches everybody: **a 300M model scores 25% on
 MMLU, and 25% is chance.** Four-way multiple choice pays that for guessing. Reading it as a
-failure is a misunderstanding, not a bug — see docs/12 for what each suite should score at
+failure is a misunderstanding, not a bug — see docs/13 for what each suite should score at
 this size, and why a 0% on GSM8K is still worth measuring.
 
 ---
@@ -514,7 +514,7 @@ it usable on a machine that is also training.
 
 | # | file | what to look for |
 |---|---|---|
-| 1 | [`aksharallm/model/transformer.py`](../aksharallm/model/transformer.py) | `KVCache.update` and `KVCache.rewind`, then the three masking cases in `Attention.forward` (no cache, one token, a block against a warm cache) and `init_caches`. Read [doc 3](03-model.md) first if you have not |
+| 1 | [`aksharallm/model/transformer.py`](../aksharallm/model/transformer.py) | `KVCache.update` and `KVCache.rewind`, then the three masking cases in `Attention.forward` (no cache, one token, a block against a warm cache) and `init_caches`. Read [doc 4](04-model.md) first if you have not |
 | 2 | [`aksharallm/infer/generate.py`](../aksharallm/infer/generate.py) | `stream_generate` — prefill, then the one-token loop. Then `_filter_logits` (top-k and top-p in one pass, positions preserved), `fit_prompt`, and `IncrementalDecoder`, which is the decode-cumulatively-and-diff trick that stops `�` appearing mid-word |
 | 3 | [`aksharallm/infer/speculative.py`](../aksharallm/infer/speculative.py) | `accept_or_correct` and `residual_distribution` first — the rule is four lines and the whole guarantee. Then `NgramDrafter` (a draft with no model in it) and the round loop in `speculative_generate` |
 | 4 | [`aksharallm/infer/tasks.py`](../aksharallm/infer/tasks.py) | `Probe` — the fixed prompts and, on each, what *good* looks like at 300M. Then `CodeTask`, `extract_code` and `assemble` |
@@ -532,4 +532,4 @@ catch a silent decode bug. Break the nucleus on purpose in [lesson 7](lessons/07
 
 ---
 
-Next: [7. Scaling up →](07-scaling.md)
+Next: [8. Scaling up →](08-scaling.md)

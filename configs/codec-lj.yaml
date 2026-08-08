@@ -9,7 +9,7 @@
 #     scripts/audio.sh codec-lj
 #
 # Watch `book` in the log from step one: codebook collapse is invisible in the loss curve
-# and fatal to everything downstream. See docs/20-audio.md § "What goes wrong".
+# and fatal to everything downstream. See docs/21-audio.md § "What goes wrong".
 name: codec-lj
 
 codec:

@@ -1,6 +1,6 @@
-# 21 — Vision: a picture, into a model that has never seen one
+# 22. Vision: a picture, into a model that has never seen one
 
-> [Doc 20](20-audio.md) needed a codec to turn a waveform into integers. An image needs
+> [Doc 21](21-audio.md) needed a codec to turn a waveform into integers. An image needs
 > nothing of the sort: it is **already** a grid of numbers, so cutting it into patches
 > produces a sequence directly. What is left is a bridge — and the bridge is two matrices.
 
@@ -66,7 +66,7 @@ before this one" means anything consistent. This is the one place the vision tow
 deliberately does not reuse the language model's machinery.
 
 **Attention is bidirectional.** A patch at the top-left should see the bottom-right — there is
-nothing to predict left to right. That is the same `causal: false` idea [doc 19](19-diffusion.md)
+nothing to predict left to right. That is the same `causal: false` idea [doc 20](20-diffusion.md)
 introduced, reused unchanged.
 
 **And `n_tokens` is the trade worth understanding.** 64 patches is 64 positions of the
@@ -78,7 +78,7 @@ costs detail and buys context, and it is one config field.
 ## What the model changed
 
 **Nothing.** `Transformer` is imported and frozen. The seam it goes through — `inputs_embeds`
-— was added for [audio](20-audio.md) and is unchanged here, which is the strongest form of
+— was added for [audio](21-audio.md) and is unchanged here, which is the strongest form of
 the claim both phases exist to make.
 
 The two mistakes the code is shaped to prevent:
@@ -174,7 +174,7 @@ falling back to a *seen* pair for the third.
 
 ## The code, in reading order
 
-Read [doc 3](03-model.md) first if you have not, and [doc 20](20-audio.md) for the seam this
+Read [doc 4](04-model.md) first if you have not, and [doc 21](21-audio.md) for the seam this
 reuses.
 
 | # | file | what to look for |

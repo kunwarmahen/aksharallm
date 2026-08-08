@@ -37,8 +37,8 @@ the language model's machinery.
 there is nothing to predict left-to-right. That is the same `causal: false` flag the
 diffusion phase added, reused unchanged.
 
-Read with: docs/21-vision.md -- the chapter this implements; it ends with the order to read
-these files in. See also docs/03-model.md.
+Read with: docs/22-vision.md -- the chapter this implements; it ends with the order to read
+these files in. See also docs/04-model.md.
 """
 
 from __future__ import annotations

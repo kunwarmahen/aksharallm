@@ -1,6 +1,6 @@
 """The route map's commands must be real, because the route map exists to be copied.
 
-`docs/22-journeys.md` is the page a newcomer follows from raw text to a working model. Its
+`docs/01-journeys.md` is the page a newcomer follows from raw text to a working model. Its
 entire value is that the commands in it can be pasted. One invented flag costs the reader
 their trust in the whole page, and they have no way to tell which line was the wrong one.
 
@@ -15,7 +15,7 @@ first draft of chapter 22 shipped three that do not work:
 All three look right. Two of them are wrong only in the interface, which is exactly what a
 human reviewer skims past. So they are checked here against the real `--help`.
 
-Read with: docs/22-journeys.md -- the chapter this guards.
+Read with: docs/01-journeys.md -- the chapter this guards.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-CHAPTER = ROOT / "docs" / "22-journeys.md"
+CHAPTER = ROOT / "docs" / "01-journeys.md"
 
 #: A placeholder the reader is meant to substitute, not a literal to check.
 PLACEHOLDER = re.compile(r"^<.*>$")
@@ -149,7 +149,7 @@ def test_a_script_exists_and_handles_every_flag_it_is_given(cmd: str):
 
     for flag in [p for p in parts[1:] if p.startswith("-")]:
         assert flag in handled, (
-            f"{parts[0]} does not parse {flag} — documented in docs/22-journeys.md as "
+            f"{parts[0]} does not parse {flag} — documented in docs/01-journeys.md as "
             f"`{cmd}`, but its `case` handles {sorted(handled)}. Check whether it is an "
             f"environment variable instead (e.g. SPECULATE=4).")
 

@@ -34,8 +34,8 @@ defensible (a reconstruction of a held-out utterance the model was conditioned o
 leans on intelligibility otherwise. Reporting an unaligned MCD as if it meant something is
 the mistake this docstring exists to prevent.
 
-Read with: docs/20-audio.md -- the chapter this implements; it ends with the order to read
-these files in. See also docs/05-posttraining.md.
+Read with: docs/21-audio.md -- the chapter this implements; it ends with the order to read
+these files in. See also docs/06-posttraining.md.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-# 20 — Audio: the same transformer, on sound
+# 21. Audio: the same transformer, on sound
 
 > **The claim this chapter exists to test:** the transformer does not care what its tokens
 > mean. Nothing in [`model/transformer.py`](../aksharallm/model/transformer.py) knows about
@@ -135,7 +135,7 @@ flowchart LR
    the learning rate. A codebook is not really a parameter being descended; it is a set of
    centroids being tracked. It is a `buffer`, not a `Parameter`, so weight decay cannot
    quietly shrink every entry towards the origin between updates.
-3. **Codebook collapse is [router collapse](14-moe.md) again.** A handful of entries win
+3. **Codebook collapse is [router collapse](15-moe.md) again.** A handful of entries win
    early, receive all the assignments, and the rest never train — so a 1,024-entry codebook
    is quietly a 40-entry one, reconstruction plateaus, *and the loss curve looks fine*. Same
    countermeasures: usage counted every step, plus **dead-code restart** — an entry nobody
@@ -269,7 +269,7 @@ which are nearly noise and cannot be predicted by anyone. Sample audio and liste
 
 ## Part 4 — TTS and ASR
 
-Both directions are one idea already implemented in [`train/sft.py`](05-posttraining.md):
+Both directions are one idea already implemented in [`train/sft.py`](06-posttraining.md):
 **put two things in one sequence and take the loss on only one of them.**
 
 ```mermaid
@@ -342,7 +342,7 @@ where F1 and F2 sit.
 
 Seven traps, written down before building, and how each one landed:
 
-1. **Codebook collapse is router collapse.** Same countermeasures as [MoE](14-moe.md): EMA
+1. **Codebook collapse is router collapse.** Same countermeasures as [MoE](15-moe.md): EMA
    updates, dead-code restart, the commitment term, per-codebook usage logged every step.
    *Hit immediately* — the first run collapsed to perplexity 1.0 by step 50, and the fix was
    **seeding the codebook from the first batch's encoder outputs** rather than from
@@ -379,12 +379,12 @@ The bitrate ladder, **audible in a browser**:
 ```
 
 Four files plus the original. The trade becomes something you hear rather than something you
-read — and it is the same trade [quantization](10-quantization.md) makes silently in the
+read — and it is the same trade [quantization](11-quantization.md) makes silently in the
 weights.
 
 ## The code, in reading order
 
-Read [doc 3](03-model.md) and [doc 4](04-pretraining.md) first if you have not: parts 3 and 4
+Read [doc 4](04-model.md) and [doc 5](05-pretraining.md) first if you have not: parts 3 and 4
 are that chapter's model, unchanged, over different integers.
 
 | # | file | what to look for |

@@ -65,14 +65,14 @@ over the full version rather than only masking it away.
 
 What it is worth, measured
 --------------------------
-See `docs/03-model.md` for the table. The short version: against PyTorch's SDPA (which is
+See `docs/04-model.md` for the table. The short version: against PyTorch's SDPA (which is
 FlashAttention-2 with hand-written PTX and years of tuning) this lands in the same
 neighbourhood rather than ahead of it, and the interesting number is not the speedup, it is
 the *memory*: the naive implementation cannot run the shapes this does at all.
 
 Run `python -m aksharallm.model.flash` to reproduce all of it on your own card.
 
-Read with: docs/03-model.md -- the chapter this implements; it ends with the order to read
+Read with: docs/04-model.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 
@@ -438,7 +438,7 @@ def _blocks(head_dim: int, itemsize: int, forward: bool) -> tuple[int, int, int,
 
     Hand-picked on a 3090 rather than autotuned, because autotuning costs a multi-second
     stall the first time each new shape appears and one training step meets several. The
-    sweep is in `docs/03-model.md`.
+    sweep is in `docs/04-model.md`.
 
     The budget being spent is **SRAM**, not registers: an Ampere SM will give one program
     99 KB, and it has to hold the Q tile, the K and V tiles, and `num_stages` copies of

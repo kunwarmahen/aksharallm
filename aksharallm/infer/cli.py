@@ -16,7 +16,7 @@ Playground tab uses too. Same device policy (the GPU, unless a run is training),
 history file, same graded tasks — so a number you get here and a number you get in the
 browser mean the same thing.
 
-Read with: docs/06-inference.md -- the chapter this implements; it ends with the order to read
+Read with: docs/07-inference.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

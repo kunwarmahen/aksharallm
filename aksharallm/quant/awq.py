@@ -51,7 +51,7 @@ weight error, weighted by how much energy that input channel actually carries. T
 the diagonal of the same Hessian GPTQ uses, which is why AWQ is so much cheaper: it needs
 one number per channel, not an in_features x in_features matrix.
 
-Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+Read with: docs/11-quantization.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

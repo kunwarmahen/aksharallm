@@ -1,7 +1,7 @@
 ---
 id: data
 title: Text becomes numbers on disk
-doc: docs/01-data.md
+doc: docs/02-data.md
 files:
   - aksharallm/data/prepare.py
   - aksharallm/data/loader.py
@@ -46,7 +46,7 @@ Every position is a training example: given `7594`, predict `3011`; given `7594,
 predict `261`. A window of 512 tokens is 512 examples, not one — which is why this is such
 an efficient way to learn.
 
-Read `docs/01-data.md`, then open [`aksharallm/data/loader.py`](aksharallm/data/loader.py)
+Read `docs/02-data.md`, then open [`aksharallm/data/loader.py`](aksharallm/data/loader.py)
 in the **Code** tab and find where `x` and `y` are cut from the memmap.
 
 ---

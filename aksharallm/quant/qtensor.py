@@ -73,7 +73,7 @@ zero-point 0.375. Small, but not nothing: on a 4-bit model that is ~9% of the to
 one fp32 mean per block of 256 scales -- taking that 0.25 down to 0.129. See
 `compress_scales`. It is a real saving and a small one, and the docs say so.
 
-Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+Read with: docs/11-quantization.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

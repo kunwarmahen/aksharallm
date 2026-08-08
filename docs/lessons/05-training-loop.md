@@ -1,7 +1,7 @@
 ---
 id: training-loop
 title: The training loop, and the learning rate that has to warm up
-doc: docs/04-pretraining.md
+doc: docs/05-pretraining.md
 files:
   - aksharallm/train/pretrain.py
   - aksharallm/train/schedule.py
@@ -58,7 +58,7 @@ curve that spikes and never comes back.
 **Cosine decay** — the rate falls smoothly to a floor. Big steps early to find the right
 region, small steps late to settle into it.
 
-Read `docs/04-pretraining.md` for what mixed precision and gradient clipping are doing, then
+Read `docs/05-pretraining.md` for what mixed precision and gradient clipping are doing, then
 open `aksharallm/train/schedule.py` in the **Code** tab.
 
 ---

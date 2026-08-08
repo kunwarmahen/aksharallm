@@ -1,4 +1,4 @@
-# 19. Diffusion: writing a sentence in the order you are sure of
+# 20. Diffusion: writing a sentence in the order you are sure of
 
 Every model in this project so far writes strictly left to right. Token 5 is chosen knowing
 tokens 1–4 and nothing else, and once chosen it is never revisited. That constraint is not a
@@ -335,7 +335,7 @@ the sequence resolving from all-masked to text is the thing to look at, not the 
 
 ## The code, in reading order
 
-Read [doc 4](04-pretraining.md) first if you have not: this chapter replaces exactly one
+Read [doc 5](05-pretraining.md) first if you have not: this chapter replaces exactly one
 component of it, and the diff is the lesson.
 
 | # | file | what to look for |

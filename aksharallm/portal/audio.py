@@ -5,7 +5,7 @@ Shape of this one, and why
 The panel this tab exists for is the **bitrate ladder** — the same clip decoded from 1, 2, 4
 and 8 codebooks, played side by side in a browser. Every other visualisation in this repo
 asks you to interpret a chart. This one asks you to listen, and the trade it makes audible
-is the same one [quantization](../../docs/10-quantization.md) makes silently in the weights.
+is the same one [quantization](../../docs/11-quantization.md) makes silently in the weights.
 
 Like `interp` and `diffusion`, everything runs **inline** rather than as a subprocess job: a
 codec is a few million parameters and reconstructing three seconds of audio is one forward
@@ -17,7 +17,7 @@ Device policy is the repo's standing one: the CPU while a training run holds the
 codec forward on the CPU is a second or two for a short clip, which is fine for listening
 and is why this tab needs no GPU reservation.
 
-Read with: docs/20-audio.md -- the chapter this implements; it ends with the order to read
+Read with: docs/21-audio.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

@@ -15,7 +15,7 @@ learning anything?*
 Imports are deliberately lazy-ish: `generate` and `checkpoints` are the only things
 `aksharallm.eval` needs, and nothing here should pull in the portal.
 
-Read with: docs/06-inference.md -- the chapter this implements; it ends with the order to read
+Read with: docs/07-inference.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

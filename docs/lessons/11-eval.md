@@ -1,7 +1,7 @@
 ---
 id: eval
 title: Is it any good? — and why the loss cannot say
-doc: docs/12-eval.md
+doc: docs/13-eval.md
 files:
   - aksharallm/eval/scoring.py
   - aksharallm/eval/suites.py

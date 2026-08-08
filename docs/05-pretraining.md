@@ -1,4 +1,4 @@
-# 4. Pretraining
+# 5. Pretraining
 
 This is 99% of the compute and where the model learns essentially everything it knows.
 
@@ -317,7 +317,7 @@ changes: a chunked run is still mathematically one continuous run.
 ## Reading the logs
 
 Everything below can also be read as curves in a browser — `scripts/portal.sh` plots exactly
-these fields out of `train_log.jsonl` (see `docs/07-scaling.md`). The text log stays the
+these fields out of `train_log.jsonl` (see `docs/08-scaling.md`). The text log stays the
 source of truth; the portal never writes to it.
 
 ```
@@ -361,7 +361,7 @@ processes writing to one log. Each launch brackets its records with `session_sta
 from a slowdown when reading it back later. `scripts/sessions.py <run>` prints one row per
 session — steps covered, loss moved, mean tok/s, wall-clock, how it ended. The plain-text
 console log is kept per session too; see
-[docs/07-scaling.md](07-scaling.md) → "One log per session".
+[docs/08-scaling.md](08-scaling.md) → "One log per session".
 
 ### MFU
 
@@ -531,7 +531,7 @@ through it.
 | 2 | [`aksharallm/config.py`](../aksharallm/config.py) | `TrainConfig` / `OptimConfig`, then `load_config` — the YAML plus `-o key=value` overrides, and nothing else configures a run |
 | 3 | [`aksharallm/train/schedule.py`](../aksharallm/train/schedule.py) | `get_lr` — 25 lines, warmup + cosine/wsd. A pure function of the step, which is *why* a resumed run is mathematically identical to an uninterrupted one |
 | 4 | [`aksharallm/train/pretrain.py`](../aksharallm/train/pretrain.py) → `main`, the step loop | the four lines of the objective inside the `grad_accum` loop (note `loss / grad_accum`), then `clip_grad_norm_`, then `optimizer.step()`. Everything else in the loop is logging, evaluating or stopping |
-| 4b | same file → `ARObjective`, `objective_for` | the seam. Everything in this chapter is machinery for surviving days of wall-clock and knows nothing about *what* the loss is — which is why the masked diffusion model in [doc 19](19-diffusion.md) reuses this whole loop and adds no trainer of its own |
+| 4b | same file → `ARObjective`, `objective_for` | the seam. Everything in this chapter is machinery for surviving days of wall-clock and knows nothing about *what* the loss is — which is why the masked diffusion model in [doc 20](20-diffusion.md) reuses this whole loop and adds no trainer of its own |
 | 5 | same file | `save_checkpoint` / `load_checkpoint` — write-to-`.tmp`-then-`replace`, and what `resume: auto` restores (weights, Adam state, step) |
 | 6 | same file | `evaluate`, and the logging block — where `tok/s` measures the *actual* window rather than assuming `log_every`, which is the MFU > 100% bug |
 | 7 | [`aksharallm/train/stopfile.py`](../aksharallm/train/stopfile.py) | `parse` → `reached` — the three things a STOP file can hold. The whole stop contract, shared by pretraining, SFT and QAT |
@@ -551,4 +551,4 @@ Break the warmup on purpose in [lesson 5](lessons/05-training-loop.md), the stop
 
 ---
 
-Next: [5. Post-training →](05-posttraining.md)
+Next: [6. Post-training →](06-posttraining.md)

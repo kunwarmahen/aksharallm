@@ -1,7 +1,7 @@
 ---
 id: lora
 title: Fine-tuning without touching the model
-doc: docs/11-lora.md
+doc: docs/12-lora.md
 files:
   - aksharallm/lora/layer.py
   - aksharallm/lora/inject.py

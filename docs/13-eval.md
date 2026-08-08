@@ -1,4 +1,4 @@
-# 12. Evaluation: is the model actually any good?
+# 13. Evaluation: is the model actually any good?
 
 Up to this point every number in this project has been a **loss**. Loss is the right thing
 to watch while training — it is smooth, it is cheap, and it moves every hundred steps. It
@@ -338,6 +338,91 @@ Three things it is careful about, each of which would otherwise make the tab lie
   match on the module name, which also means a job started by a wrapper or a notebook is
   still visible.
 
+## Evaluating a chat model: what changes, and what must not
+
+Everything above measures a **base** model. After [SFT](06-posttraining.md) you have a
+different kind of artifact, and the temptation is to re-run the same command and read the
+difference. That comparison is mostly meaningless, and the reasons are worth having
+straight, because they decide which suites are informative and which are just noise.
+
+### SFT does not add knowledge, so knowledge benchmarks should not move
+
+MMLU, ARC, HellaSwag and PIQA are scored by log-likelihood over fixed candidate
+continuations. Nothing is generated; the model's manners never get a chance to help. SFT
+changes the *shape* of an answer, so on these suites **the correct outcome is no change**.
+
+That makes them useful in the one direction people do not expect: as a **damage check**. If
+ARC-Easy falls from 46.7% by more than its error bar, that is not "SFT did not help" — it is
+catastrophic forgetting, and the learning rate was too high. A flat line is a pass.
+
+### The suite that should move is the judge
+
+`--suite judge` is the only one that asks the model open-ended questions and grades the
+answer. It is also, by [`runner.py`](../aksharallm/eval/runner.py)'s `_answer`, **the only
+suite that applies the chat template**:
+
+```python
+if loaded.stage in ("sft", "dpo", "chat"):
+    text = self.engine.build_prompt(loaded, "chat", prompt=prompt)
+```
+
+GSM8K and HumanEval generate too, but they build their prompts directly and hand them to the
+model as raw text even on a chat checkpoint. **That is deliberate, and it is gotcha 1 doing
+its job.** GSM8K is a 5-shot chain-of-thought prompt and HumanEval is a function signature to
+complete; wrapping either in ChatML would make it a *different benchmark*, and every base
+score measured before would silently stop being comparable. The rule is not "always use the
+template" — it is "never change a prompt format without renaming the suite", and the
+comparison people actually want here is base-vs-SFT on identical prompts.
+
+So: a chat model's GSM8K score is measured the same way its base's was, and is comparable.
+Its judge score is the one that reflects being a chat model at all.
+
+### The three measurements that belong after post-training
+
+```mermaid
+flowchart TD
+    S["SFT finishes"] --> D["🪓 eval domains<br/><i>did Python survive?</i>"]
+    S --> J["⚖️ --suite judge<br/><i>did the manners arrive?</i>"]
+    S --> F["📊 --suite fast<br/><i>did anything break?</i>"]
+    D --> A["DPO / GRPO"]
+    J --> A
+    F --> A
+    A --> K["🎯 eval calibrate<br/><i>is confidence still honest?</i>"]
+
+    classDef s fill:#2d6cdf,stroke:#1a4a9e,color:#fff
+    classDef m fill:#e8f0fe,stroke:#2d6cdf,color:#1a1a1a
+    class S,A s
+    class D,J,F,K m
+```
+
+```bash
+python -m aksharallm.eval domains small-code-sft                     # forgetting
+python -m aksharallm.eval small-code-sft --suite judge --label sft   # behaviour
+python -m aksharallm.eval small-code-sft --suite fast --label sft    # damage
+python -m aksharallm.eval calibrate small-code-dpo                   # after aligning
+```
+
+A bare run name resolves to that run's best checkpoint, and a post-training run has no
+`ckpt_best.pt` — so `small-code-sft` resolves to `sft_best.pt`, and `small-code-dpo` to
+`dpo_best.pt`, with no path to type.
+
+**`eval domains` is the one that catches the real disaster.** SmolTalk is entirely prose. A
+too-high learning rate eats the Python ability while the blended validation average — 85%
+prose by construction — barely moves. The base model's split was prose **2.7696** / Python
+**1.2558**; if Python climbs and the total does not, the total is precisely the number that
+will not show it.
+
+**Calibration goes after DPO, not after SFT.** Alignment is where a model learns to sound
+certain, and it is the stage that reliably degrades ECE. The base-model number recorded in
+stage 3 is what makes that visible; without it there is nothing to have degraded from.
+
+### Label every one of them by stage
+
+Per gotcha 8, `--label` names the comparison rather than the model. `base`, `sft`, `dpo` is
+exactly the axis you will want to line rows up by afterwards, and it is the cheapest thing
+to get right — a result written without it is a row you cannot find again in a table of
+thirty.
+
 ## Configuration
 
 The judge reads `judge:` in `configs/portal.yaml`, which is the Code tab's `explain:`
@@ -350,7 +435,7 @@ not mind waiting.
 judge:
   model: qwen3.5:27b     # the biggest thing you have; quality matters more than speed here
   temperature: 0.0       # a judge that samples is not a judge
-  think: false           # same trap as the explainer — see docs/07
+  think: false           # same trap as the explainer — see docs/08
   num_predict: 400
   timeout_s: 600
 ```

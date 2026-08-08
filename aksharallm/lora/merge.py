@@ -27,7 +27,7 @@ number you measured before it is not the number you have after it.
 The honest third option, and usually the best one, is not to merge at all: keep the 4-bit
 base and the 11 MB adapter side by side, which is how QLoRA is normally deployed.
 
-Read with: docs/11-lora.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/12-lora.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 

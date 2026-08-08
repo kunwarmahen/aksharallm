@@ -1,4 +1,4 @@
-# 9. Running and watching it — the scripts and the portal
+# 10. Running and watching it — the scripts and the portal
 
 Everything so far has been about *what* the model learns. This chapter is about *operating*
 the thing: how you start a six-day run, stop it for the night, resume it, chain the
@@ -148,8 +148,8 @@ scripts/phase2.sh                 # run again -> resumes from ckpt_last.pt, no l
 
 Three ways to stop, all safe (they save at the current step): Ctrl-C, `scripts/stop.sh
 <run>`, or `touch checkpoints/<run>/STOP`. A hard kill or power cut costs you at most the
-steps since the last periodic save (~20 min). Full detail: [doc 4](04-pretraining.md) and
-[doc 7](07-scaling.md).
+steps since the last periodic save (~20 min). Full detail: [doc 5](05-pretraining.md) and
+[doc 8](08-scaling.md).
 
 **Stopping in twenty minutes is not a schedule.** `--in`/`--by` (and the portal's *Stop at…*
 dialog) queue one deadline for the run that is going right now; the Schedule panel is for
@@ -234,7 +234,7 @@ scripts/stop.sh small-code-grpo     # stop any of them, same as a base run
 
 If you ask for a stage whose prerequisite is missing, it tells you exactly what to run
 first. (The stages themselves — what SFT, DPO and GRPO actually *do* — are
-[doc 5](05-posttraining.md).)
+[doc 6](06-posttraining.md).)
 
 A post-training stage is a **run**, with everything that implies: it appears in the run
 picker, and the log viewer, loss chart, Sessions table, Report and Cost ledger all read it
@@ -490,7 +490,7 @@ The panels, in plain terms:
   share of tokens it received, with a rule at the even share. It is the only chart on the
   page that shows a failure the loss curve cannot: if one line climbs while the others sink,
   the router has collapsed and the model is quietly becoming a smaller dense one. See
-  [doc 14](14-moe.md).
+  [doc 15](15-moe.md).
 - **Sessions** — every launch as a row, so a run trained over ten evenings is ten
   comparable lines. Newest first, and the panel keeps a fixed height: past about ten rows
   the table scrolls inside itself (header row pinned) rather than stretching the page.
@@ -507,14 +507,14 @@ The panels, in plain terms:
   picker alongside the base runs. See [scheduling a stage](#scheduling-a-post-training-stage).
 - **Playground** — send the current checkpoint a prompt *while it is still training*, so you
   can watch it get better week over week (for a code model, it runs the generated function
-  in the sandbox and shows pass/fail). See [doc 6](06-inference.md).
+  in the sandbox and shows pass/fail). See [doc 7](07-inference.md).
 - **Code** — a local model reads a source file and explains it back to you.
 - **Quantize** — turn a checkpoint into a 4-bit or 8-bit one and measure what it cost:
   size, perplexity against the bf16 baseline, tokens per second. **Compare all** runs every
   method (RTN / AWQ / GPTQ) on the same evaluation batches, which is the only honest way to
   read these numbers. Like every other button it shells out — here to
   `python -m aksharallm.quant` — and it drops to the CPU while a run is training, because a
-  GPTQ job can allocate more than the card has left. See [doc 10](10-quantization.md).
+  GPTQ job can allocate more than the card has left. See [doc 11](11-quantization.md).
 - **Eval** — run real benchmarks against a checkpoint (MMLU, ARC, HellaSwag, PIQA, GSM8K,
   HumanEval, an LLM-judge) and see the answer *in context*. The tab leads with the **trend
   chart** — one suite across every checkpoint ever measured, with the chance line drawn as
@@ -523,7 +523,7 @@ The panels, in plain terms:
   coloured when it clears chance by more than its own error bar. Each suite carries the
   sentence saying what to expect at this size, because the commonest way to misread the
   panel is to see 25% on MMLU and conclude the model is broken. Shells out to
-  `python -m aksharallm.eval`. See [doc 12](12-eval.md).
+  `python -m aksharallm.eval`. See [doc 13](13-eval.md).
 - **Synth** — make training data with a local teacher, and see what was thrown away. The
   tab leads with the **funnel** rather than the sample count, because "400 samples at 20%
   survival" is three different problems depending on which filter took the rest: wrong
@@ -532,8 +532,8 @@ The panels, in plain terms:
   click apart. This is the one panel that **cannot** quietly fall back to the CPU — the
   teacher is loaded by Ollama in another process — so it reports the contention and leaves
   the choice to you. Shells out to `python -m aksharallm.synth`. See
-  [doc 13](13-synthetic-data.md).
-- **Learn** — the repo as a course ([doc 15](15-learning-path.md)). Twenty-one lessons, each
+  [doc 14](14-synthetic-data.md).
+- **Learn** — the repo as a course ([doc 16](16-learning-path.md)). Twenty-one lessons, each
   one *read the doc → open the file → break it → watch a real pytest node go red*. Lessons
   unlock as their prerequisites are finished, a locked one says what is missing, and a lesson
   completes only once its check has been **red and then green** — the check passes on clean
@@ -1090,7 +1090,7 @@ to do yourself, and every check in it is something this project has actually bee
 | the gradient norm sitting above the clip | the effective learning rate was then set by the clip, not by the schedule you are reading off the LR chart |
 | the best validation loss landing early | the remaining budget bought nothing, and `ckpt_best.pt` is *not* the last checkpoint — the two are different models |
 | a session slower than the best one | something else had the card; the loss curve cannot show you that |
-| a dead expert | [router collapse](14-moe.md), which looks exactly like a healthy loss curve |
+| a dead expert | [router collapse](15-moe.md), which looks exactly like a healthy loss curve |
 | energy coverage below 80% | the sampler only runs while the portal is up, so a cost figure can be real and cover a third of the run |
 
 Findings come at three levels: ⚠️ *look at this*, • *worth knowing*, ✅ *checked, and fine*.
@@ -1165,9 +1165,9 @@ is also a component class).
 
 ---
 
-You now have the whole arc: [data](01-data.md) →
-[tokenizer](02-tokenizer.md) → [model](03-model.md) → [pretraining](04-pretraining.md) →
-[post-training](05-posttraining.md) → [inference](06-inference.md) →
-[scaling](07-scaling.md), with [troubleshooting](08-troubleshooting.md) and this operations
-guide alongside. Then [quantization](10-quantization.md) makes the finished model four
+You now have the whole arc: [data](02-data.md) →
+[tokenizer](03-tokenizer.md) → [model](04-model.md) → [pretraining](05-pretraining.md) →
+[post-training](06-posttraining.md) → [inference](07-inference.md) →
+[scaling](08-scaling.md), with [troubleshooting](09-troubleshooting.md) and this operations
+guide alongside. Then [quantization](11-quantization.md) makes the finished model four
 times smaller. Everything is hand-written, tested, and yours to change.

@@ -19,7 +19,7 @@ trade-off without training anything.
 
 The three explanations it shows (`WHY`, `METHODS`, `TARGET_BLURBS`) are deliberately in
 this file rather than in the JavaScript: they are the same sentences the CLI's `--help`
-and `docs/11-lora.md` use, and having one copy means the tab cannot drift from the docs.
+and `docs/12-lora.md` use, and having one copy means the tab cannot drift from the docs.
 
 Sharing the GPU with a training run
 -----------------------------------
@@ -35,7 +35,7 @@ technique that makes fine-tuning fit alongside something else, and this panel st
 refuses to do it by default. That is a policy about *this* machine having one card and one
 irreplaceable 40,000-step run on it, not a claim about the technique.
 
-Read with: docs/11-lora.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/12-lora.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 

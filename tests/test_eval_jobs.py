@@ -6,7 +6,7 @@ write into `logs/eval/`, but the *running* state was published only by the porta
 launcher. So a `python -m aksharallm.eval` in a terminal left the tab saying "nothing
 running", with a Start button beside it and no progress at all.
 
-Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/13-eval.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 

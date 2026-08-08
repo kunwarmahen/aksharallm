@@ -20,7 +20,7 @@ comparisons put the gap at roughly 3–16x the compute for equal quality. So thi
 the main model here — it is run at Phase-1 scale (13.8M, TinyStories) as a controlled
 experiment against a dense baseline we already trust.
 
-Read with: docs/19-diffusion.md -- the chapter this implements; it ends with the order to read
+Read with: docs/20-diffusion.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

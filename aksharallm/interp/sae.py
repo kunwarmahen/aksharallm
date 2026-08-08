@@ -35,7 +35,7 @@ easy to leave out:
 Trainable on this hardware in minutes: activations for a few million tokens at one layer, a
 few thousand steps at batch 4,096.
 
-Read with: docs/17-interpretability.md -- the chapter this implements; it ends with the order
+Read with: docs/18-interpretability.md -- the chapter this implements; it ends with the order
 to read these files in.
 """
 

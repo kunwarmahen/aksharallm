@@ -13,7 +13,7 @@ live through a running job. This file is the check that a sixth panel cannot qui
 them -- the same shape as `tests/test_portal_launchers.py`, which exists because three
 identification bugs of one shape shipped in one evening.
 
-Read with: docs/09-running-and-watching.md -- the chapter on the portal.
+Read with: docs/10-running-and-watching.md -- the chapter on the portal.
 """
 
 from __future__ import annotations

@@ -17,7 +17,7 @@ Doing (4) before (2) is the interesting mistake: quantizing would replace the ve
 to layers that are no longer in the model. It fails silently -- the loss goes down, and
 the adapter does nothing when reloaded.
 
-Read with: docs/11-lora.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/12-lora.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 

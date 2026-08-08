@@ -22,7 +22,7 @@ is ~270 MB in float32 regardless of whether that is 32 short MMLU prompts or 2 l
 HellaSwag ones. A fixed batch size would either waste the card on short items or run it out
 of memory on long ones.
 
-Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/13-eval.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 

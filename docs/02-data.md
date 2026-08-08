@@ -1,4 +1,4 @@
-# 1. Data
+# 2. Data
 
 > **The rule:** at fixed compute, better data beats a better architecture, every time.
 > This is the stage where a hobbyist has the most leverage, and it's the stage most
@@ -29,7 +29,7 @@ Adding your own is one line — any HuggingFace dataset with a text column works
 There is a fourth source, which is not a download at all: **data written by a model already
 on this machine**. That is worth a chapter of its own, because generating it is four lines
 and *checking it is worth training on* is the entire job —
-[doc 13](13-synthetic-data.md). It reaches the trainer through the tools on this page:
+[doc 14](14-synthetic-data.md). It reaches the trainer through the tools on this page:
 `prepare_sft` and `prepare_dpo` each grew one recipe, `jsonl`, and everything downstream —
 packing, the assistant-only mask, the preference triples — is unchanged.
 
@@ -151,7 +151,7 @@ Roughly 90 seconds on a 16-core machine — tokenization is CPU-parallel across 
 | Flag | Why you'd use it |
 |---|---|
 | `--max-train-tokens N` | Disk budget. Also makes the run terminate deterministically instead of draining a slow stream. |
-| `--vocab-size N` | 8k for tiny models, 32k for Phase 2. See [doc 2](02-tokenizer.md). |
+| `--vocab-size N` | 8k for tiny models, 32k for Phase 2. See [doc 3](03-tokenizer.md). |
 | `--tokenizer path` | Reuse an existing tokenizer instead of fitting a new one. **Required** if you're adding data to an existing model. |
 | `--n-proc N` | Tokenizer processes. Defaults to cores − 2. |
 
@@ -208,7 +208,7 @@ python -m aksharallm.data.prepare_blend --out-dir data/blend --vocab-size 32768 
 
 > The tokenizer is trained on the **mix**, not on prose alone. This matters: a prose-only
 > BPE wastes tokens on Python's indentation, `camelCase`, and `__dunder__` names — see
-> [docs/02-tokenizer.md](02-tokenizer.md).
+> [docs/03-tokenizer.md](03-tokenizer.md).
 
 Code datasets have their own gotcha: many on the Hub are **gated** (need a login) or ship a
 deprecated loader *script* the current `datasets` library refuses. We use
@@ -303,7 +303,7 @@ near-identical code. A cluster of 175 documents is one file living in 175 places
 Weighted 85/15, roughly **1% of the blend's tokens are a repeat of another token in it**, and
 almost all of that 1% is in the Python 15%.
 
-> **Worth wondering about, and not yet worth claiming.** [Doc 12](12-eval.md) records that
+> **Worth wondering about, and not yet worth claiming.** [Doc 13](13-eval.md) records that
 > Python's held-out loss is **2.7696 → 1.2558**, more than twice as predictable as prose. Some
 > of that is real — code is more repetitive than English. But an 8% duplication rate in the
 > Python half means some of those held-out documents have near-copies in training, which
@@ -344,7 +344,7 @@ duplicated long files changes the corpus measurably.
 | 4 | [`aksharallm/data/loader.py`](../aksharallm/data/loader.py) again | `MixedTokenDataset._counts` — where the 85/15 becomes an exact per-batch split rather than an average (largest-remainder, so the counts always sum to `batch_size`) |
 | 5 | [`aksharallm/config.py`](../aksharallm/config.py) | `DataConfig` — `train_bin`, `train_sources`, `tokenizer`. The ratio lives here, which is why retuning it costs nothing |
 | 6 | [`aksharallm/data/dedup.py`](../aksharallm/data/dedup.py) | `signature` (the one broadcast that makes it fast), then `LSHParams.detection_probability` — the S-curve is the whole design, and `report`'s token share is the number to quote |
-| 7 | [`aksharallm/data/prepare_sft.py`](../aksharallm/data/prepare_sft.py) · [`prepare_dpo.py`](../aksharallm/data/prepare_dpo.py) | the post-training side of the same machinery — read after [doc 5](05-posttraining.md). The `jsonl` recipe in each is how generated data ([doc 13](13-synthetic-data.md)) gets in |
+| 7 | [`aksharallm/data/prepare_sft.py`](../aksharallm/data/prepare_sft.py) · [`prepare_dpo.py`](../aksharallm/data/prepare_dpo.py) | the post-training side of the same machinery — read after [doc 6](06-posttraining.md). The `jsonl` recipe in each is how generated data ([doc 14](14-synthetic-data.md)) gets in |
 
 `tests/test_dedup.py` leads with a **planted duplicate**, for the reason
 `tests/test_contamination.py` does: a deduplicator that finds nothing because it is
@@ -356,4 +356,4 @@ purpose in [lesson 1](lessons/01-data.md).
 
 ---
 
-Next: [2. Tokenizer →](02-tokenizer.md)
+Next: [3. Tokenizer →](03-tokenizer.md)

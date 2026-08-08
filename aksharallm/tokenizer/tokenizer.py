@@ -9,7 +9,7 @@ Why *byte-level*:
   The base alphabet is the 256 byte values, so there is no such thing as an unknown
   character. Emoji, Cyrillic, control codes -- everything encodes, always round-trips.
 
-Read with: docs/02-tokenizer.md -- the chapter this implements; it ends with the order to read
+Read with: docs/03-tokenizer.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

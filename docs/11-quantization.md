@@ -1,4 +1,4 @@
-# 10. Quantization: making a trained model four times smaller
+# 11. Quantization: making a trained model four times smaller
 
 A trained model is a few hundred million numbers. We stored each one in 16 bits because
 that is what it was trained in. This chapter is about storing them in 4 or 8 instead, why
@@ -187,7 +187,7 @@ starts. And the last block is padded with the *last value* rather than zeros, wh
 drag that block's mean and absmax down and cost precision on every real scale in it.
 
 This is the datatype QLoRA fine-tunes on top of; see
-[11-lora.md](11-lora.md).
+[12-lora.md](12-lora.md).
 
 ## The tied-embedding trap
 
@@ -626,7 +626,7 @@ test — `test_the_zero_point_is_always_a_representable_code` — which exists *
 ## Where this sits
 
 Quantization is the second item in the from-scratch backend sequence: GRPO ✅ →
-**quantization ✅** → **LoRA/QLoRA ✅** → **eval harness ✅** (docs/12 — and the place to
+**quantization ✅** → **LoRA/QLoRA ✅** → **eval harness ✅** (docs/13 — and the place to
 re-measure what int4 costs on a benchmark rather than on perplexity) → synthetic data +
 distillation → MoE → diffusion → export/serving.
 
@@ -634,6 +634,6 @@ LoRA/QLoRA followed directly from this chapter and composes with it: QLoRA is li
 `QuantLinear` built here, used as a frozen base with small trainable adapters beside it.
 NF4 and double quantization were added for it.
 
-Read next: [11-lora.md](11-lora.md) for fine-tuning on top of these weights,
-[06-inference.md](06-inference.md) for the KV cache and generation loop the kernel plugs
-into, and [03-model.md](03-model.md) for the Linear layers being replaced.
+Read next: [12-lora.md](12-lora.md) for fine-tuning on top of these weights,
+[07-inference.md](07-inference.md) for the KV cache and generation loop the kernel plugs
+into, and [04-model.md](04-model.md) for the Linear layers being replaced.

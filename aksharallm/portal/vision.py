@@ -13,7 +13,7 @@ handful of forward passes over a 14M-parameter model, so a job runner with a pid
 be more machinery than the work. Device policy is the repo's standing one: the CPU while a
 training run holds the card.
 
-Read with: docs/21-vision.md -- the chapter this implements; it ends with the order to read
+Read with: docs/22-vision.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

@@ -25,7 +25,7 @@ It obeys the same contract as every other trainer here — `train.pid`, the `STO
    Scoring on it is the compositional question, and it is the only number here that a model
    cannot reach by memorising.
 
-Read with: docs/21-vision.md -- the chapter this implements; it ends with the order to read
+Read with: docs/22-vision.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 
@@ -152,7 +152,7 @@ def score(model, tok, ds, device, n: int, max_tokens: int) -> dict:
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(
         prog="python -m aksharallm.vision.train",
-        description="Train the vision projector against a frozen language model (docs/21).")
+        description="Train the vision projector against a frozen language model (docs/22).")
     p.add_argument("config")
     p.add_argument("-o", "--override", action="append", default=[], metavar="key=value")
     args = p.parse_args(argv)

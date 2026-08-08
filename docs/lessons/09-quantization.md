@@ -1,7 +1,7 @@
 ---
 id: quantization
 title: Four bits per weight, and the group that collapses
-doc: docs/10-quantization.md
+doc: docs/11-quantization.md
 files:
   - aksharallm/quant/qtensor.py
   - aksharallm/quant/qlinear.py
@@ -39,7 +39,7 @@ weights costs a little metadata and keeps the resolution where the values actual
 
 Worth internalising, because it is the opposite of what everyone expects: at this scale, 4-bit
 inference is *slower* than 16-bit unless you have a fused kernel, because every matmul now
-has to unpack and rescale first. Quantization buys **memory**, not speed. `docs/10` measures
+has to unpack and rescale first. Quantization buys **memory**, not speed. `docs/11` measures
 it honestly, including the fused Triton kernel that wins some of it back.
 
 ---

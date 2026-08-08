@@ -12,7 +12,7 @@
 #
 # Then stop watching the loss entirely and watch ALL -- did it name the count, the colour AND
 # the shape. A loss of 0.003 with a garbage caption is a real thing that happened here.
-# See docs/21-vision.md.
+# See docs/22-vision.md.
 name: vision-shapes
 
 vision:

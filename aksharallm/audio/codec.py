@@ -34,7 +34,7 @@ An adversarial term on top of this is what takes a codec from "clearly the same 
 indistinguishable from a codec that fails to converge, and debugging the pair together is
 how a day becomes a week.
 
-Read with: docs/20-audio.md -- the chapter this implements; it ends with the order to read
+Read with: docs/21-audio.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 
@@ -371,7 +371,7 @@ def load_codec(path, device: str = "cpu") -> Codec:
     if "codec" not in blob:
         raise ValueError(
             f"{path} is not a codec checkpoint (stage={blob.get('stage', 'unknown')!r}). "
-            "Audio and text checkpoints are separate families — see docs/20."
+            "Audio and text checkpoints are separate families — see docs/21."
         )
     cfg = CodecConfig(**{**blob["codec"], "strides": tuple(blob["codec"]["strides"]),
                          "dilations": tuple(blob["codec"]["dilations"])})

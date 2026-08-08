@@ -10,7 +10,7 @@ the quantization panel and the playground's history: a result is a few hundred k
 `git` and `grep` both work on it, a run started in a terminal shows up in the browser, and
 there is no schema migration to get wrong the day a suite is added.
 
-Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/13-eval.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 

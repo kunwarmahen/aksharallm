@@ -16,7 +16,7 @@ shape everyone converges on:
   decay   - cosine to a floor. Large steps early explore, small steps late refine.
   floor   - never decay to exactly 0; the last few steps still do useful work.
 
-Read with: docs/04-pretraining.md -- the chapter this implements; it ends with the order to read
+Read with: docs/05-pretraining.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

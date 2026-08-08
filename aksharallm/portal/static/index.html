@@ -146,32 +146,32 @@
   <span class="foot-quant" hidden>Every job shells out to
   <code>python -m aksharallm.quant</code> — the same command you would type — and writes its
   measurements to <code>logs/quant/</code>. int8 is free; int4 costs perplexity and
-  <em>saves memory, not time</em>. See docs/10 for why smaller is not faster.</span>
+  <em>saves memory, not time</em>. See docs/11 for why smaller is not faster.</span>
   <span class="foot-lora" hidden>An adapter is a few MB, not a new copy of the model — one
   base plus one adapter per skill. Jobs shell out to
   <code>python -m aksharallm.train.sft</code> and write beside the base they came from, so
-  the Playground picks them up. See docs/11 for why the rank and the target layers matter
+  the Playground picks them up. See docs/12 for why the rank and the target layers matter
   more than anything else here.</span>
   <span class="foot-evals" hidden>A benchmark score means nothing on its own — read it
   against the chance line, the error bar, and what the same suite scored ten thousand steps
   ago. Data is downloaded once into <code>data/eval/</code>; results are kept forever in
-  <code>logs/eval/</code>. See docs/12 for what each suite can and cannot tell you.</span>
+  <code>logs/eval/</code>. See docs/13 for what each suite can and cannot tell you.</span>
   <span class="foot-synth" hidden>Generated data is the easiest way to make a model worse
   while its loss improves, so read the funnel, not the sample count: <em>which</em> filter
   the rest of the batch hit is what says whether to change the prompt, the teacher or the
   seed grid. The python recipe runs the tests it wrote, then runs them again against a
   stubbed solution. Everything lands in <code>data/synth/</code> with its provenance. See
-  docs/13.</span>
+  docs/14.</span>
   <span class="foot-diff" hidden>The second paradigm in this repo, at 13.8M on
   TinyStories — never the main model, because masked diffusion needs roughly 3–16x the
   compute of next-token prediction for equal quality. Its validation loss is an ELBO
   <em>upper bound</em> and is not comparable with an autoregressive run's cross-entropy.
-  What it buys is infilling and a compute dial. See docs/19.</span>
+  What it buys is infilling and a compute dial. See docs/20.</span>
   <span class="foot-learn" hidden>Every lesson ends in a real test: break the code the
   lesson names, watch that test go red, put it back. A lesson only counts as done once its
   check has gone <em>red and then green</em> — the check passes on a clean checkout, so
   breaking it is the exercise. Same lessons and the same progress file as
-  <code>python -m aksharallm.learn</code>. See docs/15.</span>
+  <code>python -m aksharallm.learn</code>. See docs/16.</span>
   <span class="foot-play" hidden>Every generation is recorded in
   <code>logs/playground.jsonl</code> with the step and loss of the checkpoint that produced
   it, so the same prompt at step 7,000 and step 30,000 can be put side by side. While a run

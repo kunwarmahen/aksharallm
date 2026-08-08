@@ -18,7 +18,7 @@ none. The cost is that one window can contain the tail of one conversation and t
 of the next, which the model sees as an <|im_end|> followed by a fresh <|im_start|> --
 exactly the boundary it needs to learn anyway.
 
-Read with: docs/05-posttraining.md -- the chapter this implements; it ends with the order to
+Read with: docs/06-posttraining.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

@@ -30,7 +30,7 @@ recorded in the manifest, and `pack` **refuses** a corpus whose files disagree a
 rate unless it was told what to resample to. A corpus half at 22 kHz and half at 16 is a bug
 you hear only after a day of training.
 
-Read with: docs/20-audio.md -- the chapter this implements; it ends with the order to read
+Read with: docs/21-audio.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

@@ -30,7 +30,7 @@ machinery all drive a codec run without being told it is one.
    model has the vowels and not the consonants, which is what a codec sounds like when the
    frame rate is too low.
 
-Read with: docs/20-audio.md -- the chapter this implements; it ends with the order to read
+Read with: docs/21-audio.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 
@@ -135,7 +135,7 @@ def save(model: Codec, cfg: CodecRunConfig, step: int, best: float, path: Path, 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(
         prog="python -m aksharallm.audio.train_codec",
-        description="Train the RVQ-VAE audio codec (docs/20).",
+        description="Train the RVQ-VAE audio codec (docs/21).",
     )
     p.add_argument("config", help="configs/<run>.yaml")
     p.add_argument("-o", "--override", action="append", default=[], metavar="key=value")

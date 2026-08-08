@@ -31,7 +31,7 @@ It reads the other three trainers' logs too (`sft_log.jsonl`, `dpo_log.jsonl`,
 `grpo_log.jsonl`). Those carry no session markers and no throughput, so their reports are
 shorter — the shape is the same and the missing rows say so.
 
-Read with: docs/09-running-and-watching.md -- the chapter this implements; it ends with the
+Read with: docs/10-running-and-watching.md -- the chapter this implements; it ends with the
 order to read these files in.
 """
 
@@ -495,7 +495,7 @@ def checks(data: dict, steps: list[dict], vals: list[dict],
         out.append({"level": "warn", "text":
                     f"The loss was NaN at {len(bad)} logged step(s), first at "
                     f"{integer(bad[0])}. A checkpoint from after that point is not usable — "
-                    f"see docs/08-troubleshooting.md."})
+                    f"see docs/09-troubleshooting.md."})
 
     # -- spikes ---------------------------------------------------------------------------
     # Against the EMA at that moment, not a global mean: a spike is a step that is bad
@@ -576,7 +576,7 @@ def checks(data: dict, steps: list[dict], vals: list[dict],
             out.append({"level": "warn", "text":
                         f"Up to {moe['dead_ever']} expert(s) were receiving no tokens. That is "
                         f"router collapse, and the loss curve does not show it — the model is "
-                        f"quietly a smaller dense one. See docs/14-moe.md."})
+                        f"quietly a smaller dense one. See docs/15-moe.md."})
         elif moe.get("balance_min") is not None and moe["balance_min"] < 0.6:
             out.append({"level": "note", "text":
                         f"Expert balance fell to {num(moe['balance_min'], 2)} (1.0 is even). "

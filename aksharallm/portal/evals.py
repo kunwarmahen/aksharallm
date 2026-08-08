@@ -27,7 +27,7 @@ training loop: stopping it halfway leaves a partial score, and a partial score i
 than no score because it looks like a real one in a table. Stop means stop, and it writes
 nothing. Bound the *work* instead, with a smaller `--limit`.
 
-Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/13-eval.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 

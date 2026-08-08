@@ -26,7 +26,7 @@ residual is supposed to decode to anything sensible — the model is free to hol
 in a form the output head cannot read until later layers rotate it. Treat a clean logit-lens
 story as a hypothesis to check with `patch.py`, which intervenes rather than observes.
 
-Read with: docs/17-interpretability.md -- the chapter this implements; it ends with the order
+Read with: docs/18-interpretability.md -- the chapter this implements; it ends with the order
 to read these files in.
 """
 

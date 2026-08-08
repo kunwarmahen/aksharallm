@@ -1,4 +1,4 @@
-# 7. Scaling up — Phase 2 and beyond
+# 8. Scaling up — Phase 2 and beyond
 
 Phase 1 proved the pipeline. Now build something real.
 
@@ -288,7 +288,7 @@ while a run is going:
 
 The rest of the menu is the other phases of the project — quantizing, fine-tuning,
 evaluating, and so on — each covered by its own chapter, and all of them listed with their
-commands in the [route map](22-journeys.md).
+commands in the [route map](01-journeys.md).
 
 **The portal is a view, not a second system.** It starts runs by running `scripts/phase2.sh`
 and stops them by running `scripts/stop.sh` — the same scripts, with the same pre-flight and
@@ -531,7 +531,7 @@ Underneath is the sentence that matters most on this tab:
 > run stops.
 
 The trade is spelled out in `configs/portal.yaml` and in
-[6. Inference](06-inference.md#testing-a-model-while-it-is-still-training): a 300M model
+[7. Inference](07-inference.md#testing-a-model-while-it-is-still-training): a 300M model
 would fit in the ~3 GB a Phase-2 run leaves free, and it is still not worth risking six days
 of training on the allocator. The card is used the moment it is free, and the model unloads
 after five idle minutes either way.
@@ -786,7 +786,7 @@ to make the extra parameters pay. Do Phase 2 properly first.
 
 ## The code, in reading order
 
-Nothing here is a new algorithm — it is [doc 4](04-pretraining.md)'s trainer, run bigger and
+Nothing here is a new algorithm — it is [doc 5](05-pretraining.md)'s trainer, run bigger and
 for longer. What is new is the machinery around it, and it is mostly shell:
 
 | # | file | what to look for |
@@ -802,9 +802,9 @@ for longer. What is new is the machinery around it, and it is mostly shell:
 | 9 | [`aksharallm/portal/schedule.py`](../aksharallm/portal/schedule.py) | `Rule` → `Schedule` → `Scheduler` — windows stored as the two rules they really are, the midnight-crossing day shift, and the 15-minute grace window |
 | 10 | [`aksharallm/portal/explain.py`](../aksharallm/portal/explain.py) | `SourceTree.resolve` (the reading boundary), `PRIMER` and `build_messages` — what the Code tab actually sends a local model |
 
-The portal itself is [doc 9](09-running-and-watching.md); the Python-specialist stage (Stage C)
+The portal itself is [doc 10](10-running-and-watching.md); the Python-specialist stage (Stage C)
 reuses 2 and 3 with the weights flipped toward code.
 
 ---
 
-Next: [8. Troubleshooting →](08-troubleshooting.md)
+Next: [9. Troubleshooting →](09-troubleshooting.md)

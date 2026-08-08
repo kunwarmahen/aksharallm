@@ -1,6 +1,6 @@
 """The learning path: the repo as a course you can actually do.
 
-Everything needed to teach this project already existed — `docs/00–14` explain the why, the
+Everything needed to teach this project already existed — `docs/00–22` explain the why, the
 skills explain the how, 600-odd tests say what is true, the Playground runs a real
 checkpoint and the Code tab explains any line back to you with a local model. What was
 missing was **ordering, and something to do.**
@@ -19,7 +19,7 @@ still *trains* perfectly while generating garbage. Nobody would invent that.
 `python -m aksharallm.learn` drives all of it from a terminal; the portal's **Learn** tab is
 a view over the same three modules.
 
-Read with: docs/15-learning-path.md -- the chapter this implements; it ends with the order to
+Read with: docs/16-learning-path.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

@@ -31,7 +31,7 @@ now agreeing with it.
 in the two runs and every number in the grid is a comparison of unrelated things. That is a
 refusal here, not a warning.
 
-Read with: docs/17-interpretability.md -- the chapter this implements; it ends with the order
+Read with: docs/18-interpretability.md -- the chapter this implements; it ends with the order
 to read these files in.
 """
 

@@ -25,7 +25,7 @@ flowchart LR
     C --> D
 ```
 
-Read with: docs/21-vision.md -- the chapter this implements; it ends with the order to read
+Read with: docs/22-vision.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

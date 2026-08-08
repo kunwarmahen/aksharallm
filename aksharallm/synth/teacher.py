@@ -23,7 +23,7 @@ real diversity comes from the seed grid in :mod:`~aksharallm.synth.prompts` — 
 alone mostly produces the same answer with different adjectives — but a low temperature
 would undo the grid's work.
 
-Read with: docs/13-synthetic-data.md -- the chapter this implements; it ends with the order to
+Read with: docs/14-synthetic-data.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

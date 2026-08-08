@@ -26,7 +26,7 @@ messages and preference triples, so a dataset exports to *their* input shape —
 `{"messages": [...]}` or `{"prompt", "chosen", "rejected"}` — and the existing tokenizing,
 packing and masking code is reused untouched. Nothing here writes a `.bin`.
 
-Read with: docs/13-synthetic-data.md -- the chapter this implements; it ends with the order to
+Read with: docs/14-synthetic-data.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

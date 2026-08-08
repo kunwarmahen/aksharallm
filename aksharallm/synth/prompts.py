@@ -17,7 +17,7 @@ corner twice. That is a coverage guarantee, which a temperature is not.
 it: two batches generated from different wordings are two datasets that happen to share a
 directory, and six weeks later nothing else will tell them apart.
 
-Read with: docs/13-synthetic-data.md -- the chapter this implements; it ends with the order to
+Read with: docs/14-synthetic-data.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

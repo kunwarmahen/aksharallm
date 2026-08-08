@@ -23,7 +23,7 @@ the model -- so it is not a rounding error either way.
 Hence: **skip lm_head when embeddings are tied**, by default, and report it as skipped
 rather than silently omitting it. `--quantize-head` overrides for the curious.
 
-Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+Read with: docs/11-quantization.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 
@@ -261,7 +261,7 @@ def _refuse_moe(model: nn.Module) -> None:
             f"this checkpoint is a mixture of experts ({len(layers)} MoE layers) and "
             "quantizing it here would silently leave every expert in float while "
             "quantizing the router, which must never be quantized. Quantizing an MoE model "
-            "needs expert-aware packing — see docs/14 § 'What MoE breaks'.")
+            "needs expert-aware packing — see docs/15 § 'What MoE breaks'.")
 
 
 def _rtn_quantizer(name: str, lin: nn.Linear, scheme: QuantScheme) -> QuantLinear:

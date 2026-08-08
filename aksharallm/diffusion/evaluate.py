@@ -21,7 +21,7 @@ the model is doing a cloze test with nine tenths of the context available; at `t
 is nearly writing from nothing. A model that is only good at low `t` will produce good
 infills and poor unconditional samples, and the loss curve alone will not say so.
 
-Read with: docs/19-diffusion.md -- the chapter this implements; it ends with the order to read
+Read with: docs/20-diffusion.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

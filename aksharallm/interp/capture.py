@@ -22,7 +22,7 @@ attention map that does not match what the model actually did is worse than none
 Nothing here changes the model. No flags, no `capture=True` parameter threaded through
 `forward`, no branch in the hot path: hooks are attached, one forward runs, hooks come off.
 
-Read with: docs/17-interpretability.md -- the chapter this implements; it ends with the order
+Read with: docs/18-interpretability.md -- the chapter this implements; it ends with the order
 to read these files in.
 """
 

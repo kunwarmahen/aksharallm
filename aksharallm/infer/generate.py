@@ -14,7 +14,7 @@ it is sampled; :func:`generate` collects it into a list. Everything that watches
 think — the CLI, the portal's Playground tab — consumes the generator, so there is one
 sampling implementation to get right rather than one per caller.
 
-Read with: docs/06-inference.md -- the chapter this implements; it ends with the order to read
+Read with: docs/07-inference.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

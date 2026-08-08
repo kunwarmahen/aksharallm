@@ -1,4 +1,4 @@
-# 17. Looking inside — attention, the logit lens, patching, and a dictionary
+# 18. Looking inside — attention, the logit lens, patching, and a dictionary
 
 Every other chapter asks the model *questions*: what token comes next, what loss, what score
 on a benchmark. This one opens it up and asks **how** — which layer decided, which earlier
@@ -202,5 +202,5 @@ lens row against the model's real prediction, and a final-layer patch restoring 
 
 ---
 
-Next: [inference](06-inference.md) for the generation path these tools observe, and
-[serving](16-serving.md) for what happens when other people start using the model.
+Next: [inference](07-inference.md) for the generation path these tools observe, and
+[serving](17-serving.md) for what happens when other people start using the model.

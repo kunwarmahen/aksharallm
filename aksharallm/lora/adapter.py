@@ -18,7 +18,7 @@ and is simply worse for no visible reason. The three things checked:
 Mismatches raise by default and can be forced past with `strict=False`, because "I know,
 I am doing an experiment" is a legitimate thing to want.
 
-Read with: docs/11-lora.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/12-lora.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 

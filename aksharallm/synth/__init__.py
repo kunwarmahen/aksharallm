@@ -49,7 +49,7 @@ The pieces
   that `prepare_sft` / `prepare_dpo` consume.
 * :mod:`~aksharallm.synth.run`      — the generation loop, its budget and its stop file.
 
-Read with: docs/13-synthetic-data.md -- the chapter this implements; it ends with the order to
+Read with: docs/14-synthetic-data.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

@@ -47,8 +47,8 @@ before it is acted on. `agree()` is that, and it is the function to reach for.
 noisier estimate than the one that was actually stepped on. Both are handled here rather
 than left for each trainer to remember.
 
-Read with: docs/04-pretraining.md -- the chapter this implements; it ends with the order to
-read these files in. See also docs/07-scaling.md.
+Read with: docs/05-pretraining.md -- the chapter this implements; it ends with the order to
+read these files in. See also docs/08-scaling.md.
 """
 
 from __future__ import annotations

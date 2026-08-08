@@ -43,7 +43,7 @@ instead of 1. If it accepts nothing you have paid one extra target forward's wor
 time per token, so a hopeless draft model is a slowdown of a few percent — the acceptance
 rate in the stats is there to tell you which of the two you have.
 
-Read with: docs/06-inference.md -- the chapter this implements; it ends with the order to read
+Read with: docs/07-inference.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

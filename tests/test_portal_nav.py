@@ -16,7 +16,7 @@ itself looked perfect, because the drawer is `position: fixed` and did not care.
 A state class on <body> shares one namespace with every component class in the portal.
 There is no warning for the collision in any tool, so: a test.
 
-Read with: docs/09-running-and-watching.md -- the chapter on the portal.
+Read with: docs/10-running-and-watching.md -- the chapter on the portal.
 """
 
 from __future__ import annotations

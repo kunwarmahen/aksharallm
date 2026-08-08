@@ -124,7 +124,7 @@ def test_every_chapter_is_named_by_at_least_one_module():
     #: 22 is the route map: it sequences the other chapters rather than explaining a module,
     #: so its "reading order" points at the launcher *scripts*, which are not Python modules
     #: and therefore carry no `Read with:` pointer back.
-    prose_only = {"docs/00-overview.md", "docs/08-troubleshooting.md", "docs/22-journeys.md"}
+    prose_only = {"docs/00-overview.md", "docs/09-troubleshooting.md", "docs/01-journeys.md"}
     for doc in CHAPTERS:
         rel = f"docs/{doc.name}"
         if rel in prose_only:

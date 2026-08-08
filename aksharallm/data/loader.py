@@ -5,7 +5,7 @@ array of tokens on disk; the "dataset" is just `np.memmap`. Sampling a batch is 
 offsets and a slice. No workers, no collate, no queue -- and it's faster than a DataLoader
 because the OS page cache is already doing the readahead for us.
 
-Read with: docs/01-data.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/02-data.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 

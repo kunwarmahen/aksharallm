@@ -31,7 +31,7 @@ The judge model is configured separately from the Code tab's explainer (`judge:`
 that can run beside a training run, and the judge wants the largest model on the machine
 and does not care that it takes a minute per answer.
 
-Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/13-eval.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 

@@ -33,8 +33,8 @@ power, and the interesting question is usually *"should I leave this up?"* — w
 split between energy spent generating and energy spent waiting. `t0`/`t1` per request give
 `cost.py` the busy intervals to subtract.
 
-Read with: docs/16-serving.md -- the chapter this implements; it ends with the order to read
-these files in. See also docs/09-running-and-watching.md.
+Read with: docs/17-serving.md -- the chapter this implements; it ends with the order to read
+these files in. See also docs/10-running-and-watching.md.
 """
 
 from __future__ import annotations

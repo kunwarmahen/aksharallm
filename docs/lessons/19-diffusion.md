@@ -1,7 +1,7 @@
 ---
 id: diffusion
 title: Filling in blanks instead of predicting the next word
-doc: docs/19-diffusion.md
+doc: docs/20-diffusion.md
 files:
   - aksharallm/diffusion/corrupt.py
   - aksharallm/diffusion/generate.py

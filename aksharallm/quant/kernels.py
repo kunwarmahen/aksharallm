@@ -73,7 +73,7 @@ Recovering that ordering inside the kernel would normally need an interleave; `t
 does it for free by stacking lo and hi along a new trailing axis and reshaping, which
 lands element (n, 2i) = lo and (n, 2i+1) = hi -- exactly the packing order.
 
-Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+Read with: docs/11-quantization.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 
@@ -260,7 +260,7 @@ def qlinear_forward(x: torch.Tensor, layer) -> torch.Tensor:
     # BLOCK_K//2 byte tile. It does *not* have to divide K (the tail is masked) and it
     # does not have to line up with the group size: the group index is computed per
     # element, so a tile may span several groups or sit inside one.
-    # Tuned on a 3090 for decode; see docs/10-quantization.md for the sweep. The two
+    # Tuned on a 3090 for decode; see docs/11-quantization.md for the sweep. The two
     # things that mattered were occupancy (BLOCK_N=32 gives 32 programs on 82 SMs;
     # BLOCK_N=128 gives 8 and is 5x slower) and matching BLOCK_K to the group size so the
     # scales are read once per tile instead of once per element.

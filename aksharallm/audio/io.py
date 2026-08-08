@@ -35,7 +35,7 @@ training, and every convenience function that quietly fixes its input is how one
 `read_wav` tells you what it found; `load_audio` converts only what you asked it to convert
 and records what it did in the `Clip` it returns.
 
-Read with: docs/20-audio.md -- the chapter this implements; it ends with the order to read
+Read with: docs/21-audio.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

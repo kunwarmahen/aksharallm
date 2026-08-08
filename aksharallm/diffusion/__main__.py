@@ -10,7 +10,7 @@ a browser you can reproduce here and paste into a note::
     python -m aksharallm.diffusion tiny-diffusion/ckpt_best.pt elbo --batches 20
     python -m aksharallm.diffusion tiny-diffusion/ckpt_best.pt by-t
 
-Read with: docs/19-diffusion.md -- the chapter this implements; it ends with the order to read
+Read with: docs/20-diffusion.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 
@@ -52,7 +52,7 @@ def load(ckpt_id: str, device: str):
     if not cfg.is_diffusion:
         raise DiffusionError(
             f"{path} is an autoregressive checkpoint (causal attention, no mask token). "
-            "This CLI only drives masked diffusion models — see docs/19.")
+            "This CLI only drives masked diffusion models — see docs/20.")
     model = Transformer(cfg)
     model.load_state_dict(blob["model"])
     model = model.to(device=device, dtype=torch.bfloat16 if device == "cuda"

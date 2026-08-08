@@ -28,7 +28,7 @@ four-way multiple choice, so 25% is the coin flip, and everything below ~1B para
 scale sits on it. Knowing that in advance is the difference between reading a result and
 being demoralised by one.
 
-Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/13-eval.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 

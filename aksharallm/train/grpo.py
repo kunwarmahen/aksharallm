@@ -29,7 +29,7 @@ The reward is pluggable (`RewardFn`): the real one runs the model's code in the 
 toy substring reward lets us prove the loop optimises *anything* on a model that can't yet
 code — see tests.
 
-Read with: docs/05-posttraining.md -- the chapter this implements; it ends with the order to
+Read with: docs/06-posttraining.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

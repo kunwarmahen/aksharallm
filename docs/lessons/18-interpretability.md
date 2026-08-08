@@ -1,7 +1,7 @@
 ---
 id: interp
 title: Asking the model where it decided
-doc: docs/17-interpretability.md
+doc: docs/18-interpretability.md
 files:
   - aksharallm/interp/capture.py
   - aksharallm/interp/lens.py

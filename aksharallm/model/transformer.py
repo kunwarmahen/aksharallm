@@ -12,8 +12,8 @@ Architecture choices and why they differ from the original GPT-2:
 Shapes convention used throughout:
   B = batch, T = time/sequence, C = d_model, H = n_heads, Hk = n_kv_heads, D = head_dim
 
-Read with: docs/03-model.md -- the chapter this implements; it ends with the order to read these
-files in. See also docs/06-inference.md.
+Read with: docs/04-model.md -- the chapter this implements; it ends with the order to read these
+files in. See also docs/07-inference.md.
 """
 
 from __future__ import annotations
@@ -185,7 +185,7 @@ class Attention(nn.Module):
         self.window = cfg.attn_window
         self.sinks = cfg.attn_sinks
         # False only for a masked diffusion model, where every position denoises using the
-        # whole sequence. See docs/19 — and note that everything below which builds a mask
+        # whole sequence. See docs/20 — and note that everything below which builds a mask
         # has to ask this first, because a causal mask silently applied to a bidirectional
         # model trains and generates without ever raising.
         self.causal = cfg.causal
@@ -450,7 +450,7 @@ class Transformer(nn.Module):
         that copy is a quarter of a gigabyte, on a device that is often the CPU because a
         training run owns the card.
 
-        `inputs_embeds` and `return_hidden` are the **audio** path (docs/20), and they are
+        `inputs_embeds` and `return_hidden` are the **audio** path (docs/21), and they are
         one idea: the audio LM's "token" at each position is not one integer but eight — one
         per codec codebook — so it sums eight embeddings on the way in and needs eight heads
         on the way out. Neither of those fits a single `vocab_size`. So it supplies the
@@ -494,7 +494,7 @@ class Transformer(nn.Module):
             # never change once written. In a diffusion model every position can be rewritten
             # on every denoising step, so a cache would serve keys for tokens that no longer
             # exist. This is the whole reason `infer/generate.py` does not transfer — see
-            # docs/19 — and it is worth an exception rather than a wrong answer.
+            # docs/20 — and it is worth an exception rather than a wrong answer.
             raise ValueError("a bidirectional (causal: false) model cannot use a KV cache: "
                              "every position may change on every step. Use "
                              "aksharallm.diffusion.generate instead.")

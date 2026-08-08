@@ -66,7 +66,7 @@ def repo(tmp_path):
     (tmp_path / "configs" / "portal.yaml").write_text(
         "explain:\n  model: test-model\n  num_ctx: 512\n  max_file_chars: 4000\n")
     (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "03-model.md").write_text("# the model\n")
+    (tmp_path / "docs" / "04-model.md").write_text("# the model\n")
     (tmp_path / "README.md").write_text("# demo\n")
     # Things that must never be reachable.
     (tmp_path / "data").mkdir()
@@ -90,7 +90,7 @@ def test_tree_walks_the_whole_root(repo):
     a directory nobody thought to allowlist."""
     tree = SourceTree(repo).files()
     paths = {f["path"] for f in tree["files"]}
-    assert {"aksharallm/model/geom.py", "configs/tiny.yaml", "docs/03-model.md",
+    assert {"aksharallm/model/geom.py", "configs/tiny.yaml", "docs/04-model.md",
             "README.md", "outside.py"} <= paths
     assert tree["root"] == str(repo)
 
@@ -150,17 +150,17 @@ def test_read_returns_text_and_the_matching_doc(repo):
     assert got["path"] == "aksharallm/model/geom.py"
     assert got["lang"] == "python"
     assert got["lines"] == 9
-    assert got["doc"] == "docs/03-model.md"
+    assert got["doc"] == "docs/04-model.md"
     assert "math.pi" in got["text"]
 
 
 def test_doc_hints_prefer_the_longest_prefix():
-    assert doc_for("aksharallm/train/sft.py") == "docs/05-posttraining.md"
-    assert doc_for("aksharallm/train/pretrain.py") == "docs/04-pretraining.md"
-    assert doc_for("aksharallm/portal/server.py") == "docs/09-running-and-watching.md"
+    assert doc_for("aksharallm/train/sft.py") == "docs/06-posttraining.md"
+    assert doc_for("aksharallm/train/pretrain.py") == "docs/05-pretraining.md"
+    assert doc_for("aksharallm/portal/server.py") == "docs/10-running-and-watching.md"
     # a portal tab belongs to the chapter about what it does, not to the portal chapter
-    assert doc_for("aksharallm/portal/quantize.py") == "docs/10-quantization.md"
-    assert doc_for("aksharallm/model/moe.py") == "docs/14-moe.md"
+    assert doc_for("aksharallm/portal/quantize.py") == "docs/11-quantization.md"
+    assert doc_for("aksharallm/model/moe.py") == "docs/15-moe.md"
 
 
 def test_every_hinted_doc_exists():
@@ -208,7 +208,7 @@ def test_build_messages_carries_file_selection_and_primer(repo):
     user = msgs[1]["content"]
     assert "aksharallm" in user                       # the primer
     assert "`aksharallm/model/geom.py`" in user       # which file
-    assert "docs/03-model.md" in user                 # where the human version lives
+    assert "docs/04-model.md" in user                 # where the human version lives
     assert "lines 7–9" in user
     assert "return math.pi * r ** 2" in user          # the selection, verbatim
     assert "   7 | def area(r):" in user              # and the numbered listing
@@ -504,7 +504,7 @@ def test_explain_streams_server_sent_events(portal):
               for line in resp.read().decode().split("\n\n") if line.strip()]
     assert frames[0]["start"] is True
     assert frames[0]["lines"] == [7, 9]
-    assert frames[0]["doc"] == "docs/03-model.md"
+    assert frames[0]["doc"] == "docs/04-model.md"
     assert "".join(f.get("delta", "") for f in frames) == "Line 9 squares the radius."
     assert frames[-1]["done"] is True
     # and the model was given the file, not just the three lines

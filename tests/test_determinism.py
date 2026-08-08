@@ -1,6 +1,6 @@
 """Stopping and resuming must be the same as never stopping.
 
-`docs/09` says a run is trained "over evenings using stop/resume", and every controlled
+`docs/10` says a run is trained "over evenings using stop/resume", and every controlled
 experiment in this repo — the MoE comparison, the diffusion comparison, the LoRA-vs-full
 table — rests on two runs seeing *the same data in the same order*. Neither claim was true
 before these tests existed:

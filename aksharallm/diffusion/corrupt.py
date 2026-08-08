@@ -37,7 +37,7 @@ Nothing is forced: a sequence that happens to mask zero tokens contributes exact
 which is the correct value of an empty sum. Forcing "at least one mask" would look tidier
 and bias the estimator.
 
-Read with: docs/19-diffusion.md -- the chapter this implements; it ends with the order to read
+Read with: docs/20-diffusion.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

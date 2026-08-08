@@ -21,7 +21,7 @@ is strictly more traffic than just doing the bf16 matmul. The fused kernel is wh
 collapses those steps into one and turns the byte saving into a time saving; measuring
 the slow path first is what makes the kernel's number mean something.
 
-Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+Read with: docs/11-quantization.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

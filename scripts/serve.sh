@@ -13,7 +13,7 @@
 #
 # The same shape as scripts/portal.sh on purpose: a pid file, a log, and lifecycle flags that
 # work from any terminal — so the portal's Serve panel can drive *this script* rather than
-# containing a second way to start a server. See docs/16-serving.md.
+# containing a second way to start a server. See docs/17-serving.md.
 #
 # It never fights a training run for the card: the server asks the same device policy the
 # playground uses, and loads on the CPU while a run is training. `/health` says which.

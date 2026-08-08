@@ -1,4 +1,4 @@
-# 18. Long context — teaching a model to read further than it was trained to
+# 19. Long context — teaching a model to read further than it was trained to
 
 > Our 300M model was trained on windows of **1,024 tokens** — about a page and a half. This
 > chapter is about what happens when you show it eight pages instead, why it fails in a very
@@ -385,7 +385,7 @@ where a needle at the very front of a 4,096-token context is still only found a 
 time.
 
 **No block-skipping for the sliding window in the Triton kernel.** Our own
-[FlashAttention kernel](03-model.md) understands `window` and `sinks` — passed as two
+[FlashAttention kernel](04-model.md) understands `window` and `sinks` — passed as two
 integers rather than as a mask, which matters because the equivalent bool tensor is 64 MB at
 T=8192. But it still *walks* the skipped key blocks and masks them, rather than never loading
 them, so the window costs no memory and saves no time. The causal diagonal already does the
@@ -416,4 +416,4 @@ nothing when it should and something when it should), and `test_extending_twice_
 
 ---
 
-Next: [3. The model →](03-model.md) for the attention kernel this builds on.
+Next: [4. The model →](04-model.md) for the attention kernel this builds on.

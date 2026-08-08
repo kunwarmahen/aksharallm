@@ -1,4 +1,4 @@
-# 5. Post-training: SFT and DPO
+# 6. Post-training: SFT, DPO and GRPO
 
 ## The problem with a base model
 
@@ -85,7 +85,7 @@ instead of a full checkpoint, and the learning rate default moves from 1e-5 to 2
 
 That matters here more than anywhere else in the project, because the plan is one base
 model yielding **both** a chat model and a Python specialist. As adapters that is one set
-of weights and two small files, not two 1.2 GB checkpoints. See [11-lora.md](11-lora.md).
+of weights and two small files, not two 1.2 GB checkpoints. See [12-lora.md](12-lora.md).
 
 ## Hyperparameters — and why they differ from pretraining
 
@@ -143,7 +143,7 @@ wrong.
 ### Stopping and resuming a fine-tune
 
 An SFT is hours, not days, but it is interrupted for the same reasons a pretraining run is,
-and it obeys the same `STOP` file ([doc 9](09-running-and-watching.md)). Stopping evaluates
+and it obeys the same `STOP` file ([doc 10](10-running-and-watching.md)). Stopping evaluates
 and saves first, so you always keep a usable model:
 
 ```bash
@@ -241,7 +241,7 @@ drifting far from the SFT model is penalised.
 With `--lora` the learning rate default changes to **5e-5** — a hundred times higher, for
 the same reason it changes for SFT: the adapter starts at exactly zero and has ~1% of the
 parameters, so a full-fine-tuning rate barely moves it. See
-[11-lora.md](11-lora.md#the-learning-rate-is-different-and-it-matters).
+[12-lora.md](12-lora.md#the-learning-rate-is-different-and-it-matters).
 
 ## The reference model is free under LoRA
 
@@ -437,7 +437,7 @@ python -m aksharallm.train.grpo \
 flowchart LR
     B[base] --> S[SFT] --> D[DPO]
     S --> G["GRPO<br/>(verifiable reward)"]
-    D --> G
+    D -.->|"only by calling<br/>the trainer directly"| G
     G --> M[code/math specialist]
 ```
 
@@ -446,12 +446,106 @@ sometimes, or every reward is zero). It can run instead of, or after, DPO. For o
 specialist it's the finisher: SFT teaches the *format*, GRPO optimises *correctness* against
 the tests.
 
+The dotted arrow is dotted for a concrete reason: **`scripts/stage.sh grpo` hardwires
+`--init` to `sft_best.pt`**, because that is the prerequisite it gates on. Chaining DPO into
+GRPO is legitimate, but the launcher will not do it — you pass the DPO checkpoint yourself:
+
+```bash
+python -m aksharallm.train.grpo --init checkpoints/small-code-dpo/dpo_best.pt \
+    --tokenizer data/blend/tokenizer.json --out-dir checkpoints/small-code-dpo-grpo \
+    --reward code --group-size 8 --lr 1e-6
+```
+
+That run is outside the launcher's world: no pid file in the shape `stop.sh` expects, no
+card in the portal's panel. It is a deliberate escape hatch, not the main line.
+
+---
+
+## Choosing between them: DPO or GRPO?
+
+The two parts above explain each method. This section is the decision, because in practice
+you run one of them and the choice is not a matter of taste.
+
+**Ask one question: can a program decide whether the answer is right?**
+
+```mermaid
+flowchart TD
+    Q{"can a program decide<br/>whether the answer is right?"}
+    Q -->|"yes — run the tests,<br/>check the number"| G["GRPO"]
+    Q -->|"no — tone, length,<br/>helpfulness, refusals"| D["DPO"]
+    G --> GN["the reward is <i>computed</i>:<br/>no dataset, no ranker,<br/>no ceiling from a human"]
+    D --> DN["the reward is <i>recorded</i>:<br/>needs pairs someone ranked,<br/>capped by their judgement"]
+
+    classDef q fill:#2d6cdf,stroke:#1a4a9e,color:#fff
+    classDef s fill:#e8f0fe,stroke:#2d6cdf,color:#1a1a1a
+    class Q q
+    class G,D,GN,DN s
+```
+
+| | **DPO** | **GRPO** |
+|---|---|---|
+| what supplies the signal | a dataset of ranked pairs | `infer/sandbox.py`, executing the output |
+| dataset needed | UltraFeedback / HelpSteer2 / Orca — a download | **none**; the tasks are built in |
+| prerequisite | `sft_best.pt` | `sft_best.pt` |
+| memory | ~2x SFT (frozen reference beside the policy) | ~1x, plus G completions in flight |
+| cost per step | 4 forward passes | sample G completions, **execute all G**, then a step |
+| learning rate | 5e-7 | 1e-6 |
+| headline metric | `acc`, 50% → 65–80% | `reward`, `solved%` |
+| the failure to watch for | `acc` > 90% — overfit, degenerate output | `reward` flat at 0 — nothing ever passed |
+| what it cannot do | teach correctness it was not shown | improve anything unverifiable |
+
+**The asymmetry worth internalising:** DPO's quality ceiling is whoever ranked the pairs.
+GRPO's ceiling is whether the model can *ever* stumble onto a passing answer — because a
+group where every completion scores the same produces zero advantage and no gradient. So
+DPO fails by being mediocre and GRPO fails by being silent, and those look nothing alike in
+the log. A DPO run that is going nowhere still shows a falling loss; a GRPO run that is
+going nowhere shows a flat zero.
+
+**For this project GRPO is the better first move.** The base model is an 85/15 prose/Python
+blend, the reward machinery already exists, and there is nothing to download. DPO's data is
+not on this machine yet.
+
+---
+
+## What the SFT loss does and does not tell you
+
+`small-code` finished pretraining at val **2.5552**. `small-code-sft` finished at val
+**1.4218**. The second number is not an improvement on the first — it is not on the same
+axis at all, and putting them in one table is the easiest mistake in this chapter:
+
+| | base run | SFT run |
+|---|---|---|
+| data | the 10B blend (85% prose / 15% Python) | SmolTalk conversations |
+| loss over | every token | **assistant tokens only** (the mask, above) |
+| what it measures | how well it predicts the internet | how well it predicts a helpful reply |
+
+Same trainer, same units, two different quantities. An SFT loss can only be compared with
+*another SFT loss on the same data* — across sessions of one run, or between two
+hyperparameter choices.
+
+So what *does* say whether SFT worked? Behaviour and damage, measured separately:
+
+```bash
+python -m aksharallm.eval domains small-code-sft                     # did Python survive?
+python -m aksharallm.eval small-code-sft --suite judge --label sft   # did the manners arrive?
+python -m aksharallm.eval small-code-sft --suite fast --label sft    # did anything break?
+```
+
+The first is the one people skip and the one that catches the real disaster: SmolTalk is
+entirely prose, so a too-high learning rate eats the Python ability while the blended
+average — 85% prose by construction — barely moves. The base model's split was prose
+**2.7696** / Python **1.2558**; that Python number is the one to watch.
+
+See [chapter 13 § evaluating a chat model](13-eval.md#evaluating-a-chat-model-what-changes-and-what-must-not)
+for how to read the rest, including why a benchmark that *does not move* is the correct
+result rather than a wasted run.
+
 ---
 
 ## The code, in reading order
 
 Three stages, three trainers, and they share the pretraining loop's shape — read
-[doc 4](04-pretraining.md)'s files first and only the differences below will be new.
+[doc 5](05-pretraining.md)'s files first and only the differences below will be new.
 
 **Part 1 — SFT**
 
@@ -476,7 +570,7 @@ Three stages, three trainers, and they share the pretraining loop's shape — re
 | 6 | [`aksharallm/train/grpo.py`](../aksharallm/train/grpo.py) | `group_advantages` first (the group is its own baseline), then `grpo_loss` — the PPO clip and the k3 KL estimator |
 | 7 | same file | `CodeReward` / `SubstringReward` behind the `RewardFn` protocol, then `sample_group` → `build_batch` → `main` |
 | 8 | [`aksharallm/infer/sandbox.py`](../aksharallm/infer/sandbox.py) | `run_program` — the reward itself. Read its docstring on what the isolation is and is not |
-| 9 | [`scripts/stage.sh`](../scripts/stage.sh) | the gate: which checkpoint each stage requires before it will start ([doc 9](09-running-and-watching.md)) |
+| 9 | [`scripts/stage.sh`](../scripts/stage.sh) | the gate: which checkpoint each stage requires before it will start ([doc 10](10-running-and-watching.md)) |
 
 What pins it: `tests/test_pipeline.py::test_sft_mask_alignment_matches_targets` and the
 `test_dpo_*` group (`test_dpo_loss_is_ln2_when_policy_equals_reference` is the one to read
@@ -485,4 +579,4 @@ first); `tests/test_grpo.py` for the advantages and the loss. Break the mask on 
 
 ---
 
-Next: [6. Inference →](06-inference.md)
+Next: [7. Inference →](07-inference.md)

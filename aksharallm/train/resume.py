@@ -39,8 +39,8 @@ means the first step of the next session is "the best so far" and overwrites the
 checkpoint with a worse model -- the one failure here that destroys work rather than
 wasting it.
 
-Read with: docs/05-posttraining.md -- the chapter this implements. See also
-docs/09-running-and-watching.md for the stop/resume loop from the outside.
+Read with: docs/06-posttraining.md -- the chapter this implements. See also
+docs/10-running-and-watching.md for the stop/resume loop from the outside.
 """
 
 from __future__ import annotations

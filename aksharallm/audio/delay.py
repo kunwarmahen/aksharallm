@@ -34,7 +34,7 @@ frame 5 alongside codebook 0 of frame 4 and reconstructs an interleaving of two 
 moments. The defence is that `undelay(delay(x)) == x` is asserted exactly, and that the
 padding is a distinct token id rather than a zero that could be mistaken for code 0.
 
-Read with: docs/20-audio.md -- the chapter this implements; it ends with the order to read
+Read with: docs/21-audio.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

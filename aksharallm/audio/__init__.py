@@ -28,7 +28,7 @@ Four pieces, strictly ordered because each needs the one before it:
 | 3 | `delay.py`, `lm.py` | the existing `Transformer` over codec tokens, with the delay pattern that flattens N codebooks into one stream. |
 | 4 | `tts.py`, `asr.py` | text -> audio tokens and audio -> text, reusing the SFT assistant-only loss mask with audio in the assistant's role. |
 
-Read with: docs/20-audio.md -- the chapter this implements; it ends with the order to read
+Read with: docs/21-audio.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

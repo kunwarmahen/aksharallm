@@ -16,7 +16,7 @@ smoothly while it generates plausible-sounding gibberish, because most of the en
 the high codebooks, which are nearly noise and cannot be predicted by anyone. Sample audio
 every `sample_every` steps and listen.
 
-Read with: docs/20-audio.md -- the chapter this implements; it ends with the order to read
+Read with: docs/21-audio.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 
@@ -87,7 +87,7 @@ def evaluate(model: AudioLM, ds: CodeDataset, pad_id: int, batch_size: int, batc
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(
         prog="python -m aksharallm.audio.train_lm",
-        description="Train the audio language model over codec tokens (docs/20).",
+        description="Train the audio language model over codec tokens (docs/21).",
     )
     p.add_argument("config")
     p.add_argument("-o", "--override", action="append", default=[], metavar="key=value")

@@ -14,7 +14,7 @@ with the same name carries on from where it stopped, walking new cells of the se
 
 Everything the portal's Synth tab does, it does by running these commands.
 
-Read with: docs/13-synthetic-data.md -- the chapter this implements; it ends with the order to
+Read with: docs/14-synthetic-data.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

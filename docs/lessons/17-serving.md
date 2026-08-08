@@ -1,7 +1,7 @@
 ---
 id: serving
 title: Thirty conversations, one pass over the weights
-doc: docs/16-serving.md
+doc: docs/17-serving.md
 files:
   - aksharallm/serve/paged.py
   - aksharallm/serve/batch.py

@@ -21,8 +21,8 @@ Example -- 85% FineWeb-Edu, 15% Python, 10B tokens total:
         --source fineweb-edu-10bt:0.85 --source codeparrot-python:0.15 \
         --val-tokens 10000000 --max-train-tokens 10000000000
 
-Read with: docs/01-data.md -- the chapter this implements; it ends with the order to read these
-files in. See also docs/07-scaling.md.
+Read with: docs/02-data.md -- the chapter this implements; it ends with the order to read these
+files in. See also docs/08-scaling.md.
 """
 
 from __future__ import annotations

@@ -14,7 +14,7 @@ the values on both sides, and the test's own docstring — which in this repo is
 sentence explaining *why* the thing being asserted matters. That is the lesson, so the last
 lines of it are handed back rather than a red X.
 
-Read with: docs/15-learning-path.md -- the chapter this implements; it ends with the order to
+Read with: docs/16-learning-path.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

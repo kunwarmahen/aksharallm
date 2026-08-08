@@ -22,7 +22,7 @@ Two things it is careful about:
   looking for the artifact, which only works when the job name matches the artifact name. A
   terminal job writes its own ending instead, so that guess is never needed.
 
-Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/13-eval.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 

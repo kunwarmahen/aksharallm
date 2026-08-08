@@ -216,7 +216,7 @@ def test_turning_the_aux_loss_off_is_possible_and_says_nothing_about_wisdom():
 def test_upcycled_model_is_exactly_the_dense_model_at_init(dense):
     """The whole argument for upcycling. Every expert is a copy, the router is zeros, the
     top-k weights renormalise to 1 — so step 0 reproduces the trained model exactly, the
-    same way LoRA's `B = 0` does (docs/11)."""
+    same way LoRA's `B = 0` does (docs/12)."""
     up = Transformer(cfg(n_experts=4, moe_top_k=2, moe_expert_d_ff=48)).eval()
     up.load_state_dict(upcycle_state_dict(dense.state_dict(), n_experts=4), strict=True)
 

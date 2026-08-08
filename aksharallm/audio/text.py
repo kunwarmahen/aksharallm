@@ -15,8 +15,8 @@ alphabet is a property of the data rather than a guess, and it is written into t
 checkpoint. A model whose text ids mean something different from the ones it was trained on
 does not fail — it politely transcribes everything as the wrong letters.
 
-Read with: docs/20-audio.md -- the chapter this implements; it ends with the order to read
-these files in. See also docs/02-tokenizer.md.
+Read with: docs/21-audio.md -- the chapter this implements; it ends with the order to read
+these files in. See also docs/03-tokenizer.md.
 """
 
 from __future__ import annotations

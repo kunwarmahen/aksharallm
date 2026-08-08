@@ -20,7 +20,7 @@ Results are the JSON files `python -m aksharallm.longctx` already writes into
 `logs/longctx/`, so the tab and the terminal read the same measurements and neither is the
 authority. Nothing here is recomputed for display.
 
-Read with: docs/18-long-context.md -- the chapter this implements; it ends with the order to
+Read with: docs/19-long-context.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

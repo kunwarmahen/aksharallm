@@ -50,7 +50,7 @@ wrong sound.
 Everything here is torch, on purpose: the codec's reconstruction loss is a multi-scale STFT
 and has to be differentiable and run on the GPU. `io.py` is the numpy half.
 
-Read with: docs/20-audio.md -- the chapter this implements; it ends with the order to read
+Read with: docs/21-audio.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

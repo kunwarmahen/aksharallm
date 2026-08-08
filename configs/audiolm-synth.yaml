@@ -11,7 +11,7 @@
 #
 # Watch for `<- uniform` on the step-0 line: ln(512) = 6.238 is what a model that knows
 # nothing scores, and seeing it is the cheapest check that the delay pattern, the target
-# masking and the eight heads are all wired correctly. See docs/20-audio.md.
+# masking and the eight heads are all wired correctly. See docs/21-audio.md.
 name: audiolm-synth
 
 audiolm:

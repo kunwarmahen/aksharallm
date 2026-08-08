@@ -10,7 +10,7 @@
         order. A <strong>codec</strong> turns a waveform into integers fifty times a second,
         and then the whole stack — pretraining, the KV cache, the sampler, quantization,
         LoRA — works on sound without being told.
-        <a href="#docs?doc=20-audio.md">Read chapter 20</a>.
+        <a href="#docs?doc=21-audio.md">Read chapter 20</a>.
       </p>
       <div class="au-flow" aria-hidden="true">
         <span class="au-step">waveform<small>16,000/s</small></span>
@@ -60,7 +60,7 @@ scripts/audio.sh codec-synth</pre>
         <strong>prefix of a code is a valid code</strong>: decode fewer codebooks and stop.
         Bitrate becomes a dial you turn at decode time rather than a property of the
         checkpoint. Play these in order against the original — this is the same trade
-        <a href="#docs?doc=10-quantization.md">quantization</a> makes silently in the weights,
+        <a href="#docs?doc=11-quantization.md">quantization</a> makes silently in the weights,
         except here you can hear it.
       </p>
       <div class="scroll-x">
@@ -73,7 +73,7 @@ scripts/audio.sh codec-synth</pre>
     <div class="panel">
       <h3>Is the codebook actually being used?</h3>
       <p class="panel-note">
-        Codebook collapse is <a href="#docs?doc=14-moe.md">router collapse</a> again: a
+        Codebook collapse is <a href="#docs?doc=15-moe.md">router collapse</a> again: a
         handful of entries win early, the rest never train, reconstruction plateaus —
         <strong>and the loss curve looks fine</strong>. This is the panel that sees it.
         Perplexity is the <em>effective</em> codebook size, so 40 out of 1,024 means 96% of

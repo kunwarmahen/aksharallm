@@ -15,10 +15,10 @@ Adapters
 holds the frozen base in 4 bits. Both change what is saved: an adapter file of a few MB
 next to the base, rather than a full checkpoint. Everything else in this file -- the loss
 mask, the schedule, the evaluation -- is identical either way, which is the point.
-See `aksharallm/lora/` and `docs/11-lora.md`.
+See `aksharallm/lora/` and `docs/12-lora.md`.
 
-Read with: docs/05-posttraining.md -- the chapter this implements; it ends with the order to
-read these files in. See also docs/11-lora.md.
+Read with: docs/06-posttraining.md -- the chapter this implements; it ends with the order to
+read these files in. See also docs/12-lora.md.
 """
 
 from __future__ import annotations

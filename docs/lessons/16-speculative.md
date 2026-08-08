@@ -1,7 +1,7 @@
 ---
 id: speculative
 title: Guessing ahead, and the arithmetic that makes it free
-doc: docs/06-inference.md
+doc: docs/07-inference.md
 files:
   - aksharallm/infer/speculative.py
 verify: tests/test_speculative.py::test_greedy_speculative_decoding_is_token_for_token_the_target_alone

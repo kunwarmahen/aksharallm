@@ -29,10 +29,10 @@ Two things fall out of it, and both are the reason to build it rather than pad a
 The honest caveat, stated where it cannot be missed: gathering scattered blocks into the
 dense `(B, H, S, D)` tensor that attention wants is a **copy**, done here in PyTorch. Real
 serving stacks write a custom kernel that reads the blocks in place. This implementation is
-about being correct and legible about the bookkeeping — see `docs/16-serving.md` for what
+about being correct and legible about the bookkeeping — see `docs/17-serving.md` for what
 that costs.
 
-Read with: docs/16-serving.md -- the chapter this implements; it ends with the order to read
+Read with: docs/17-serving.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

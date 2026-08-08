@@ -21,7 +21,7 @@ Design notes worth knowing before changing anything here:
   code, the other is your own checkpoint generating, and the page consumes them with the
   same few lines of JavaScript.
 
-Read with: docs/09-running-and-watching.md -- the chapter this implements; it ends with the
+Read with: docs/10-running-and-watching.md -- the chapter this implements; it ends with the
 order to read these files in.
 """
 
@@ -468,7 +468,7 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["eval", "audits"]:
             return self._json(self.evals.audits())
         # Two more measurements of the *data and the confidence* rather than the score:
-        # docs/12 § "Is the model's confidence honest?" and docs/01 § dedup.
+        # docs/13 § "Is the model's confidence honest?" and docs/02 § dedup.
         if parts == ["eval", "domains"]:
             return self._json(self.evals.domains())
         if parts == ["eval", "calibration"]:

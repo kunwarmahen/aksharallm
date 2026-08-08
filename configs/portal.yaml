@@ -88,7 +88,7 @@ judge:
   temperature: 0.0
 
   # Same trap as the explainer: a reasoning model spends `num_predict` on its thinking
-  # before answering, and the reply we need is a one-line JSON object. See docs/07.
+  # before answering, and the reply we need is a one-line JSON object. See docs/08.
   think: false
 
   num_ctx: 8192
@@ -126,7 +126,7 @@ synth:
   temperature: 0.9
 
   # Same trap as the other two sections: a reasoning model spends num_predict thinking and
-  # returns an empty answer. See docs/07.
+  # returns an empty answer. See docs/08.
   think: false
 
   num_ctx: 8192

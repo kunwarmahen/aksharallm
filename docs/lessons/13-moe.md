@@ -1,7 +1,7 @@
 ---
 id: moe
 title: More parameters than you compute with
-doc: docs/14-moe.md
+doc: docs/15-moe.md
 files:
   - aksharallm/model/moe.py
 verify: tests/test_moe.py::test_upcycled_model_is_exactly_the_dense_model_at_init

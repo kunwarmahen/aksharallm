@@ -51,7 +51,7 @@ model at int4 per-channel, 800 steps, against an RTN baseline of +0.156 perplexi
 That non-monotonic shape is the thing to internalise. QAT is not "more training is
 better" -- it is a search for a nearby basin, and a large step leaves the neighbourhood.
 
-Read with: docs/10-quantization.md -- the chapter this implements; it ends with the order to
+Read with: docs/11-quantization.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

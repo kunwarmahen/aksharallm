@@ -31,7 +31,7 @@ Each `docs/lessons/*.md` opens with a YAML block:
 ---
 id: kv-cache                       # stable, used in URLs and progress.json
 title: The KV cache, and the mask that ruins it
-doc: docs/06-inference.md          # the deep dive to read first
+doc: docs/07-inference.md          # the deep dive to read first
 files:                             # what to open in the Code tab
   - aksharallm/model/transformer.py
 verify: tests/test_model.py::test_kv_cache_matches_full_forward
@@ -41,7 +41,7 @@ summary: One sentence for the list.
 ---
 ```
 
-Read with: docs/15-learning-path.md -- the chapter this implements; it ends with the order to
+Read with: docs/16-learning-path.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 
@@ -144,7 +144,7 @@ def parse(path: Path, order: int = 0) -> Lesson:
 def load_all(root: Path | None = None) -> list[Lesson]:
     """Every lesson, in filename order.
 
-    Filename order *is* the curriculum order — `01-data.md`, `02-tokenizer.md` — because a
+    Filename order *is* the curriculum order — `02-data.md`, `03-tokenizer.md` — because a
     reading order that lives in a separate index file is an index file that goes stale. The
     prereq graph is the real constraint; the numbering is the suggestion.
     """

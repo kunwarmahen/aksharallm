@@ -49,7 +49,7 @@ Four things that make this lie, all reported rather than hidden
    so the token stream can be split back. A corpus without them would look like one enormous
    document, so that is checked rather than assumed.
 
-Read with: docs/01-data.md -- the chapter this implements; it ends with the order to read
+Read with: docs/02-data.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

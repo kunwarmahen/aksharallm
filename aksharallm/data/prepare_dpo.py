@@ -15,7 +15,7 @@ Stored padded (not packed) because a DPO example is an indivisible triple: the c
 and rejected responses must be scored against the same prompt, so we can't let a block
 boundary cut through one.
 
-Read with: docs/05-posttraining.md -- the chapter this implements; it ends with the order to
+Read with: docs/06-posttraining.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

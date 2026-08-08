@@ -35,9 +35,9 @@ Modules:
               quantized base
     cli       `python -m aksharallm.lora`
 
-The deep dive is `docs/11-lora.md`.
+The deep dive is `docs/12-lora.md`.
 
-Read with: docs/11-lora.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/12-lora.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 

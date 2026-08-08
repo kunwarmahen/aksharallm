@@ -14,7 +14,7 @@ newcomer should meet first: it applies the *forward* process to text they typed 
 what the model is asked to reconstruct. The whole objective is legible before anything is
 generated, which is the same argument the Finetune tab's memory-budget table makes.
 
-Read with: docs/19-diffusion.md -- the chapter this implements; it ends with the order to read
+Read with: docs/20-diffusion.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 
@@ -55,7 +55,7 @@ class Diffusion:
                 f"{loaded.info.rel} is an autoregressive checkpoint — causal attention and no "
                 "[MASK] token, so it has never seen a masked sequence and unmasking it would "
                 "return noise. Train configs/tiny-diffusion.yaml (the Dashboard's Start "
-                "button) and come back. See docs/19.")
+                "button) and come back. See docs/20.")
         return loaded
 
     def _cells(self, loaded, ids, mask_id: int) -> list:

@@ -17,7 +17,7 @@ The portal's **Context** tab drives the same functions. This exists so the numbe
 available over ssh, and because `sweep` is the one command that answers the question the
 whole chapter is about.
 
-Read with: docs/18-long-context.md -- the chapter this implements; it ends with the order to
+Read with: docs/19-long-context.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 
@@ -244,7 +244,7 @@ def cmd_needle(args) -> int:
     print(f"\noverall {acc:.1%}" + (f" ± {se:.1%}" if se else "")
           + f"  (chance {grid['chance']:.0%})")
     if acc is not None and se and acc - 2 * se <= grid["chance"]:
-        print("NOT distinguishable from chance — see docs/18 on why that is still a result.")
+        print("NOT distinguishable from chance — see docs/19 on why that is still a result.")
     print(f"written to {_write(args, 'needle', grid)}")
     return 0
 

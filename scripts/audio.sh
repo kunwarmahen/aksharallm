@@ -7,7 +7,7 @@
 # drive it without knowing the model is not a transformer over text.
 #
 #   scripts/audio.sh codec-synth      # the codec on synthetic babble (minutes, no download)
-#   scripts/audio.sh codec-lj         # the codec on LJSpeech (docs/20)
+#   scripts/audio.sh codec-lj         # the codec on LJSpeech (docs/21)
 #   scripts/audio.sh audiolm-synth    # the audio LM over a trained codec's tokens
 #
 # Env knobs (same names and meanings as phase2.sh):

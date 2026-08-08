@@ -1,4 +1,4 @@
-# 8. Troubleshooting
+# 9. Troubleshooting
 
 ## Quick diagnosis
 
@@ -101,7 +101,7 @@ memory per micro-batch as pretraining — but they take their batch size from `s
 defaults (`16 × 4`), not from `configs/<run>.yaml`. A model whose pretraining you tuned to
 fit will still OOM under SFT if you never set it. Use `BS=` / `ACCUM=` on
 `scripts/stage.sh` and keep their product constant; see
-[doc 5](05-posttraining.md#hyperparameters--and-why-they-differ-from-pretraining).
+[doc 6](06-posttraining.md#hyperparameters--and-why-they-differ-from-pretraining).
 
 ### Memory grows over time
 
@@ -362,4 +362,4 @@ single most confusing failure on this page.
 
 ---
 
-Next: [9. Running and watching it →](09-running-and-watching.md)
+Next: [10. Running and watching it →](10-running-and-watching.md)

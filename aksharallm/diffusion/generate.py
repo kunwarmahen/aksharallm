@@ -33,7 +33,7 @@ and is noticeably worse, which is the point of offering it.
 positions are still masked. Nothing is ever un-committed, so this is equivalent to the
 "remask the least confident" formulation in the papers, with the bookkeeping done once.
 
-Read with: docs/19-diffusion.md -- the chapter this implements; it ends with the order to read
+Read with: docs/20-diffusion.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

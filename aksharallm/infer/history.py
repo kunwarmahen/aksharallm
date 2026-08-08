@@ -21,7 +21,7 @@ Format and conventions follow `checkpoints/<run>/train_log.jsonl` — one JSON o
 line, appended, never rewritten in place, unparseable lines skipped on read — so the same
 habits (and `tail -f`) work on both.
 
-Read with: docs/06-inference.md -- the chapter this implements; it ends with the order to read
+Read with: docs/07-inference.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

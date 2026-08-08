@@ -1,4 +1,4 @@
-# 3. The model
+# 4. The model
 
 All of it is in [`aksharallm/model/transformer.py`](../aksharallm/model/transformer.py), about
 300 lines. This doc walks through it.
@@ -174,7 +174,7 @@ model:
 The portal's **Context** tab has a panel for this — the explanation above, the measured
 numbers, and a button that reproduces the benchmark on your own card. It sits there rather
 than on a tab of its own because it is the other half of the same question:
-[doc 18](18-long-context.md) is about how far the model can read, and this is what reading
+[doc 19](19-long-context.md) is about how far the model can read, and this is what reading
 that far costs.
 
 ### The one idea: online softmax
@@ -299,7 +299,7 @@ Two things the sweep taught that were not obvious:
 integers rather than as a mask, which is the concrete payoff for owning it: the equivalent
 bool tensor is 64 MB at T=8192, and long context is exactly where that matters. The kernel
 still *walks* the skipped key blocks and masks them rather than never loading them, so today
-a window costs no memory and saves no time — see [doc 18](18-long-context.md).
+a window costs no memory and saves no time — see [doc 19](19-long-context.md).
 
 ---
 
@@ -408,7 +408,7 @@ That last sentence is why this is the one part of the architecture worth replaci
 **mixture of experts** swaps this single FFN for N of them plus a router, and sends each
 token to only the top-k — more parameters, the same compute per token. It changes exactly
 one line of `Block.__init__` and nothing else about attention, RoPE, the norms or the
-residual path. See [doc 14](14-moe.md).
+residual path. See [doc 15](15-moe.md).
 
 ---
 
@@ -507,14 +507,14 @@ data flow:
 | 1 | [`aksharallm/config.py`](../aksharallm/config.py) | `ModelConfig` — every dimension in the table above, plus `__post_init__`, where `d_ff` gets rounded and `head_dim` is derived |
 | 2 | [`transformer.py`](../aksharallm/model/transformer.py) → `Transformer.forward` | **start here.** Embedding → blocks → final norm → `lm_head`, and the `if targets is None` branch that projects only the last position. Fifteen lines that name everything below |
 | 3 | `Block.forward` | the residual stream in two lines: `x = x + attn(norm(x))`, `x = x + ffn(norm(x))`. Pre-norm — the belt itself is never normalised |
-| 4 | `Attention.forward` | q/k/v projections, `apply_rope`, the cache update, then `F.scaled_dot_product_attention` — or our own kernel, if `attn_impl` says so. The line to read twice is `is_causal = self.causal and attn_mask is None and T > 1`; `self.causal` is False only for the masked diffusion model of [doc 19](19-diffusion.md), and it is the entire architectural difference between the two paradigms |
+| 4 | `Attention.forward` | q/k/v projections, `apply_rope`, the cache update, then `F.scaled_dot_product_attention` — or our own kernel, if `attn_impl` says so. The line to read twice is `is_causal = self.causal and attn_mask is None and T > 1`; `self.causal` is False only for the masked diffusion model of [doc 20](20-diffusion.md), and it is the entire architectural difference between the two paradigms |
 | 5 | `build_rope_cache` + `apply_rope` + `_rotate_half` | the geometric frequencies, and the rotation whose dot product depends only on the *distance* |
 | 6 | `RMSNorm.forward` · `SwiGLU.forward` | four lines each. Note the fp32 upcast for the mean-of-squares, and the gate `silu(w1 x) * (w3 x)` |
-| 7 | `KVCache` | preallocated, `update` appends and returns the live prefix. Read it again with [doc 6](06-inference.md) |
+| 7 | `KVCache` | preallocated, `update` appends and returns the live prefix. Read it again with [doc 7](07-inference.md) |
 | 8 | `Transformer._init_weights` · `configure_optimizers` · `num_params` · `estimate_mfu` | the `0.02/√(2·n_layers)` scaling for residual writers, the decay/no-decay split, and where the MFU number in the logs comes from |
-| 9 | [`aksharallm/model/moe.py`](../aksharallm/model/moe.py) | optional — the one component that replaces step 6's FFN. [doc 14](14-moe.md) |
+| 9 | [`aksharallm/model/moe.py`](../aksharallm/model/moe.py) | optional — the one component that replaces step 6's FFN. [doc 15](15-moe.md) |
 | 10 | [`aksharallm/model/flash.py`](../aksharallm/model/flash.py) | optional — step 4's attention, written out in Triton instead of called. Read the module docstring first (it is the derivation), then `_fwd_kernel`'s four-line online-softmax rescale, then `_bwd_kv_kernel` / `_bwd_q_kernel` and why there are two of them |
-| 11 | [`aksharallm/model/rope.py`](../aksharallm/model/rope.py) | optional — step 5's frequency ladder, and the four ways of stretching it past the trained window. [doc 18](18-long-context.md) |
+| 11 | [`aksharallm/model/rope.py`](../aksharallm/model/rope.py) | optional — step 5's frequency ladder, and the four ways of stretching it past the trained window. [doc 19](19-long-context.md) |
 
 What pins it: `tests/test_model.py` is the shortest honest summary of this chapter —
 `test_causality`, `test_rope_preserves_norm_and_relative_position`, `test_weight_tying`,
@@ -527,4 +527,4 @@ correctness mutant at all, only a slower kernel.
 
 ---
 
-Next: [4. Pretraining →](04-pretraining.md)
+Next: [5. Pretraining →](05-pretraining.md)

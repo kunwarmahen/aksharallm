@@ -23,7 +23,7 @@ Reading a checkpoint the trainer is actively writing is safe, and deliberately s
 You either see the whole previous checkpoint or the whole new one, never a half-written
 file — so the playground can watch a live run improve simply by re-reading `ckpt_last.pt`.
 
-Read with: docs/06-inference.md -- the chapter this implements; it ends with the order to read
+Read with: docs/07-inference.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 
@@ -147,7 +147,7 @@ def _arch_str(mcfg: dict | None) -> str | None:
         return None
     # An extended checkpoint's ctx is not the window it was trained on, and every place
     # this string is shown (the run list, the report, the checkpoint picker) would otherwise
-    # claim it was. See docs/18.
+    # claim it was. See docs/19.
     scaling = _mapping(mcfg.get("rope_scaling"))
     ctx = str(mcfg.get("max_seq_len"))
     if scaling.get("type") not in (None, "none") and scaling.get("original_max_seq_len"):
@@ -157,7 +157,7 @@ def _arch_str(mcfg: dict | None) -> str | None:
         ctx += f" win={mcfg['attn_window']}"
     if not mcfg.get("causal", True):
         # Said first, because it changes what every other number in this string means: this
-        # is not a decoder-only model and cannot be sampled like one. See docs/19.
+        # is not a decoder-only model and cannot be sampled like one. See docs/20.
         ctx += " bidirectional"
     return (f"d={mcfg.get('d_model')} L={mcfg.get('n_layers')} "
             f"H={mcfg.get('n_heads')} KV={mcfg.get('n_kv_heads')} "
@@ -222,13 +222,13 @@ class Checkpoint:
     #: the training curve used, without loading the weights to find out which file that was.
     val_bin: str | None = None
     seq_len: int | None = None
-    #: Long context (docs/18). `max_seq_len` above is what the model can *address*; once a
+    #: Long context (docs/19). `max_seq_len` above is what the model can *address*; once a
     #: checkpoint has been extended that is no longer the window its weights were trained
     #: on, and `rope_scaling.original_max_seq_len` is the only record of the difference.
     rope_scaling: dict | None = None
     attn_window: int | None = None
     attn_sinks: int = 0
-    #: Masked diffusion (docs/19): bidirectional attention plus a `[MASK]` id. Read from the
+    #: Masked diffusion (docs/20): bidirectional attention plus a `[MASK]` id. Read from the
     #: header so a picker can grey out the checkpoints a tab cannot use without opening a
     #: 1.2 GB file — and so nothing ever runs an autoregressive sampler over one of these,
     #: which does not fail, it just returns fluent nonsense.
@@ -467,7 +467,7 @@ class CheckpointStore:
                "rope_scaling": _mapping(mcfg.get("rope_scaling")) or None,
                "attn_window": mcfg.get("attn_window"),
                "attn_sinks": mcfg.get("attn_sinks") or 0,
-               # Defaulted rather than required: every checkpoint written before docs/19
+               # Defaulted rather than required: every checkpoint written before docs/20
                # existed has neither key, and all of them are autoregressive.
                "causal": bool(mcfg.get("causal", True)),
                "mask_token_id": mcfg.get("mask_token_id")},

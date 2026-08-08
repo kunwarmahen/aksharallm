@@ -14,7 +14,7 @@
 #   this     8 experts x 512, k=2  28.3M FFN params    7.1M active    35.0M total
 #
 # Watch the `experts` field on the step line, not just the loss: a collapsed router is a
-# model that is quietly a bit worse, and nothing in the loss curve says so. See docs/14.
+# model that is quietly a bit worse, and nothing in the loss curve says so. See docs/15.
 #
 #   scripts/experiment.sh tiny-moe        (or the portal's Start button)
 

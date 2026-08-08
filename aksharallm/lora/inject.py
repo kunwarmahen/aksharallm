@@ -17,7 +17,7 @@ Our transformer's linear layers, by dotted name:
 lookup too. That is a different and much less predictable intervention than adapting a
 projection, and it is not what anyone means by "LoRA on the head".
 
-Read with: docs/11-lora.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/12-lora.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 
@@ -164,7 +164,7 @@ def apply_lora(model: nn.Module, config: LoRAConfig) -> LoRAReport:
             report.skipped.append(
                 (f"{name}.experts",
                  f"{mod.n_experts} stacked expert tensors — LoRA reaches nn.Linear layers, "
-                 "so this fine-tune adapts attention only (see docs/14)"))
+                 "so this fine-tune adapts attention only (see docs/15)"))
             report.skipped.append(
                 (f"{name}.router", "the router chooses which expert runs; adapting it "
                                    "changes routing, not a projection"))

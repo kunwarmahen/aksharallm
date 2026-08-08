@@ -40,8 +40,8 @@ async function renderDocDiagrams(container) {
   try { await mermaid.run({ nodes }); } catch { /* a bad diagram just shows its source */ }
 }
 
-/** Resolve a doc-relative link ('02-tokenizer.md' from within 'docs/01-data.md') to a
- *  repo-relative path ('docs/02-tokenizer.md'), handling ./ and ../ and a #fragment. */
+/** Resolve a doc-relative link ('03-tokenizer.md' from within 'docs/02-data.md') to a
+ *  repo-relative path ('docs/03-tokenizer.md'), handling ./ and ../ and a #fragment. */
 function resolveDocPath(base, href) {
   const target = href.split('#')[0];
   const parts = base.includes('/') ? base.slice(0, base.lastIndexOf('/')).split('/') : [];
@@ -78,7 +78,7 @@ async function loadDoc(path) {
   }
 }
 
-/* The Learn tab hands off here: "read docs/06-inference.md" should land on that page, not
+/* The Learn tab hands off here: "read docs/07-inference.md" should land on that page, not
  * on whatever was open last. An event rather than an import, so the two tabs stay strangers
  * — docs.js does not need to know the learning path exists. */
 window.addEventListener('open-doc', async (e) => {

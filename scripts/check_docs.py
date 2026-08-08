@@ -14,7 +14,7 @@ across sixteen skills -- every one a `../docs/...` written from the wrong depth 
     python scripts/check_docs.py            # everything
     python scripts/check_docs.py --fast     # skip pytest, just the prose checks
 
-Read with: docs/09-running-and-watching.md -- the chapter on running things here.
+Read with: docs/10-running-and-watching.md -- the chapter on running things here.
 """
 
 from __future__ import annotations

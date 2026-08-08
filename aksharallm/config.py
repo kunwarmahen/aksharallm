@@ -1,7 +1,7 @@
 """Config objects. Everything that differs between runs lives in a YAML file.
 
-Read with: docs/04-pretraining.md -- the chapter this implements; it ends with the order to
-read these files in. See also docs/03-model.md.
+Read with: docs/05-pretraining.md -- the chapter this implements; it ends with the order to
+read these files in. See also docs/04-model.md.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ class ModelConfig:
     #: falls back to SDPA for any shape it does not handle (see `flash.usable`).
     attn_impl: str = "sdpa"
 
-    # ---- which direction attention runs (see docs/19) ----------------------------------
+    # ---- which direction attention runs (see docs/20) ----------------------------------
     #: `True` is a decoder-only language model: token *n* may look at 1..n and no further,
     #: which is what makes next-token prediction a valid objective at every position at once.
     #: `False` lets every position see every other one — the setting a **masked diffusion**
@@ -54,7 +54,7 @@ class ModelConfig:
     #: mask id was — decoding it as an ordinary token would print a random word.
     mask_token_id: int | None = None
 
-    # ---- long context (see docs/18) ----------------------------------------------------
+    # ---- long context (see docs/19) ----------------------------------------------------
     #: How to stretch RoPE past the window the weights were trained on. `type: none` is the
     #: identity, so a model that has never heard of this is unaffected. Written as a nested
     #: block in YAML:
@@ -66,7 +66,7 @@ class ModelConfig:
     attn_window: int | None = None
     #: "Attention sinks" — the first N tokens stay visible no matter how far the window has
     #: slid. Costs four keys and is the difference between a sliding window that works and
-    #: one whose perplexity explodes; see docs/18 for why the model needs somewhere to park
+    #: one whose perplexity explodes; see docs/19 for why the model needs somewhere to park
     #: attention it does not want to spend.
     attn_sinks: int = 0
 
@@ -117,7 +117,7 @@ class ModelConfig:
             # something that looks like an answer.
             if self.attn_window is not None:
                 raise ValueError("attn_window is a causal idea; it does not apply with "
-                                 "causal: false (see docs/19)")
+                                 "causal: false (see docs/20)")
             if self.mask_token_id is None:
                 raise ValueError("causal: false with no mask_token_id — a bidirectional "
                                  "model has no objective to train on. Set "
@@ -226,7 +226,7 @@ class TrainConfig:
 class DiffusionConfig:
     """Knobs for the masked-diffusion objective. Ignored unless `model.causal: false`.
 
-    See docs/19. The defaults are the MDLM/LLaDA formulation with nothing tuned, which is
+    See docs/20. The defaults are the MDLM/LLaDA formulation with nothing tuned, which is
     the point: there is no noise schedule to get right — "noise" for discrete tokens just
     means "replaced by [MASK]", and the mask rate is drawn uniformly.
     """

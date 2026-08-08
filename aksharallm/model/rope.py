@@ -67,12 +67,12 @@ What none of them do
 --------------------
 **They do not add information.** A model that never saw a fact 4,000 tokens back still has
 to learn to *use* one; scaling only makes the positions legible. Published results extend by
-4-8x without fine-tuning and further with a short one, and `docs/18-long-context.md` has our
+4-8x without fine-tuning and further with a short one, and `docs/19-long-context.md` has our
 own measured curves — including the part where the naive path falls off a cliff and where
 each method stops helping.
 
-Read with: docs/18-long-context.md -- the chapter this implements; it ends with the order to
-read these files in. See also docs/03-model.md.
+Read with: docs/19-long-context.md -- the chapter this implements; it ends with the order to
+read these files in. See also docs/04-model.md.
 """
 
 from __future__ import annotations

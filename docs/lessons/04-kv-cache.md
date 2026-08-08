@@ -1,7 +1,7 @@
 ---
 id: kv-cache
 title: The KV cache, and the one-line bug that ruins it
-doc: docs/06-inference.md
+doc: docs/07-inference.md
 files:
   - aksharallm/model/transformer.py
   - aksharallm/infer/generate.py

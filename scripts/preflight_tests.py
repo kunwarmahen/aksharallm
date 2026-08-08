@@ -18,7 +18,7 @@ Same suite, same gate, same exit code; it just says what it is doing.
 Quiet when green, loud when red: on failure the raw pytest output is replayed in full, so
 nothing is hidden by the summarising. The tracebacks are the reason you ran it.
 
-Read with: docs/09-running-and-watching.md -- the chapter this implements; it ends with the
+Read with: docs/10-running-and-watching.md -- the chapter this implements; it ends with the
 order to read these files in.
 """
 

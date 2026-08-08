@@ -13,8 +13,8 @@ None of that machinery knows what the loss means, so the loss is a swappable obj
 `ARObjective` and `objective_for` below. The second implementation is masked diffusion
 (`aksharallm/diffusion/objective.py`), and it reuses every line of this loop.
 
-Read with: docs/04-pretraining.md -- the chapter this implements; it ends with the order to read
-these files in. See also docs/19-diffusion.md.
+Read with: docs/05-pretraining.md -- the chapter this implements; it ends with the order to read
+these files in. See also docs/20-diffusion.md.
 """
 
 from __future__ import annotations

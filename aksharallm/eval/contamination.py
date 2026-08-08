@@ -50,7 +50,7 @@ drop the contaminated items, and see whether the number moves. A suite that is 8
 scores the same either way is fine. One that is 3% dirty and gains four points on those
 three percent is telling you something.
 
-Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read
+Read with: docs/13-eval.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

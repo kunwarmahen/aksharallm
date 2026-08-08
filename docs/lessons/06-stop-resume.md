@@ -1,7 +1,7 @@
 ---
 id: stop-resume
 title: Stopping a six-day run without losing it
-doc: docs/09-running-and-watching.md
+doc: docs/10-running-and-watching.md
 files:
   - aksharallm/train/stopfile.py
   - scripts/stop.sh

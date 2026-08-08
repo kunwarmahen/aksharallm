@@ -14,7 +14,7 @@ given, throws the phase and 433 of the 513 frequency bins away, reconstructs a w
 what is left, and writes it beside the original. Play the two files back to back and the
 question "what does the front end cost?" stops being theoretical.
 
-Read with: docs/20-audio.md -- the chapter this implements; it ends with the order to read
+Read with: docs/21-audio.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 
@@ -271,7 +271,7 @@ def cmd_codec_reconstruct(args) -> int:
         conv = spectral_convergence(magnitude(x[: y.numel()], mel), magnitude(y, mel))
         print(f"{n:>6} {kbps:>7.2f} {conv:>9.4f} {mcd(x, y, mel):>8.2f}  {path.name}")
     print("\nPlay them in order against original.wav. The bitrate/quality trade is the")
-    print("same one docs/10-quantization.md makes silently in the weights — here you hear it.")
+    print("same one docs/11-quantization.md makes silently in the weights — here you hear it.")
     return 0
 
 

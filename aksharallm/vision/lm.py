@@ -16,8 +16,8 @@ flowchart LR
 ```
 
 **The loss is on the text only**, which by now is the third time that sentence appears in
-this repo: it is the SFT assistant-only mask (`docs/05`), it is how TTS and ASR work
-(`docs/20`), and it is this. The image is the prompt; the caption is the response.
+this repo: it is the SFT assistant-only mask (`docs/06`), it is how TTS and ASR work
+(`docs/21`), and it is this. The image is the prompt; the caption is the response.
 
 **Stage one trains the projector and nothing else.** The language model is frozen, the vision
 encoder can be too, and what is learned is a two-layer map between two spaces that both
@@ -36,8 +36,8 @@ bit-identical after a training step.
 the generation prompt all depend on exactly how many vectors the image became. That number
 is `VisionTower.n_image_tokens` and nothing recomputes it.
 
-Read with: docs/21-vision.md -- the chapter this implements; it ends with the order to read
-these files in. See also docs/05-posttraining.md.
+Read with: docs/22-vision.md -- the chapter this implements; it ends with the order to read
+these files in. See also docs/06-posttraining.md.
 """
 
 from __future__ import annotations

@@ -10,7 +10,7 @@ hand-written SVG charts in the browser. The portal is a thin skin over the same
 `scripts/phase2.sh` and `scripts/stop.sh` you would run by hand, so there is exactly one
 code path for starting and stopping a run.
 
-Read with: docs/09-running-and-watching.md -- the chapter this implements; it ends with the
+Read with: docs/10-running-and-watching.md -- the chapter this implements; it ends with the
 order to read these files in.
 """
 

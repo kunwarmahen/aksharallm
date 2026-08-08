@@ -54,7 +54,7 @@ chose it. No token is dropped (there is no capacity factor), and the cost is k/N
 masked version. Expect MFU to fall against the dense model anyway — a sort and N smaller
 matmuls use the card less well than one big one, which is the honest cost of the trade.
 
-Read with: docs/14-moe.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/15-moe.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 
@@ -118,7 +118,7 @@ class Router(nn.Module):
     it is what makes sparse upcycling an identity at initialisation. If every expert is a
     copy of the same trained FFN and the k weights sum to 1, the MoE block computes exactly
     what the dense block computed — so training starts from the trained model rather than
-    from a perturbation of it, which is the same lesson `docs/11` records about LoRA's
+    from a perturbation of it, which is the same lesson `docs/12` records about LoRA's
     `B = 0`.
     """
 
@@ -287,7 +287,7 @@ def upcycle_state_dict(dense: dict, n_experts: int, jitter: float = 0.0,
     give a uniform softmax; the top-k weights are renormalised to sum to 1; every expert
     computes the same function; so the block's output is exactly the dense block's output.
     Training then differentiates the experts from a model that already works, rather than
-    from a perturbation of one — the same reason LoRA initialises `B = 0` (docs/11).
+    from a perturbation of one — the same reason LoRA initialises `B = 0` (docs/12).
 
     `jitter` breaks the tie if you want it broken: identical experts receive identical
     gradients *only* while the router is uniform, and it is not uniform after one step, so

@@ -1,4 +1,4 @@
-# The whole journey, end to end
+# 1. The whole journey, end to end
 
 Every other chapter explains one piece. This one is the map: **what order to do things in,
 what each step is actually for, and how to tell it worked** — written for someone who has
@@ -93,8 +93,8 @@ scripts/phase1.sh
 
 That downloads TinyStories, trains a tokenizer, tokenizes the corpus, pretrains a 13.8M
 model to a validation loss around 1.47, and generates a sample story. About 30 minutes on a
-3090. The chapters behind it are [data](01-data.md), [the tokenizer](02-tokenizer.md),
-[the model](03-model.md) and [pretraining](04-pretraining.md).
+3090. The chapters behind it are [data](02-data.md), [the tokenizer](03-tokenizer.md),
+[the model](04-model.md) and [pretraining](05-pretraining.md).
 
 If the story it prints is grammatical nonsense about a little girl and a ball, everything
 works. That is what a 13.8M model sounds like and it is the correct result.
@@ -103,15 +103,21 @@ works. That is what a 13.8M model sounds like and it is the correct result.
 
 ## Route 1 — the main line
 
-This is the route that produces something you can actually talk to. Four stages, in order,
+This is the route that produces something you can actually talk to. Six stages, in order,
 each gated on the one before.
 
 ```mermaid
 flowchart LR
-    D["1 · data"] --> P["2 · pretrain"] --> E["3 · evaluate"] --> S["4 · SFT"] --> A["5 · align"]
+    D["1 · data"] --> P["2 · pretrain"] --> E["3 · evaluate"] --> S["4 · SFT"]
+    S --> A["5 · align"] --> E2["6 · evaluate<br/>the chat model"]
     classDef s fill:#2d6cdf,stroke:#1a4a9e,color:#fff
-    class D,P,E,S,A s
+    class D,P,E,S,A,E2 s
 ```
+
+**Evaluation appears twice on purpose.** Stage 3 records what the base model knew, and it is
+the last moment that is measurable. Stage 6 asks a different question — not "what does it
+know" but "did post-training change its behaviour without damaging what stage 3 recorded".
+Neither one substitutes for the other, and § 6 below says which measurements belong to which.
 
 ### 1 · Data — turn text into numbers
 
@@ -129,14 +135,14 @@ python -m aksharallm.data.prepare_blend --out-dir data/blend \
 
 **How you know it worked:** `data/blend/train.bin` exists and is tens of gigabytes, and
 `val.manifest.json` says which source each part of the validation split came from. That
-manifest is what makes the per-domain loss split in [chapter 12](12-eval.md) possible later.
+manifest is what makes the per-domain loss split in [chapter 13](13-eval.md) possible later.
 
 **Worth doing once:** `python -m aksharallm.data.dedup data/blend/fineweb-edu-10bt.bin`
 measures how much of the corpus is the same thing twice. On this project's blend, FineWeb-Edu was 0.014% duplicated and
 CodeParrot-Python 8.04% — a two-hundred-fold difference that changes how you read the
 Python-vs-prose loss gap.
 
-📖 [chapter 1 — data](01-data.md) · [chapter 2 — the tokenizer](02-tokenizer.md)
+📖 [chapter 2 — data](02-data.md) · [chapter 3 — the tokenizer](03-tokenizer.md)
 
 ### 2 · Pretrain — the long one
 
@@ -159,9 +165,9 @@ you stop when the curve flattens or the budget runs out.
 **It is safe to stop and resume.** Every session picks up from `ckpt_last.pt` with the data
 order restored, so a six-day run is really forty evenings. Stopping is not damage.
 
-📖 [chapter 4 — pretraining](04-pretraining.md) ·
-[chapter 9 — running and watching](09-running-and-watching.md) ·
-[chapter 8 — when it goes wrong](08-troubleshooting.md)
+📖 [chapter 5 — pretraining](05-pretraining.md) ·
+[chapter 10 — running and watching](10-running-and-watching.md) ·
+[chapter 9 — when it goes wrong](09-troubleshooting.md)
 
 ### 3 · Evaluate — find out what you have
 
@@ -188,7 +194,7 @@ in the training data. A score you have not checked is not a measurement. It stre
 or 2B tokens) for a quick look, and labels the result **"Partial scan — these are lower
 bounds"**, because contamination you did not read is invisible rather than absent.
 
-📖 [chapter 12 — evaluation](12-eval.md)
+📖 [chapter 13 — evaluation](13-eval.md)
 
 ### 4 · SFT — teach it to answer
 
@@ -204,7 +210,7 @@ exists and says so rather than failing later.
 
 SFT trains every weight, so it needs as much memory per micro-batch as pretraining did.
 The defaults suit the tiny models; on a bigger one, lower `BS` (and raise `ACCUM` to match)
-— see [the stage knobs](09-running-and-watching.md#when-a-stage-dies-and-the-panel-says-ready).
+— see [the stage knobs](10-running-and-watching.md#when-a-stage-dies-and-the-panel-says-ready).
 
 Like a base run, it stops and resumes: `scripts/stop.sh small-code-sft` saves and exits,
 and running the stage again continues from where it stopped. It is also a run in its own
@@ -218,18 +224,157 @@ return to "ready".
 
 ### 5 · Align — teach it which answer is better
 
-SFT teaches the model to answer. Alignment teaches it which of two answers is preferable.
+SFT teaches the model to answer. Alignment teaches it which of two answers is preferable —
+and there are two ways to say "preferable", which is the whole decision here.
 
-```bash
-scripts/stage.sh dpo  small-code     # from preference pairs
-scripts/stage.sh grpo small-code     # RL against the code sandbox — for verifiable tasks
+#### Which one: DPO or GRPO?
+
+They are **alternatives, not a sequence.** Both are gated on the same SFT checkpoint and
+neither needs the other, so the ordinary case is: pick one, run it, compare it against the
+SFT model. Chaining them (manners *first*, then correctness) is a real thing the method
+allows — but `scripts/stage.sh grpo` hardwires `--init` to `sft_best.pt`, so it is not what
+the launcher does. Chaining means calling the trainer yourself; see
+[chapter 6 § where this sits](06-posttraining.md#where-this-sits).
+
+```mermaid
+flowchart TD
+    Q{"can a program decide<br/>whether the answer is right?"}
+    Q -->|"yes — run the tests,<br/>check the number"| G["GRPO<br/>reward = the sandbox"]
+    Q -->|"no — it is a matter of<br/>tone, length, helpfulness"| D["DPO<br/>learn from ranked pairs"]
+    G --> GM["a code / math specialist"]
+    D --> DM["a better-mannered chat model"]
+
+    classDef q fill:#2d6cdf,stroke:#1a4a9e,color:#fff
+    classDef s fill:#e8f0fe,stroke:#2d6cdf,color:#1a1a1a
+    class Q q
+    class G,D,GM,DM s
 ```
 
-DPO learns from pairs a human (or a bigger model) ranked. GRPO learns from a reward that can
-be *computed* — for Python, "do the hidden tests pass?" — which is why it is the right choice
-for the code specialist and the wrong one for open-ended chat.
+That is the only question that matters. Everything else follows from it:
 
-📖 [chapter 5 — post-training](05-posttraining.md)
+| | **DPO** | **GRPO** |
+|---|---|---|
+| learns from | pairs someone already ranked | a reward it computes itself |
+| needs a dataset? | **yes** — and it is not on this machine yet | **no** — the sandbox tasks are built in |
+| starts from | `checkpoints/small-code-sft/sft_best.pt` | the same file |
+| writes | `checkpoints/small-code-dpo/dpo_best.pt` | `checkpoints/small-code-grpo/grpo_best.pt` |
+| memory | ~2x SFT — a frozen reference model sits beside the policy | ~1x, plus sampling G completions per prompt |
+| cost per step | one batch, four forward passes | sample 8 completions, **execute all of them**, then a step |
+| good for | tone, length, hedging, refusal shape | Python, arithmetic — anything with a checkable answer |
+| the number to watch | `acc`, 50% → 65–80% | `reward` and `solved%`, both climbing |
+
+**For this project, GRPO is the interesting one**, because the base model is a 85/15
+prose/Python blend and the sandbox reward is already built — `infer/sandbox.py` was written
+to *evaluate* the model and GRPO reuses it as the training signal, so the expensive half was
+free. DPO is the one that needs a download first.
+
+#### GRPO — the one you can start right now
+
+```bash
+scripts/stage.sh grpo small-code
+```
+
+No data preparation: the prompts and their hidden tests are built in, and the reward is
+whether the generated function passes them. It is the cheapest stage to *start* and the
+slowest per step, because every step samples eight completions and runs all eight.
+
+Useful knobs, all environment variables (`stage.sh` reads them; there are no flags):
+
+```bash
+STEPS=2000 GROUP=16 scripts/stage.sh grpo small-code    # longer, lower-variance advantage
+LR=5e-7 scripts/stage.sh grpo small-code                # twitchier than DPO — go lower, not higher
+```
+
+**How you know it worked.** At step 0, `loss ≈ 0` and `KL = 0` — the policy still *is* the
+reference, so every advantage is zero by construction. That is the sanity check, not a
+problem. Then `reward` and `solved%` should climb while KL stays bounded.
+
+**How you know it did not.** `reward` flat at zero means no completion ever passed, so there
+is nothing to learn from — the task is beyond the model, not the trainer misconfigured. The
+fix is a better SFT, not a bigger learning rate. Rising KL with flat reward is the other
+failure: the model is drifting away from fluent language while gaining nothing. Raise `beta`.
+
+#### DPO — and the download that happens first
+
+```bash
+scripts/stage.sh dpo small-code
+```
+
+**`data/dpo/` does not exist on this machine yet.** The first thing that command does is
+download and tokenize UltraFeedback (~61k pairs) — minutes, before a single training step.
+That is expected, and the portal names it: the stage's card reads **preparing data** with
+the recipe on it, rather than sitting on "ready" as though the button had done nothing.
+
+To use something else, or something already on disk:
+
+```bash
+DATA=orca-dpo scripts/stage.sh dpo small-code     # 12k pairs — a quicker first pass
+BETA=0.2 scripts/stage.sh dpo small-code          # hold closer to the SFT model
+```
+
+`data/synth/pref-v1/` holds preference pairs this project generated itself, each with one
+*named* flaw so the model learns one difference at a time — see
+[chapter 14](14-synthetic-data.md). `data/dpo-synth/` is the already-tokenized smoke set.
+
+**How you know it worked.** `acc` — the fraction of pairs the policy prefers *more than the
+reference does* — starts near 50% by construction and should reach 65–80%. `loss` starts at
+`ln 2 = 0.693` and falls.
+
+**How you know it did not.** `acc` past 90% is overfitting the preference set, and the model
+that comes out hedges endlessly or rambles. Stop early; that number is not a score to
+maximise. And DPO's learning rate is **5e-7**, ten to fifty times below SFT's — that is not
+a typo, and it is the most common way to ruin this stage.
+
+#### Both of them
+
+Both are runs in their own right: `small-code-dpo` and `small-code-grpo` appear in the run
+picker with their own log, loss curve, sessions and cost, and both stop and resume exactly
+like a base run (`scripts/stop.sh small-code-grpo`, then run the stage again). In the portal
+they are the second and third cards of the **Post-training** panel, side by side, with the
+choice above spelled out on them.
+
+📖 [chapter 6 — post-training](06-posttraining.md)
+
+### 6 · Evaluate the chat model — what post-training changed, and what it broke
+
+Yes, evaluate again. **But not by re-running stage 3 and comparing**, which is the mistake
+this section exists to prevent: stage 3 asked *what does this model know*, and SFT does not
+teach it anything new. Stage 6 asks two different questions — **did the behaviour change**,
+and **did the knowledge survive**.
+
+```bash
+python -m aksharallm.eval domains small-code-sft                     # did Python survive?
+python -m aksharallm.eval small-code-sft --suite judge --label sft   # did the manners arrive?
+python -m aksharallm.eval small-code-sft --suite fast --label sft    # did anything break?
+python -m aksharallm.eval calibrate small-code-dpo                   # after aligning, only
+```
+
+| what to run | what it answers | what a good result looks like |
+|---|---|---|
+| `eval domains` | catastrophic forgetting | Python loss near the base's **1.2558**. SmolTalk is all prose, so this is the number SFT can quietly destroy |
+| `--suite judge` | did the behaviour change | it should **move** — this is the only suite that asks a chat model *as* a chat model |
+| `--suite fast` | did anything break | ARC-Easy and PIQA near the base's **46.7%** / **65.0%**. Unchanged is the *correct* result |
+| `eval calibrate` | is its confidence still honest | run it after DPO, not after SFT — alignment is where calibration degrades |
+
+Three things that make this stage easy to read wrong:
+
+1. **SFT's val loss is not comparable with the base's.** The base finished at **2.5552** and
+   the SFT run at **1.4218**, and that fall measures *nothing*: different data (SmolTalk, not
+   the 10B blend) and a different loss (assistant tokens only, not every token). Two numbers
+   in the same units, from the same trainer, that cannot be put on one axis.
+2. **A benchmark that does not move is the expected outcome, not a failed run.** SFT changes
+   the *shape* of an answer, and ARC-Easy and PIQA are scored by log-likelihood over fixed
+   candidates, where shape does not help. A *fall* larger than the error bar is the finding —
+   it means the learning rate erased pretraining.
+3. **Only the judge suite speaks ChatML.** The multiple-choice suites, GSM8K and HumanEval
+   are handed the raw prompt even on a chat checkpoint, deliberately, so a base-vs-SFT
+   comparison is like-for-like rather than two different benchmarks. See
+   [chapter 13 § evaluating a chat model](13-eval.md#evaluating-a-chat-model-what-changes-and-what-must-not).
+
+Use `--label` on every one of these (`base`, `sft`, `dpo`): it is what lines the rows up in
+the trend table afterwards, and stage is exactly what you will want to compare by.
+
+📖 [chapter 13 — evaluation](13-eval.md)
 
 ### Then: use it
 
@@ -240,7 +385,7 @@ scripts/serve.sh small-code --bg                     # an OpenAI-shaped HTTP API
 
 In the portal: the **Playground** tab, and the **Serve** panel.
 
-📖 [chapter 6 — inference](06-inference.md) · [chapter 16 — serving](16-serving.md)
+📖 [chapter 7 — inference](07-inference.md) · [chapter 17 — serving](17-serving.md)
 
 ---
 
@@ -266,7 +411,7 @@ trade-off without spending any GPU time.
 buys memory, not speed. And on this project the best 4-bit setting turned out to be
 `gptq-nf4-g64`, which beat int4 at the same group size *and* was smaller.
 
-📖 [chapter 10 — quantization](10-quantization.md) · [chapter 11 — LoRA](11-lora.md)
+📖 [chapter 11 — quantization](11-quantization.md) · [chapter 12 — LoRA](12-lora.md)
 
 ---
 
@@ -294,7 +439,7 @@ unrecognised `-*` argument as an error rather than ignoring it, so `--speculate 
 The trade is latency: batching raises total throughput and raises per-request latency at the
 same time. That is why the Playground does not batch and the server does.
 
-📖 [chapter 16 — serving](16-serving.md) · [chapter 3 § FlashAttention](03-model.md)
+📖 [chapter 17 — serving](17-serving.md) · [chapter 4 § FlashAttention](04-model.md)
 
 ---
 
@@ -314,7 +459,7 @@ On this project, extended 4x, the 300M model found a needle at 4,096 tokens **92
 time** (chance is 25%) — while the 13.8M model sat at chance. Retrieval over a long context
 is a capability that only appears with scale; you cannot get it by asking.
 
-📖 [chapter 18 — long context](18-long-context.md)
+📖 [chapter 19 — long context](19-long-context.md)
 
 ---
 
@@ -330,8 +475,8 @@ The expensive routes. Each one is a real research direction rather than a switch
 - **Scale up** — a bigger model on more tokens. The honest answer to most quality problems,
   and the one that costs the most.
 
-📖 [chapter 14 — mixture of experts](14-moe.md) · [chapter 7 — scaling](07-scaling.md) ·
-[chapter 13 — synthetic data](13-synthetic-data.md)
+📖 [chapter 15 — mixture of experts](15-moe.md) · [chapter 8 — scaling](08-scaling.md) ·
+[chapter 14 — synthetic data](14-synthetic-data.md)
 
 ---
 
@@ -360,8 +505,8 @@ python -m aksharallm.diffusion tiny-diffusion-smoke infill \
     --prefix "Once upon a time" --suffix "and they all went home."
 ```
 
-📖 [chapter 20 — audio](20-audio.md) · [chapter 21 — vision](21-vision.md) ·
-[chapter 19 — diffusion](19-diffusion.md)
+📖 [chapter 21 — audio](21-audio.md) · [chapter 22 — vision](22-vision.md) ·
+[chapter 20 — diffusion](20-diffusion.md)
 
 ---
 
@@ -487,9 +632,9 @@ python -m aksharallm.eval calibrate small-code                   # honest confid
 Do all of it **before** SFT. Every one of these describes the base model, and SFT is the
 point after which you can no longer measure what the base model was.
 
-📖 [chapter 12 — evaluation](12-eval.md) ·
-[chapter 17 — interpretability](17-interpretability.md) ·
-[chapter 9 — the run report](09-running-and-watching.md)
+📖 [chapter 13 — evaluation](13-eval.md) ·
+[chapter 18 — interpretability](18-interpretability.md) ·
+[chapter 10 — the run report](10-running-and-watching.md)
 
 ---
 
@@ -506,7 +651,7 @@ python -m aksharallm.learn check data    # run its real pytest node
 In the portal: the **Learn** tab, with a run-the-check button and prerequisites gated the
 same way post-training is.
 
-📖 [chapter 15 — the learning path](15-learning-path.md)
+📖 [chapter 16 — the learning path](16-learning-path.md)
 
 ---
 
@@ -548,3 +693,7 @@ the scripts that actually sequence the stages above.
    two ends of a run's life.
 7. [aksharallm/portal/runs.py](../aksharallm/portal/runs.py) — how the browser drives all of
    the above without becoming a second system.
+
+---
+
+Next: [2. Data →](02-data.md)

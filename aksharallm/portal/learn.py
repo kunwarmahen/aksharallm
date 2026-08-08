@@ -11,7 +11,7 @@ progress, and — for a locked lesson — the sentence saying what is missing. T
 idea as the post-training panel, for the same reason: a disabled button with no explanation
 is indistinguishable from a broken one.
 
-Read with: docs/15-learning-path.md -- the chapter this implements; it ends with the order to
+Read with: docs/16-learning-path.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

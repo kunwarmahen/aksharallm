@@ -22,7 +22,7 @@ fast ripple (the pitch harmonics). Dropping coefficient 0 drops overall loudness
 1-13 keeps the envelope. So MCD asks "is it saying the same thing", not "is it the same
 recording".
 
-Read with: docs/20-audio.md -- the chapter this implements; it ends with the order to read
+Read with: docs/21-audio.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

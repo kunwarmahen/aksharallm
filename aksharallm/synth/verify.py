@@ -42,7 +42,7 @@ does more harm than no check:
   Nothing that treats the teacher as the oracle can. That is what the eval harness, rather
   than the pass rate, is for.
 
-Read with: docs/13-synthetic-data.md -- the chapter this implements; it ends with the order to
+Read with: docs/14-synthetic-data.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

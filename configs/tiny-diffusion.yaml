@@ -8,7 +8,7 @@
 # The one thing that is NOT comparable is the val number itself. An autoregressive model's
 # val loss is an exact per-token cross-entropy; this one is a Monte-Carlo estimate of an
 # ELBO — an UPPER BOUND on the same quantity. A diffusion run showing 1.9 is not "0.43 worse
-# than the baseline"; it is "at most this bad, by an unknown margin". Read docs/19 before
+# than the baseline"; it is "at most this bad, by an unknown margin". Read docs/20 before
 # putting the two numbers in one table. What IS comparable is the text, and the two things
 # an autoregressive model cannot do at all: infilling, and choosing how many forward passes
 # to spend.

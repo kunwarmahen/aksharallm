@@ -89,34 +89,34 @@ Read these in order. They assume no prior knowledge of machine learning.
 Every chapter ends with **"The code, in reading order"** — the `.py` files it explains,
 listed in the order that makes them make sense, with what to look at inside each and the
 test that pins it. It points the other way too: every module's docstring names the chapter
-it belongs to (`Read with: docs/03-model.md`), so a file you land in from a traceback or a
+it belongs to (`Read with: docs/04-model.md`), so a file you land in from a traceback or a
 grep is one line away from the prose. `tests/test_docs.py` fails if either pointer rots.
 
 | # | Doc | What you'll learn |
 |---|-----|-------------------|
-| **22** | **[The whole journey, end to end](docs/22-journeys.md)** — *start here* | The route map: the ordered path from raw text to a model you can talk to, plus every side route (cheaper, faster, longer context, other modalities) — each with its real command, where it lives in the portal, and how you know it worked |
 | 0 | [What we're building](docs/00-overview.md) | What an LLM is, the four training stages, why each exists |
-| 1 | [Data](docs/01-data.md) | Where text comes from, why quality beats quantity, the on-disk format |
-| 2 | [Tokenizer](docs/02-tokenizer.md) | Why models read "tokens" not letters, how BPE works |
-| 3 | [The model](docs/03-model.md) | Attention, RoPE, SwiGLU, residual streams — every line of the transformer |
-| 4 | [Pretraining](docs/04-pretraining.md) | The training loop, mixed precision, LR schedules, reading the logs |
-| 5 | [Post-training](docs/05-posttraining.md) | SFT, DPO, and **GRPO** (RL on a verifiable reward) — text completer → assistant → code/math specialist |
-| 6 | [Inference](docs/06-inference.md) | KV caches, sampling, and how to tell whether a half-trained model is learning |
-| 7 | [Scaling up](docs/07-scaling.md) | Phase 2: a 300M model on 10B tokens, and how to size your own |
-| 8 | [Troubleshooting](docs/08-troubleshooting.md) | Loss spikes, NaNs, OOM, slow training |
-| 9 | [Running & watching it](docs/09-running-and-watching.md) | The scripts, stop/resume, the gated post-training stages, and the **portal** — with diagrams |
-| 10 | [Quantization](docs/10-quantization.md) | Storing weights in 4 bits: group scales, RTN/GPTQ/AWQ/QAT, **NF4**, a fused Triton kernel, and why smaller isn't faster |
-| 11 | [LoRA & QLoRA](docs/11-lora.md) | Fine-tuning without training the model: low-rank adapters, a 4-bit frozen base, one base + many skills, and a free DPO reference model |
-| 12 | [Evaluation](docs/12-eval.md) | Is the model actually any good? MMLU/ARC/HellaSwag/PIQA scored by log-likelihood, GSM8K, HumanEval executed for real, an LLM-judge — and why 25% on MMLU is not a failure |
-| 15 | [The learning path](docs/15-learning-path.md) | The repo as a course: twenty-one lessons that each end in breaking real code and watching a real test go red — and why a lesson only counts once the check has been red *and then* green |
-| 14 | [Mixture of experts](docs/14-moe.md) | More parameters than you compute with: a router, N experts, top-k per token — the load-balancing loss, why upcycling is an identity at init, and the collapse that is invisible in the loss curve |
-| 17 | [Looking inside](docs/17-interpretability.md) | Attention maps recomputed from the layer's own inputs, the logit lens (*when* did it decide?), activation patching (which activation actually carries the fact), and a sparse autoencoder that pulls apart superposition |
-| 16 | [Serving](docs/16-serving.md) | Turning a checkpoint into something you use: a paged KV cache so memory is bounded by what is *used*, continuous batching so thirty conversations share one pass over the weights (50 → 272 tok/s), and an OpenAI-shaped API so existing clients work |
-| 13 | [Synthetic data](docs/13-synthetic-data.md) | Making the training set with a local teacher instead of downloading it: a seed grid instead of a temperature, tests that are **executed twice**, near-duplicate detection, and why the rejection tally is the quality signal |
-| 18 | [Long context](docs/18-long-context.md) | Reading further than the weights were trained for, without retraining anything: RoPE scaling (linear/NTK/YaRN), sliding windows and why they need attention sinks, and the two measurements — loss by position and needle-in-a-haystack — that disagree |
-| 19 | [Diffusion](docs/19-diffusion.md) | The *other* way to build a language model: fill in blanks with attention running both ways, and generate by unmasking what you are surest about. Infilling, a compute dial, no KV cache — and the ELBO you must never compare with a cross-entropy |
-| 20 | [Audio](docs/20-audio.md) | The same transformer, on sound: an RVQ-VAE codec that turns speech into fifty integers a second, the delay pattern that keeps eight codebooks honest in one stream, and TTS/ASR as one model with the sequence written in two orders — plus the bitrate ladder you judge with your ears |
-| 21 | [Vision](docs/21-vision.md) | A picture into a model that has never seen one: patches instead of a codec, a two-layer projector that is the whole of LLaVA, and a corpus whose captions are known exactly so the answer can be *scored* rather than admired — plus the double shift that trained to a loss of 0.003 and captioned everything `'w green'` |
+| **1** | **[The whole journey, end to end](docs/01-journeys.md)** — *start here* | The route map: the ordered path from raw text to a model you can talk to, plus every side route (cheaper, faster, longer context, other modalities) — each with its real command, where it lives in the portal, and how you know it worked |
+| 2 | [Data](docs/02-data.md) | Where text comes from, why quality beats quantity, the on-disk format |
+| 3 | [Tokenizer](docs/03-tokenizer.md) | Why models read "tokens" not letters, how BPE works |
+| 4 | [The model](docs/04-model.md) | Attention, RoPE, SwiGLU, residual streams — every line of the transformer |
+| 5 | [Pretraining](docs/05-pretraining.md) | The training loop, mixed precision, LR schedules, reading the logs |
+| 6 | [Post-training](docs/06-posttraining.md) | SFT, DPO, and **GRPO** (RL on a verifiable reward) — text completer → assistant → code/math specialist |
+| 7 | [Inference](docs/07-inference.md) | KV caches, sampling, and how to tell whether a half-trained model is learning |
+| 8 | [Scaling up](docs/08-scaling.md) | Phase 2: a 300M model on 10B tokens, and how to size your own |
+| 9 | [Troubleshooting](docs/09-troubleshooting.md) | Loss spikes, NaNs, OOM, slow training |
+| 10 | [Running & watching it](docs/10-running-and-watching.md) | The scripts, stop/resume, the gated post-training stages, and the **portal** — with diagrams |
+| 11 | [Quantization](docs/11-quantization.md) | Storing weights in 4 bits: group scales, RTN/GPTQ/AWQ/QAT, **NF4**, a fused Triton kernel, and why smaller isn't faster |
+| 12 | [LoRA & QLoRA](docs/12-lora.md) | Fine-tuning without training the model: low-rank adapters, a 4-bit frozen base, one base + many skills, and a free DPO reference model |
+| 13 | [Evaluation](docs/13-eval.md) | Is the model actually any good? MMLU/ARC/HellaSwag/PIQA scored by log-likelihood, GSM8K, HumanEval executed for real, an LLM-judge — and why 25% on MMLU is not a failure |
+| 14 | [Synthetic data](docs/14-synthetic-data.md) | Making the training set with a local teacher instead of downloading it: a seed grid instead of a temperature, tests that are **executed twice**, near-duplicate detection, and why the rejection tally is the quality signal |
+| 15 | [Mixture of experts](docs/15-moe.md) | More parameters than you compute with: a router, N experts, top-k per token — the load-balancing loss, why upcycling is an identity at init, and the collapse that is invisible in the loss curve |
+| 16 | [The learning path](docs/16-learning-path.md) | The repo as a course: twenty-one lessons that each end in breaking real code and watching a real test go red — and why a lesson only counts once the check has been red *and then* green |
+| 17 | [Serving](docs/17-serving.md) | Turning a checkpoint into something you use: a paged KV cache so memory is bounded by what is *used*, continuous batching so thirty conversations share one pass over the weights (50 → 272 tok/s), and an OpenAI-shaped API so existing clients work |
+| 18 | [Looking inside](docs/18-interpretability.md) | Attention maps recomputed from the layer's own inputs, the logit lens (*when* did it decide?), activation patching (which activation actually carries the fact), and a sparse autoencoder that pulls apart superposition |
+| 19 | [Long context](docs/19-long-context.md) | Reading further than the weights were trained for, without retraining anything: RoPE scaling (linear/NTK/YaRN), sliding windows and why they need attention sinks, and the two measurements — loss by position and needle-in-a-haystack — that disagree |
+| 20 | [Diffusion](docs/20-diffusion.md) | The *other* way to build a language model: fill in blanks with attention running both ways, and generate by unmasking what you are surest about. Infilling, a compute dial, no KV cache — and the ELBO you must never compare with a cross-entropy |
+| 21 | [Audio](docs/21-audio.md) | The same transformer, on sound: an RVQ-VAE codec that turns speech into fifty integers a second, the delay pattern that keeps eight codebooks honest in one stream, and TTS/ASR as one model with the sequence written in two orders — plus the bitrate ladder you judge with your ears |
+| 22 | [Vision](docs/22-vision.md) | A picture into a model that has never seen one: patches instead of a codec, a two-layer projector that is the whole of LLaVA, and a corpus whose captions are known exactly so the answer can be *scored* rather than admired — plus the double shift that trained to a loss of 0.003 and captioned everything `'w green'` |
 
 ---
 
@@ -143,16 +143,16 @@ aksharallm/
 │   │   └── loader.py         memmap batch sampling (TokenDataset, MixedTokenDataset)
 │   ├── model/
 │   │   ├── transformer.py    the whole architecture, ~300 lines
-│   │   ├── moe.py            mixture of experts: router, sorted dispatch, upcycling — docs/14
-│   │   ├── flash.py          FlashAttention in Triton, fwd + bwd (model.attn_impl) — docs/03
-│   │   └── rope.py           RoPE scaling: linear / NTK / YaRN / dynamic — docs/18
-│   ├── longctx/          extend a context and measure it — see docs/18
-│   ├── diffusion/        masked diffusion: the OTHER paradigm — see docs/19
+│   │   ├── moe.py            mixture of experts: router, sorted dispatch, upcycling — docs/15
+│   │   ├── flash.py          FlashAttention in Triton, fwd + bwd (model.attn_impl) — docs/04
+│   │   └── rope.py           RoPE scaling: linear / NTK / YaRN / dynamic — docs/19
+│   ├── longctx/          extend a context and measure it — see docs/19
+│   ├── diffusion/        masked diffusion: the OTHER paradigm — see docs/20
 │   │   ├── corrupt.py        the forward process and the 1/t-weighted ELBO
 │   │   ├── generate.py       iterative unmasking, infilling, the denoising trace
 │   │   ├── evaluate.py       the ELBO (an upper bound) and loss-by-mask-rate
 │   │   └── objective.py      a drop-in for pretrain.py's objective — no second trainer
-│   ├── audio/            a second MODALITY, on the same transformer — see docs/20
+│   ├── audio/            a second MODALITY, on the same transformer — see docs/21
 │   │   ├── io.py             WAV in/out and a windowed-sinc resampler, from scratch
 │   │   ├── features.py       STFT, the mel filterbank, Griffin-Lim back to sound
 │   │   ├── vq.py             vector quantization: straight-through, EMA, dead-code restart
@@ -160,12 +160,12 @@ aksharallm/
 │   │   ├── delay.py          the shift that turns 8 codebooks into one stream
 │   │   ├── lm.py             the SAME Transformer, 8 embeddings in and 8 heads out
 │   │   └── speech.py         TTS and ASR: one model, one flag apart
-│   ├── vision/           a second modality that needs no codec — see docs/21
+│   ├── vision/           a second modality that needs no codec — see docs/22
 │   │   ├── image.py          a shapes corpus whose captions are known exactly
 │   │   ├── encoder.py        patches, a small ViT, and the LLaVA projector
 │   │   └── lm.py             a FROZEN language model with a picture on its input
-│   ├── quant/            int8/int4/NF4 from scratch — see docs/10
-│   ├── lora/             LoRA + QLoRA adapters from scratch — see docs/11
+│   ├── quant/            int8/int4/NF4 from scratch — see docs/11
+│   ├── lora/             LoRA + QLoRA adapters from scratch — see docs/12
 │   │   ├── qtensor.py        group scales, zero-points, 4-bit packing
 │   │   ├── qlinear.py        QuantLinear: a drop-in for nn.Linear that stores bytes
 │   │   ├── rtn.py            round-to-nearest baseline
@@ -202,30 +202,30 @@ aksharallm/
 │   │       ├── parts/<tab>.html  markup, one file per view
 │   │       ├── js/<tab>.js       ES modules, one per view (+ core/state/router/nav/charts)
 │   │       └── css/<tab>.css     rules, one per view (+ base/chrome/controls/narrow)
-│   ├── learn/            the learning path: lessons, gating, checks — see docs/15
+│   ├── learn/            the learning path: lessons, gating, checks — see docs/16
 │   │   ├── lessons.py        frontmatter, the prereq graph, and the anti-rot validation
 │   │   ├── progress.py       learning/progress.json + the red-then-green completion rule
 │   │   └── check.py          run one pytest node id, report what it said
-│   ├── synth/            generating training data with a local teacher — see docs/13
+│   ├── synth/            generating training data with a local teacher — see docs/14
 │   │   ├── prompts.py        the seed grid: 480 / 1,296 structurally different prompts
 │   │   ├── recipes.py        python / chat / preference: prompt, parser, export
 │   │   ├── filters.py        validity checks + shingle-based near-duplicate detection
 │   │   ├── verify.py         run the generated tests, then run them against a stub
 │   │   ├── dataset.py        data/synth/<name>/: samples, rejects, provenance
 │   │   └── run.py            the loop, its budgets, and the STOP file
-│   ├── eval/             the benchmark harness — see docs/12
+│   ├── eval/             the benchmark harness — see docs/13
 │   │   ├── sources.py        download benchmarks once into data/eval/, then work offline
 │   │   ├── suites.py         what each benchmark asks, and how an answer is judged right
 │   │   ├── scoring.py        batched log-likelihood, greedy decode-until, perplexity
 │   │   ├── judge.py          twelve open prompts graded 1-5 by a local Ollama model
 │   │   ├── runner.py         run suites against a checkpoint; one JSON per evaluation
 │   │   └── report.py         every result ever, and the trend across training steps
-│   ├── interp/           looking inside a trained model — docs/17
+│   ├── interp/           looking inside a trained model — docs/18
 │   │   ├── capture.py        hooks for the residual stream; attention maps, recomputed
 │   │   ├── lens.py           the logit lens: what each layer would have said
 │   │   ├── patch.py          activation patching: which activation carries the fact
 │   │   └── sae.py            a sparse autoencoder over the residual stream
-│   ├── serve/            an HTTP server: paged KV cache, continuous batching — docs/16
+│   ├── serve/            an HTTP server: paged KV cache, continuous batching — docs/17
 │   │   ├── paged.py          blocks, block tables, reference-counted prefix sharing
 │   │   ├── batch.py          the ragged step: prefill and decode together, admission control
 │   │   └── server.py         OpenAI-shaped endpoints, SSE streaming, /health
@@ -265,7 +265,7 @@ GPU time. Always start here after changing anything.
 **Phase 2 — `configs/small-code.yaml`.** ~300M params, ~10B tokens of **85% FineWeb-Edu +
 15% Python**, roughly 6 days on a 3090. Blending code into pretraining means one run yields
 a base that both chats (after SFT/DPO) and codes (after Python continued-pretraining) — and
-code also improves general reasoning. See [docs/07-scaling.md](docs/07-scaling.md).
+code also improves general reasoning. See [docs/08-scaling.md](docs/08-scaling.md).
 (`configs/small.yaml` is the pure-FineWeb-Edu fallback.)
 
 ```mermaid
@@ -308,7 +308,7 @@ in tightly clustered groups, so one shared scale per 64 weights lets each indivi
 be a 4-bit integer.
 
 There are four ways to choose those integers, all written from scratch here — round to
-nearest, [GPTQ](docs/10-quantization.md) (push each rounding error into the columns you
+nearest, [GPTQ](docs/11-quantization.md) (push each rounding error into the columns you
 haven't done yet), AWQ (scale the channels that matter up before rounding), and
 quantization-aware training (put the rounding inside the training loop). Measured on the
 300M model, against a bf16 perplexity of 13.519:
@@ -323,7 +323,7 @@ quantization-aware training (put the rounding inside the training loop). Measure
 There is also a hand-written Triton kernel that unpacks the 4-bit weights *inside* the
 matmul, which makes decoding 1.6× faster than the naive quantized path. It still does not
 beat plain bf16 — and the reason turned out to be the most interesting thing in the
-chapter, so [it is written up honestly](docs/10-quantization.md#the-fused-kernel-and-an-honest-performance-story)
+chapter, so [it is written up honestly](docs/11-quantization.md#the-fused-kernel-and-an-honest-performance-story)
 rather than quietly omitted.
 
 A later addition, **NF4**: instead of spacing the 16 levels evenly, put them at the
@@ -337,7 +337,7 @@ Fine-tuning a model normally costs far more than storing it, because Adam keeps 
 moments per trainable parameter. For the 300M model that is 4.8 GB — before activations,
 and on a card that also has to hold the forward pass.
 
-[LoRA](docs/11-lora.md) freezes the model and trains a small low-rank correction beside it
+[LoRA](docs/12-lora.md) freezes the model and trains a small low-rank correction beside it
 (`y = Wx + BAx`), so ~1% of the parameters train and the optimiser state shrinks with them.
 **QLoRA** then holds the frozen base in 4-bit NF4 — safe precisely because it is frozen and
 never receives a gradient. Measured on the 300M checkpoint:
@@ -362,12 +362,12 @@ adapter off and the model you are already holding *is* the model you started fro
 
 In order, all written from scratch: **GRPO** ✅ (RL on a reward the code sandbox actually
 verifies) → **quantization** ✅ → **LoRA/QLoRA** ✅ → a **real eval harness** ✅ (MMLU, ARC,
-HellaSwag, PIQA, GSM8K, HumanEval and a model-judged suite — [docs/12](docs/12-eval.md)) →
-**synthetic data** ✅ ([docs/13](docs/13-synthetic-data.md)) → **mixture of experts** ✅
-([docs/14](docs/14-moe.md)) → **distillation** → **diffusion training** ✅
-([docs/19](docs/19-diffusion.md)) → **audio** → export and serving ✅, with **speculative
+HellaSwag, PIQA, GSM8K, HumanEval and a model-judged suite — [docs/13](docs/13-eval.md)) →
+**synthetic data** ✅ ([docs/14](docs/14-synthetic-data.md)) → **mixture of experts** ✅
+([docs/15](docs/15-moe.md)) → **distillation** → **diffusion training** ✅
+([docs/20](docs/20-diffusion.md)) → **audio** → export and serving ✅, with **speculative
 decoding** ✅, an **interpretability tab** ✅, **FlashAttention written in Triton** ✅
-([docs/03](docs/03-model.md)) and **long context** ✅ ([docs/18](docs/18-long-context.md)).
+([docs/04](docs/04-model.md)) and **long context** ✅ ([docs/19](docs/19-long-context.md)).
 
 **Masked diffusion** is the one item on that list that is not an improvement to the model —
 it is a second *paradigm*. Everything else here predicts token n+1 from tokens 1..n; a
@@ -420,7 +420,7 @@ against the dense baseline — same data, seed, batch, steps, and **the same FLO
 because each expert is `d_ff/k` wide rather than a full copy — 8 experts at top-2 reached
 val **1.4081** against the dense **1.4764**, a 4.6% improvement that *widened* throughout
 training. It stores 35.0M parameters to compute with 7.1M of them: memory traded for quality
-at fixed compute, which is the exact opposite of the trade [quantization](docs/10-quantization.md)
+at fixed compute, which is the exact opposite of the trade [quantization](docs/11-quantization.md)
 makes. The cost is MFU falling from ~57% to 52%, because a sort and eight small matmuls use
 the card less well than one big one.
 
@@ -484,10 +484,10 @@ anyone can check.
 
 The failure to watch for is one this repo has already met: **a few codebook entries win, the
 rest are never used, and the reconstruction loss looks completely normal while it happens** —
-which is [mixture of experts](docs/14-moe.md)' router collapse wearing a different hat, down
+which is [mixture of experts](docs/15-moe.md)' router collapse wearing a different hat, down
 to reusing the same chart. The reward is something you can hear rather than read: the same
 clip rebuilt from 1, 2, 4 and 8 codebooks, played side by side. That is the same trade
-[quantization](docs/10-quantization.md) makes silently inside the weights, made audible.
+[quantization](docs/11-quantization.md) makes silently inside the weights, made audible.
 
 **A learning path.** This repo is meant to be learned from, and right now the docs are a
 reading order with nothing to do. The plan is a set of lessons that each pair a doc section
@@ -578,7 +578,7 @@ Ollama lives and how much of the machine it may use are all in `configs/portal.y
 One thing to know: the explainer shares your GPU with training. A 12B model is ~8 GB of VRAM
 against a Phase-2 run's ~21 GB of a 24 GB card, so the tab warns you when a run is live, and
 `num_gpu: 0` keeps the explainer on the CPU where it cannot touch it. Details and the other
-sharp edges are in `docs/07-scaling.md`.
+sharp edges are in `docs/08-scaling.md`.
 
 ### Watching the GPU
 
@@ -764,7 +764,7 @@ weights. There was a fourth, and it is the best bug of the build — the pool wa
 `transpose().reshape()`, **which returns a copy**, so every write landed in a temporary and
 the cache stayed full of zeros. The model attended to nothing but the token it had just been
 given and repeated it forever, which reads exactly like an undertrained model.
-[docs/16](docs/16-serving.md) has the whole thing.
+[docs/17](docs/17-serving.md) has the whole thing.
 
 ### Making it faster: speculative decoding
 

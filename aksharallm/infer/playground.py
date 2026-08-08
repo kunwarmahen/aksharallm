@@ -13,7 +13,7 @@ The tests run *before* the record is written, because a record of a code generat
 its verdict is the least useful kind: "the model wrote this" is worth much less than "the
 model wrote this and it passed".
 
-Read with: docs/06-inference.md -- the chapter this implements; it ends with the order to read
+Read with: docs/07-inference.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

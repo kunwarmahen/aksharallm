@@ -28,7 +28,7 @@ temperature 0.9 usually ignores it again, and — more importantly — retrying 
 until it succeeds biases the dataset towards the cells the teacher finds easy. Abandoning it
 and moving to the next cell spends the same budget on coverage instead.
 
-Read with: docs/13-synthetic-data.md -- the chapter this implements; it ends with the order to
+Read with: docs/14-synthetic-data.md -- the chapter this implements; it ends with the order to
 read these files in.
 """
 

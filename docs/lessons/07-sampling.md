@@ -1,7 +1,7 @@
 ---
 id: sampling
 title: Choosing the next token
-doc: docs/06-inference.md
+doc: docs/07-inference.md
 files:
   - aksharallm/infer/generate.py
 verify: tests/test_generate.py::test_top_p_keeps_the_nucleus

@@ -10,7 +10,7 @@ Which means there is exactly one way to start a server, whether you typed it or 
 and a server started in a terminal shows up in the panel — the same contract `phase2.sh` and
 the dashboard have had since the beginning.
 
-Read with: docs/16-serving.md -- the chapter this implements; it ends with the order to read
+Read with: docs/17-serving.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

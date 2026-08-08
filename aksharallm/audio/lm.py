@@ -38,8 +38,8 @@ head, and then the same module is:
 That is the SFT assistant-only loss mask, with audio in the assistant's role — the same idea
 `train/sft.py` already implements, which is why neither of those two is a new training loop.
 
-Read with: docs/20-audio.md -- the chapter this implements; it ends with the order to read
-these files in. See also docs/03-model.md.
+Read with: docs/21-audio.md -- the chapter this implements; it ends with the order to read
+these files in. See also docs/04-model.md.
 """
 
 from __future__ import annotations

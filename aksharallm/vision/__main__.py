@@ -4,7 +4,7 @@
     python -m aksharallm.vision show data/vision/shapes --out /tmp/grid.png
     python -m aksharallm.vision caption checkpoints/vision-shapes/ckpt_best.pt
 
-Read with: docs/21-vision.md -- the chapter this implements; it ends with the order to read
+Read with: docs/22-vision.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

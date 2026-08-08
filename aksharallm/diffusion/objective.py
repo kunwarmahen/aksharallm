@@ -16,8 +16,8 @@ that differ between the two paradigms:
 the second one. Swapping between them is a config key — `model.causal` — and the loop
 around them never learns which is which.
 
-Read with: docs/19-diffusion.md -- the chapter this implements; it ends with the order to read
-these files in. See also docs/04-pretraining.md.
+Read with: docs/20-diffusion.md -- the chapter this implements; it ends with the order to read
+these files in. See also docs/05-pretraining.md.
 """
 
 from __future__ import annotations

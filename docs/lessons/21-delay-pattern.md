@@ -1,7 +1,7 @@
 ---
 id: delay-pattern
 title: Eight integers per position, and the shift that keeps them honest
-doc: docs/20-audio.md
+doc: docs/21-audio.md
 files:
   - aksharallm/audio/delay.py
   - aksharallm/audio/lm.py

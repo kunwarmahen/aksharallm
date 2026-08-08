@@ -29,8 +29,8 @@ all: it produces two plausible numbers that are both averages of the same mixtur
 `prepare_blend` now also writes `val.manifest.json` alongside the bin, so future blends do
 not have to derive anything. The derivation stays for the blends that predate it.
 
-Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read
-these files in. See also docs/01-data.md.
+Read with: docs/13-eval.md -- the chapter this implements; it ends with the order to read
+these files in. See also docs/02-data.md.
 """
 
 from __future__ import annotations

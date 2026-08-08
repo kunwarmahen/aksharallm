@@ -1,6 +1,6 @@
 """Is the model's confidence honest?
 
-Every number in `docs/12` asks whether the model is *right*. This asks something different
+Every number in `docs/13` asks whether the model is *right*. This asks something different
 and, for anything that has to be trusted rather than benchmarked, more useful: when it says
 it is 80% sure, is it right 80% of the time?
 
@@ -52,7 +52,7 @@ move the argmax — so it is free of the usual trade-off, and one number fitted 
 data typically removes most of the miscalibration. `fit_temperature` finds it by minimising
 negative log likelihood, and `report()` shows ECE before and after.
 
-Read with: docs/12-eval.md -- the chapter this implements; it ends with the order to read
+Read with: docs/13-eval.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 

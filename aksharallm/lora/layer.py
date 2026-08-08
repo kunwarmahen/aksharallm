@@ -48,9 +48,9 @@ The gradient still has to flow *through* the base's dequantization to reach `x`,
 QuantLinear's `torch` backend it does: dequantizing is a differentiable function of
 buffers that require no gradient, and `F.linear` is differentiable in `x`. The Triton
 backend is a raw kernel with no backward, which is why `lora.inject` pins the backend to
-`torch` while training. See `docs/11-lora.md`.
+`torch` while training. See `docs/12-lora.md`.
 
-Read with: docs/11-lora.md -- the chapter this implements; it ends with the order to read these
+Read with: docs/12-lora.md -- the chapter this implements; it ends with the order to read these
 files in.
 """
 

@@ -1,4 +1,4 @@
-# 16. Serving it — many conversations at once
+# 17. Serving it — many conversations at once
 
 Everything up to here produces *a checkpoint*. This chapter turns it into *a thing you use*:
 an HTTP server that several clients can talk to at the same time, on one GPU, without any of
@@ -125,7 +125,7 @@ Two rules, both about not disturbing work in flight:
 ## Drafting inside the batch
 
 The two speedups compose. Batching gets more *sequences* out of one pass over the weights;
-[speculative decoding](06-inference.md) gets more *tokens* out of one pass per sequence.
+[speculative decoding](07-inference.md) gets more *tokens* out of one pass per sequence.
 Running both means each row proposes its own few tokens — by looking them up in **its own**
 text, since a batch is unrelated conversations — and the ragged step verifies every row's
 guesses in the same forward it was already doing.
@@ -190,7 +190,7 @@ curl -s http://127.0.0.1:8770/health | python -m json.tool
 ```
 
 **The training run still owns the card.** Device selection goes through the same
-`plan_device` policy as the Playground ([doc 6](06-inference.md)): if a run is training, the
+`plan_device` policy as the Playground ([doc 7](07-inference.md)): if a run is training, the
 server loads on the CPU and `/health` says so. A serving process must never be the reason a
 six-day run dies — the same argument that keeps the Code tab's explainer off the GPU.
 
@@ -206,7 +206,7 @@ contract `phase2.sh` and the training dashboard have always had.
   completion. Stopping it mid-batch is a small change and an easy one to get subtly wrong.
 * **A custom paged-attention kernel**, as above.
 * **Speculative decoding inside the batch.** It works beautifully at batch 1
-  ([doc 6](06-inference.md)) and interacts with batching in ways worth measuring before
+  ([doc 7](07-inference.md)) and interacts with batching in ways worth measuring before
   wiring: accepted-token counts differ per row, so a batch would have to be re-ragged every
   round.
 * **Authentication.** Loopback is the boundary. Exposing this on a network is your decision,
@@ -238,7 +238,7 @@ use spends almost all of its electricity being available, and no amount of decod
 optimisation touches that — the fix is to stop leaving it up, which is a decision the
 per-token rate alone would never prompt.
 
-See [doc 9](09-running-and-watching.md) § "What a run cost" for the training side of the same
+See [doc 10](10-running-and-watching.md) § "What a run cost" for the training side of the same
 ledger, and for the two bugs this uncovered.
 
 ## The code, in reading order
@@ -261,5 +261,5 @@ until it was.
 
 ---
 
-Next: [inference](06-inference.md) for the single-sequence path this builds on, and
-[quantization](10-quantization.md) for making the weights that get read 936 GB/s smaller.
+Next: [inference](07-inference.md) for the single-sequence path this builds on, and
+[quantization](11-quantization.md) for making the weights that get read 936 GB/s smaller.

@@ -12,7 +12,7 @@
 # without knowing which launcher started it.
 #
 #   scripts/experiment.sh tiny-moe          # the MoE experiment (configs/tiny-moe.yaml)
-#   scripts/experiment.sh tiny-diffusion    # the masked diffusion experiment (docs/19)
+#   scripts/experiment.sh tiny-diffusion    # the masked diffusion experiment (docs/20)
 #   scripts/experiment.sh tiny              # re-run the dense baseline
 #
 # Env knobs (same names and meanings as phase2.sh):

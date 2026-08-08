@@ -1,7 +1,7 @@
 ---
 id: tokenizer
 title: Why the model reads "tokens" and not letters
-doc: docs/02-tokenizer.md
+doc: docs/03-tokenizer.md
 files:
   - aksharallm/tokenizer/tokenizer.py
 verify: tests/test_pipeline.py::test_roundtrip_including_unicode

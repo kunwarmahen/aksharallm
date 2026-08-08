@@ -31,7 +31,7 @@ cluster centroids being tracked.
 **3. Codebook collapse is router collapse again.** A handful of entries win early, receive
 all the assignments, and the rest are never selected — so a 1,024-entry codebook is quietly
 a 40-entry one, reconstruction plateaus, **and the loss curve looks fine**. This is exactly
-the failure `docs/14-moe.md` is built around, and it gets the same treatment: usage counted
+the failure `docs/15-moe.md` is built around, and it gets the same treatment: usage counted
 every step and reported, plus **dead-code restart** — an entry nobody has chosen for a while
 is reinitialised to a random encoder output from the current batch, which is a place we know
 data actually lives.
@@ -43,7 +43,7 @@ and, crucially, **the first codebook alone is already a usable approximation.** 
 makes the bitrate a dial you can turn at decode time rather than a property of the
 checkpoint, and it is the demo the portal's Audio tab is built around.
 
-Read with: docs/20-audio.md -- the chapter this implements; it ends with the order to read
+Read with: docs/21-audio.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
 
