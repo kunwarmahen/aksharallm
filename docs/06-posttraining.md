@@ -445,11 +445,41 @@ product fixed and you have changed only the memory, not the optimisation.
 
 **Measured on the 300M SFT checkpoint, defaults (G=8 × 4 prompts = 32 completions,
 `MICRO=8`), on a 3090:** peak **16.6 GB of 24**, against an OOM at 23.5 GB before the split.
-**171–173 s/step.** At the default 500 steps that is **~24 hours**, and essentially all of it
-is sampling: `sample_group` generates the 32 completions **one at a time**, and the 300M
-model decodes at ~50 tok/s on its own against 236 tok/s at batch 32 ([chapter 17](17-serving.md)).
-Batching the group would be roughly a 4–5x cut on the whole run; it is the obvious next
-optimisation and is not done.
+
+## Sampling the group in one batch
+
+Almost all of a GRPO step is generating completions, and generating them **one at a time
+leaves the card idle**: producing a single token reads all 300M weights, so the work is
+memory-bound and the arithmetic units mostly wait. Generating the whole group in one batch
+reads those weights once and produces one token *per sequence* from them. On this model,
+**50 tok/s alone against 236 tok/s at batch 32** ([chapter 17](17-serving.md)) — and a GRPO
+group of `prompts_per_step × group_size` is exactly such a batch.
+
+`--sampler batched` (the default) does that through the **existing** `BatchEngine` — the
+server's paged KV cache and ragged batching, handed token ids and giving token ids back. No
+second sampler was written. `--sampler serial` keeps the one-at-a-time path, because it is
+the reference the batched one is tested against, and it is what runs on CPU.
+
+**Measured on the same checkpoint and defaults:**
+
+| sampler | s/step | 500 steps | peak GPU |
+|---|---|---|---|
+| serial | 171–173 | **~24 h** | 16.6 GB |
+| **batched** | **47.1–47.5** | **~6.6 h** | 17.3 GB |
+
+**3.6x on the whole run** (the sampling itself is ~5x; the sandbox and the update are fixed
+costs that do not shrink). The extra 0.7 GB is the KV block pool, allocated once.
+
+**The correctness question is the whole point, and it is not "is it faster".** The sampled
+completions *are* the training data — they feed the reward and the advantage — so a batched
+sampler producing subtly different sequences would train on different data while every curve
+looked perfectly healthy. So it is pinned by greedy equivalence against the serial path,
+token for token, over prompts of **deliberately different lengths**, because a ragged prefill
+is where position and mask bugs live and a batch of equal-length prompts would not exercise
+them. Two mutants — an off-by-one in the collected tokens, and completions filed under the
+wrong prompt — are both caught. That second one matters more than it looks: advantages are
+normalised *within a prompt's group*, so a misfiled completion is compared against the wrong
+baseline, and every shape still lines up.
 
 The first two steps also show what a healthy start looks like: reward **0.056 → 0.216** and
 solved **0% → 19%**. Reward leaving zero at all is the thing to check in the first hundred

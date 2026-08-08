@@ -195,3 +195,91 @@ def test_the_denominator_is_what_makes_it_exact():
                           mask[i:i + 5])[0].item() for i in range(0, B, 5)) / 3
     assert abs(naive - whole) > 0.01, (
         "the uneven-chunk trap has stopped biting, so this test no longer guards anything")
+
+
+# --- batched sampling must be the serial sampler, only faster ------------------------------
+# Sampling is ~90% of a GRPO step: 32 completions generated one at a time at ~50 tok/s where
+# a batch of 32 runs at 236 (docs/17). But the sampled completions ARE the training data —
+# they feed the reward and the advantage — so a batched sampler that produced subtly
+# different sequences would train on different data while every curve looked healthy.
+#
+# The check is greedy equivalence against the serial path, and the prompts are deliberately
+# *different lengths*: a ragged prefill is where position and mask bugs live, and a batch of
+# equal-length prompts would not exercise them at all.
+
+def _trained_tiny(seed: int = 0, vocab: int = 64, max_seq_len: int = 128):
+    """A briefly trained model. An untrained transformer predicts nearly the same token
+    whatever it is shown, so it agrees with any implementation and proves nothing — the same
+    trap recorded in tests/test_serve.py."""
+    from aksharallm.config import ModelConfig
+    from aksharallm.model.transformer import Transformer
+
+    torch.manual_seed(seed)
+    cfg = ModelConfig(vocab_size=vocab, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2,
+                      max_seq_len=max_seq_len, dropout=0.0)
+    model = Transformer(cfg)
+    opt = torch.optim.AdamW(model.parameters(), lr=3e-3)
+    gen = torch.Generator().manual_seed(seed + 1)
+    for _ in range(300):
+        pattern = torch.randint(0, vocab, (8, 7), generator=gen)
+        x = pattern.repeat(1, 16)[:, : min(64, max_seq_len)]
+        _, loss = model(x[:, :-1], targets=x[:, 1:])
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    return model.eval()
+
+
+def _cpu_engine(model, max_batch: int):
+    from aksharallm.serve.batch import BatchEngine
+    from aksharallm.serve.paged import BLOCK_SIZE, BlockPool
+
+    cfg = model.cfg
+    per_seq = cfg.max_seq_len // BLOCK_SIZE + 2
+    pool = BlockPool(n_layers=cfg.n_layers, n_blocks=per_seq * max_batch,
+                     n_kv_heads=cfg.n_kv_heads, head_dim=cfg.d_model // cfg.n_heads,
+                     dtype=torch.float32, device="cpu")
+    return BatchEngine(model, pool, max_batch=max_batch, device="cpu")
+
+
+def test_batched_sampling_matches_the_serial_sampler_token_for_token():
+    """Greedy, so the comparison is exact rather than distributional."""
+    from aksharallm.train.grpo import sample_group, sample_groups_batched
+
+    model = _trained_tiny()
+    torch.manual_seed(0)
+    # deliberately ragged: 5, 9 and 3 tokens of prompt
+    prompts = [[3, 9, 14, 2, 7], [11, 4, 6, 1, 19, 22, 8, 5, 13], [2, 30, 17]]
+    greedy = dict(temperature=1e-6, top_k=1, top_p=None, eos_id=None)
+    G, MAX_NEW = 2, 12
+
+    serial = [sample_group(model, p, G, MAX_NEW, greedy["temperature"], greedy["top_k"],
+                           greedy["top_p"], greedy["eos_id"], "cpu") for p in prompts]
+    batched = sample_groups_batched(_cpu_engine(model, G * len(prompts)), prompts, G,
+                                    MAX_NEW, greedy["temperature"], greedy["top_k"],
+                                    greedy["top_p"], greedy["eos_id"])
+
+    assert len(batched) == len(serial)
+    for p_idx, (s_grp, b_grp) in enumerate(zip(serial, batched)):
+        assert len(b_grp) == G, f"prompt {p_idx}: expected {G} completions, got {len(b_grp)}"
+        for k, ((s_full, s_gen), (b_full, b_gen)) in enumerate(zip(s_grp, b_grp)):
+            assert b_gen == s_gen, (
+                f"prompt {p_idx} completion {k}: batched sampling diverged from serial.\n"
+                f"  serial : {s_gen}\n  batched: {b_gen}")
+            assert b_full == s_full, "the prompt was not carried through intact"
+
+
+def test_the_batched_sampler_keeps_each_completion_with_its_own_prompt():
+    """The advantage is normalised *within a prompt's group*, so a completion filed under
+    the wrong prompt would be compared against the wrong baseline — and nothing downstream
+    could notice, because every shape still lines up."""
+    from aksharallm.train.grpo import sample_groups_batched
+
+    model = _trained_tiny()
+    prompts = [[3, 9, 14, 2, 7], [11, 4, 6, 1, 19, 22, 8, 5, 13], [2, 30, 17]]
+    groups = sample_groups_batched(_cpu_engine(model, 9), prompts, 3, 8,
+                                   1e-6, 1, None, None)
+    for pids, grp in zip(prompts, groups):
+        for full, gen in grp:
+            assert full[:len(pids)] == list(pids), "a completion is under the wrong prompt"
+            assert full[len(pids):] == gen

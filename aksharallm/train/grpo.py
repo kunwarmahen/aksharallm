@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import signal
 import sys
@@ -51,6 +52,8 @@ import torch.nn.functional as F
 
 from ..config import ModelConfig
 from ..infer.generate import generate
+from ..serve.batch import BatchEngine, Request
+from ..serve.paged import BLOCK_SIZE, BlockPool
 from ..model.transformer import Transformer
 from ..tokenizer.tokenizer import Tokenizer
 from . import report, resume, stopfile
@@ -187,13 +190,78 @@ class CodeReward:
 
 def sample_group(model, prompt_ids, group_size, max_new, temperature, top_k, top_p,
                  eos_id, device):
-    """Sample `group_size` completions for one prompt. Returns list of (full_ids, gen_ids)."""
+    """Sample `group_size` completions for one prompt, one at a time.
+
+    The reference implementation, kept because it is obviously correct and because the
+    batched path below is tested against it. It is also the fallback: on CPU, or wherever a
+    KV block pool cannot be allocated, this is what runs.
+    """
     out = []
     for _ in range(group_size):
         full = generate(model, prompt_ids, max_new_tokens=max_new, temperature=temperature,
                         top_k=top_k, top_p=top_p, eos_id=eos_id, device=device)
         out.append((full, full[len(prompt_ids):]))
     return out
+
+
+def sample_groups_batched(engine, prompts_ids, group_size, max_new, temperature, top_k,
+                          top_p, eos_id):
+    """Every completion for every prompt of one step, in a single batch.
+
+    Returns the same structure the serial path builds -- a list over prompts of a list over
+    G of `(full_ids, gen_ids)` -- so the caller cannot tell which sampler produced it.
+
+    **This is where a GRPO step's wall-clock lives.** Generating one sequence at a time
+    leaves the card idle: producing a single token reads all 300M weights, so the work is
+    memory-bound and the arithmetic units are mostly waiting. Generating the whole group in
+    one batch reads those weights once and produces one token *per sequence* from them.
+    Measured on this project's 300M model: **50 tok/s alone against 236 tok/s at batch 32**
+    (docs/17), and a GRPO group of `prompts_per_step x group_size` is exactly such a batch.
+
+    Nothing here is new machinery. `BatchEngine` already does ragged prefill, paged KV and
+    admission control for the server; this hands it token ids and takes token ids back.
+    """
+    reqs, owner = [], []
+    for p_idx, pids in enumerate(prompts_ids):
+        for _ in range(group_size):
+            reqs.append(Request(prompt_ids=list(pids), max_new_tokens=max_new,
+                                temperature=temperature, top_k=top_k, top_p=top_p,
+                                eos_id=eos_id))
+            owner.append(p_idx)
+    gen = engine.collect(reqs)
+
+    groups = [[] for _ in prompts_ids]
+    for req, p_idx in zip(reqs, owner):
+        gen_ids = gen.get(req.id, [])
+        groups[p_idx].append((list(prompts_ids[p_idx]) + gen_ids, gen_ids))
+    return groups
+
+
+def build_sampler(model, device: str, max_batch: int, max_new: int, blocks_per_seq: int = 0):
+    """A `BatchEngine` over its own KV pool, or None if batched sampling is not available.
+
+    Built **once** and reused for the whole run: the engine holds the policy by reference, so
+    each step's updated weights are picked up with no rebuild, and `collect` runs every
+    sequence to completion, which frees its blocks back to the pool. Allocating a pool per
+    step would fragment the card for no reason.
+
+    Returns None on CPU, where paged attention buys nothing and the serial path is clearer.
+    """
+    if not str(device).startswith("cuda"):
+        return None
+    cfg = model.cfg
+    # Enough blocks for every sequence to reach its full length, plus a little slack. The
+    # pool is fixed-size by design (that is the point of admission control), and a pool too
+    # small to hold one full group would deadlock rather than run slowly.
+    per_seq = blocks_per_seq or (math.ceil((cfg.max_seq_len) / BLOCK_SIZE) + 1)
+    pool = BlockPool(n_layers=cfg.n_layers, n_blocks=per_seq * max_batch,
+                     n_kv_heads=cfg.n_kv_heads, head_dim=cfg.d_model // cfg.n_heads,
+                     # The cache has to hold what the model computes in. `serve/server.py`
+                     # makes the same choice; a bf16 pool under an fp32 model fails inside
+                     # attention with a dtype mismatch rather than anywhere informative.
+                     dtype=torch.bfloat16 if str(device).startswith("cuda") else torch.float32,
+                     device=device)
+    return BatchEngine(model, pool, max_batch=max_batch, device=device)
 
 
 def build_batch(groups, pad_id, device):
@@ -231,6 +299,9 @@ def main():
     # Memory only. The optimizer still steps once per group of P*G completions, whatever
     # this is set to -- see the update loop. 8 keeps the 300M model inside a 24 GB card;
     # scoring all 32 at once asks for 1.15 GiB of logits per copy and there are three.
+    ap.add_argument("--sampler", choices=("batched", "serial"), default="batched",
+                    help="'batched' samples the whole group in one pass (much faster on a "
+                         "GPU); 'serial' is the one-at-a-time reference")
     ap.add_argument("--micro-batch", type=int, default=8, metavar="N",
                     help="completions scored at once (memory only; does not change the step)")
     ap.add_argument("--steps", type=int, default=500)
@@ -378,6 +449,16 @@ def main():
                 group_size=args.group_size, prompts_per_step=args.prompts_per_step,
                 lr=args.lr, stage="grpo", resumed=bool(resumed))
 
+    # Built once and reused: it holds the policy by reference, so each step's updated
+    # weights are picked up with no rebuild, and `collect` runs every sequence to completion
+    # so its blocks return to the pool. None on CPU, or when `--sampler serial` is asked for.
+    sampler = None
+    if args.sampler == "batched":
+        sampler = build_sampler(policy, args.device,
+                                max_batch=args.prompts_per_step * args.group_size,
+                                max_new=args.max_new_tokens)
+    print(f"sampler    {'batched (one pass per step)' if sampler else 'serial (one sequence at a time)'}")
+
     why = None
     announced = None
     last_step = args.steps - 1
@@ -385,18 +466,24 @@ def main():
         # 1-2. pick prompts, sample a group each
         idx = rng.choice(len(prompts), size=min(args.prompts_per_step, len(prompts)),
                          replace=False)
+        chosen = [prompts[j] for j in idx]
         groups, rewards_per_group = [], []
         policy.eval()
         with torch.no_grad():
-            for j in idx:
-                pids, ptext, rfn = prompts[j]
-                grp = sample_group(policy, pids, args.group_size, args.max_new_tokens,
-                                   args.temperature, args.top_k, args.top_p, tok.eos_id,
-                                   args.device)
-                groups.append(grp)
-                # 3. reward each completion (decode the generated part only)
-                rs = [rfn(ptext, tok.decode(gen)) for _, gen in grp]
-                rewards_per_group.append(rs)
+            if sampler is not None:
+                # Every completion of the step in one batch. This is ~90% of a GRPO step's
+                # wall-clock, and generating one sequence at a time leaves the card idle.
+                groups = sample_groups_batched(
+                    sampler, [pids for pids, _, _ in chosen], args.group_size,
+                    args.max_new_tokens, args.temperature, args.top_k, args.top_p, tok.eos_id)
+            else:
+                groups = [sample_group(policy, pids, args.group_size, args.max_new_tokens,
+                                       args.temperature, args.top_k, args.top_p, tok.eos_id,
+                                       args.device)
+                          for pids, _, _ in chosen]
+            # 3. reward each completion (decode the generated part only)
+            for (_, ptext, rfn), grp in zip(chosen, groups):
+                rewards_per_group.append([rfn(ptext, tok.decode(gen)) for _, gen in grp])
         policy.train()
 
         rewards = torch.tensor(rewards_per_group, dtype=torch.float32)  # (P, G)
