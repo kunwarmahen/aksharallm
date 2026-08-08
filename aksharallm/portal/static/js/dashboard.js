@@ -921,10 +921,15 @@ function renderSchedule(sched) {
         r.action + (r.stop_after ? ` · ${fmt.int(r.stop_after)} steps` : ''),
         r.at,
         describeDays(r.days),
-        r.enabled ? (r.next_fire ? `${new Date(r.next_fire).toLocaleString(undefined,
-          { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`
-          + (r.next_fire_in_s != null ? ` · in ${fmt.dur(r.next_fire_in_s)}` : '') : '—')
-          : 'paused',
+        /* Three states. A rule switched off and a rule held by the master Armed/Paused
+         * button are different problems, and showing the second one a live countdown is
+         * how a scheduled stop gets trusted and then never fires — which is exactly how
+         * a GRPO run kept training through its own stop time. */
+        !r.enabled ? 'rule off'
+          : !sched.enabled ? 'held — schedule paused'
+            : (r.next_fire ? `${new Date(r.next_fire).toLocaleString(undefined,
+              { weekday: 'short', hour: '2-digit', minute: '2-digit' })}`
+              + (r.next_fire_in_s != null ? ` · in ${fmt.dur(r.next_fire_in_s)}` : '') : '—'),
         r.last_result || '—',
         actions,
       ],

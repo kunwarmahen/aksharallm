@@ -1308,3 +1308,43 @@ def test_the_post_training_headline_metrics_are_chartable(key: str):
     assert key in runlog.SERIES_KEYS, f"{key!r} dropped from SERIES_KEYS"
     assert key in runlog.latest([{"step": 1, "loss": 0.0, key: 0.5}]), \
         f"{key!r} is charted but `latest()` does not report it for the tiles"
+
+
+# --- a paused schedule must not look like an armed one -------------------------------------
+# Real incident: a GRPO run trained straight through its own scheduled stop. The rule was
+# correct — `small-code-grpo stop 13:48 sat,sun`, enabled — and the master Armed/Paused
+# switch was off, so nothing fired. Both the CLI and the portal still printed a live
+# countdown for it ("Sun 13:48 (in 23h56m)"), because each checked only the *rule's* enabled
+# flag. A rule switched off and a rule held by the master switch are different problems with
+# different fixes, and one word ("paused") was doing both jobs.
+
+def test_a_rule_held_by_the_master_switch_is_not_the_same_as_a_rule_switched_off(tmp_path):
+    """The state that has to be distinguishable, at the data layer the views read."""
+    sched = Schedule(tmp_path, tmp_path / "schedule.json")
+    sched.add(Rule(run="demo", action="stop", at="13:48", days=[5, 6]))
+    sched.enabled = False
+    sched.save()
+
+    reread = Schedule(tmp_path, tmp_path / "schedule.json")
+    rule = reread.rules[0]
+    assert reread.enabled is False, "the master switch must survive a round-trip"
+    assert rule.enabled is True, "the rule itself is untouched by the master switch"
+    # ...and the rule still computes a next_fire, which is exactly why a view that reads
+    # only `rule.enabled` shows a countdown for something that will never happen.
+    assert rule.next_fire(at(SAT, 12, 0)) is not None
+
+
+@pytest.mark.parametrize("source", [
+    Path(__file__).resolve().parents[1] / "scripts" / "schedule.py",
+    Path(__file__).resolve().parents[1] / "aksharallm" / "portal" / "static" / "js" / "dashboard.js",
+])
+def test_both_views_consult_the_master_switch_before_promising_a_time(source: Path):
+    """Static, because the bug is a missing condition rather than a wrong value.
+
+    Each view builds the 'next' cell in one expression. It has to branch on the schedule's
+    own enabled flag, not only the rule's — otherwise a paused schedule counts down.
+    """
+    text = source.read_text()
+    assert "schedule paused" in text, (
+        f"{source.name} no longer distinguishes a held rule from a disabled one; a paused "
+        f"schedule will show a countdown for a rule that cannot fire")

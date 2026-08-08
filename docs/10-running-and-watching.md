@@ -296,6 +296,16 @@ usually short enough not to need it.
 # in the portal: Schedule → run: small-code-grpo → window 22:00–06:30
 ```
 
+> **Check the master switch before you trust a rule.** There are *two* on/off states — the
+> schedule's own **Armed / Paused** button, and each rule's. A correct, enabled rule under a
+> paused schedule never fires, and for a long time both views showed it counting down
+> anyway, because each read only the rule's flag. That is how a GRPO run trained straight
+> through its own `stop 13:48` and was still going at 13:51. The columns now say **`rule
+> off`** and **`held — schedule paused`** as different things, and
+> `test_both_views_consult_the_master_switch_before_promising_a_time` keeps them that way.
+> A scheduled stop that silently does not happen is the worst failure this panel has, because
+> nothing looks wrong until the morning.
+
 Three things had to be true first, and each is worth knowing:
 
 **The stage must resume, or a window is worse than nothing.** Without it every night

@@ -75,7 +75,13 @@ def cmd_list(sched: Schedule, scheduler: Scheduler, args) -> int:
                 ",".join(DAY_NAMES[d].lower() for d in r.days))
         extra = f" +{r.stop_after} steps" if r.stop_after else ""
         rows.append((r.id, r.run, r.action + extra, r.at, days,
-                     fmt_next(r, now) if r.enabled else "paused",
+                     # Three states, not two. A rule that is switched off and a rule held
+                     # by the master switch are different problems with different fixes,
+                     # and printing a countdown for the second one is how a scheduled stop
+                     # gets trusted and then silently never fires.
+                     ("rule off" if not r.enabled
+                      else "HELD — schedule paused" if not sched.enabled
+                      else fmt_next(r, now)),
                      (r.last_result or "—")[:44]))
     widths = [max(len(str(row[c])) for row in [hdr, *rows]) for c in range(len(hdr))]
     line = "  ".join(str(h).ljust(w) for h, w in zip(hdr, widths))
