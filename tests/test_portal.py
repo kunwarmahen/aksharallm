@@ -1071,3 +1071,45 @@ def test_a_deleted_run_leaves_the_others_alone(tmp_path):
     store.delete("demo", confirm="demo")
     assert store.runs() == ["other"]
     assert (tmp_path / "checkpoints" / "other" / "ckpt_best.pt").exists()
+
+
+# ---- post-training stages are runs too ---------------------------------------------------
+#
+# SFT/DPO/GRPO train into `checkpoints/<base>-<stage>/` and write a log named for the stage.
+# `runs()` used to require `train_log.jsonl` specifically, so the stages were invisible to
+# the run picker — and with it the log viewer, the loss chart, the sessions table, the
+# report and the cost ledger, all of which already worked. The symptom people actually hit
+# was an SFT run's power landing in the *idle* column while it held the whole card.
+
+@pytest.mark.parametrize("log,run", [("sft_log.jsonl", "demo-sft"),
+                                     ("dpo_log.jsonl", "demo-dpo"),
+                                     ("grpo_log.jsonl", "demo-grpo")])
+def test_a_post_training_stage_is_a_run(store, repo, log, run):
+    d = repo / "checkpoints" / run
+    d.mkdir(parents=True)
+    (d / log).write_text('{"step": 3, "loss": 1.5, "time": 1.0, "elapsed": 1.0}\n')
+    assert run in store.runs()
+
+
+def test_a_stage_run_reports_its_own_log_not_the_pretraining_one(store, repo):
+    d = repo / "checkpoints" / "demo-sft"
+    d.mkdir(parents=True)
+    (d / "sft_log.jsonl").write_text(
+        '{"step": 0, "loss": 2.5, "time": 1.0, "elapsed": 1.0}\n'
+        '{"step": 1, "loss": 2.1, "time": 2.0, "elapsed": 2.0}\n')
+    st = store.status("demo-sft")
+    assert st["last"]["step"] == 1 and st["last"]["loss"] == 2.1
+
+
+def test_a_directory_with_no_step_log_is_not_a_run(store, repo):
+    """The gate has to stay: an empty checkpoint dir is not something to show a chart for."""
+    (repo / "checkpoints" / "not-a-run").mkdir(parents=True)
+    (repo / "checkpoints" / "not-a-run" / "notes.txt").write_text("hello")
+    assert "not-a-run" not in store.runs()
+
+
+def test_run_log_path_falls_back_so_a_fresh_run_has_something_to_watch(tmp_path):
+    from aksharallm.portal.runs import run_log_path
+    assert run_log_path(tmp_path).name == "train_log.jsonl"
+    (tmp_path / "grpo_log.jsonl").write_text("")
+    assert run_log_path(tmp_path).name == "grpo_log.jsonl"

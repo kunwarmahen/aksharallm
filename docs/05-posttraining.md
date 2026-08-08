@@ -140,6 +140,30 @@ The prep step reports what fraction of tokens are actually trained on — expect
 Much lower means your conversations are mostly user text; much higher suggests the mask is
 wrong.
 
+### Stopping and resuming a fine-tune
+
+An SFT is hours, not days, but it is interrupted for the same reasons a pretraining run is,
+and it obeys the same `STOP` file ([doc 9](09-running-and-watching.md)). Stopping evaluates
+and saves first, so you always keep a usable model:
+
+```bash
+scripts/stop.sh small-code-sft         # after the current step
+scripts/stage.sh sft small-code        # run again -> resumes from sft_last.pt
+```
+
+Resuming restores the weights, the optimizer, the epoch **and the position inside that
+epoch's shuffle**. That last part is the one worth understanding, because getting it wrong
+is silent. Pretraining samples random windows from a stream; restarting the sampler costs
+you only exactness. SFT iterates a *shuffled epoch*, so a resume that re-shuffled would show
+the model some conversations twice within one epoch and others not at all — which is exactly
+the overfitting SFT is most exposed to, and the loss curve would look perfectly normal while
+it happened. The checkpoint therefore stores the rng state as of the start of the current
+epoch, plus how many micro-batches of that epoch were consumed; the resume replays the same
+permutation and skips forward to the batch the uninterrupted run would have drawn next.
+
+`--resume` is refused with `--lora`. An adapter file has no optimizer state and no epoch
+position, so a "resume" from one would silently be a restart with warm weights.
+
 ---
 
 # Part 2 — Direct Preference Optimization

@@ -236,6 +236,41 @@ If you ask for a stage whose prerequisite is missing, it tells you exactly what 
 first. (The stages themselves — what SFT, DPO and GRPO actually *do* — are
 [doc 5](05-posttraining.md).)
 
+A post-training stage is a **run**, with everything that implies: it appears in the run
+picker, and the log viewer, loss chart, Sessions table, Report and Cost ledger all read it
+the same way they read a pretraining run. That was not always true, and the way it failed is
+worth keeping:
+
+`RunStore.runs()` counted a checkpoint directory as a run only if it contained
+`train_log.jsonl`. The stages write `sft_log.jsonl` / `dpo_log.jsonl` / `grpo_log.jsonl`,
+so **none of them were runs** — six working panels simply never saw them, and the visible
+symptom was an SFT run's power landing in the *idle* column of the GPU panel while it held
+21 GB of the card. `runs()` now accepts any of the four names (`RUN_LOGS`) and everything
+downstream asks `run_log_path()` which one this run actually writes.
+
+Stopping works the same way for all four trainers, which also was not always true:
+
+```bash
+scripts/stop.sh small-code-sft              # stop after the current step, save, exit
+scripts/stop.sh small-code-sft --after 200  # ...at step 200
+STOP_IN=30m scripts/stage.sh sft small-code # ...after half an hour
+```
+
+`pretrain`, `sft`, `dpo` and `grpo` all poll the same file for the same three forms
+(`aksharallm/train/stopfile.py`), and each one evaluates and saves on the way out, so a
+stopped stage leaves a usable model rather than nothing.
+
+An SFT stopped this way **resumes**: `--resume auto` (which `stage.sh` passes by default)
+restores the weights, the optimizer, the epoch, and the position inside that epoch's
+shuffle. The shuffle matters more than it looks. Pretraining samples random windows from a
+stream, so a restarted sampler costs only exactness; SFT iterates a *shuffled epoch*, and a
+resume that re-shuffled would show the model some conversations twice in one epoch and
+others not at all — which is the overfitting SFT is already most exposed to, and it would
+not show up in the loss curve. So the checkpoint records the rng state as of the start of
+the current epoch plus how many micro-batches of it were consumed; the resume replays the
+same permutation and skips forward. Adapters are excluded on purpose: an adapter file is not
+a training checkpoint, and `--resume` with `--lora` is refused rather than half-honoured.
+
 The trainer defaults are for the tiny models, so `stage.sh` sets the ones that have to
 change with model size, and takes them from the environment:
 
@@ -243,6 +278,7 @@ change with model size, and takes them from the environment:
 BS=4 ACCUM=16 scripts/stage.sh sft small-code   # halve the activations, same tokens/step
 EPOCHS=3 LR=2e-5 scripts/stage.sh sft small-code
 CRASH_WINDOW=60 scripts/stage.sh sft small-code # watch longer before declaring success
+RESUME=none scripts/stage.sh sft small-code     # start over instead of continuing
 ```
 
 SFT defaults to `BS=8 ACCUM=8` — 65,536 tokens per step, measured at ~21 GB peak for the

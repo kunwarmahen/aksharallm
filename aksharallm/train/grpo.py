@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
 import time
 from pathlib import Path
@@ -50,8 +51,8 @@ from ..config import ModelConfig
 from ..infer.generate import generate
 from ..model.transformer import Transformer
 from ..tokenizer.tokenizer import Tokenizer
-from . import report
-from .pretrain import human, save_checkpoint
+from . import report, stopfile
+from .pretrain import fmt_dur, human, save_checkpoint
 from .sft import _rebuild_cfg
 
 
@@ -205,6 +206,13 @@ def main():
     ap.add_argument("--log-every", type=int, default=1)
     ap.add_argument("--ckpt-every", type=int, default=50)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--stop-file", default=None,
+                    help="poll this file for a stop request (default <out-dir>/STOP). "
+                         "Empty = stop now, a number = stop at that step, @<epoch> = stop "
+                         "at that wall-clock time.")
+    ap.add_argument("--stop-in", default=None, metavar="DURATION",
+                    help="train for this long, then save and exit: 30m / 90s / 2h / 1h30m, "
+                         "or a bare number read as minutes.")
     args = ap.parse_args()
 
     sys.stdout.reconfigure(line_buffering=True)
@@ -258,6 +266,32 @@ def main():
     best_reward = -1.0
     t0 = time.time()
 
+    # ---- stopping early ------------------------------------------------------------
+    # The same file contract pretraining, SFT and DPO obey (aksharallm/train/stopfile.py).
+    # GRPO's step is expensive — a whole group is sampled, run in the sandbox and scored —
+    # so an unstoppable run is worse here than anywhere: SIGKILL throws away the sampling
+    # too, not just the update. Checkpoints are already written on every improvement, so
+    # breaking out of the loop leaves the best model behind.
+    run_t0 = t0
+    stop_file = Path(args.stop_file) if args.stop_file else out_dir / "STOP"
+    stop_by = run_t0 + stopfile.parse_duration(args.stop_in) if args.stop_in else None
+    stop = {"now": False}
+
+    def _request_stop(signum, frame):
+        if stop["now"]:
+            print("\n[stop] second signal -- exiting immediately (this step is lost)")
+            raise KeyboardInterrupt
+        print(f"\n[stop] signal {signum} received -- will save and exit after this step")
+        stop["now"] = True
+
+    signal.signal(signal.SIGINT, _request_stop)
+    signal.signal(signal.SIGTERM, _request_stop)
+    if stop_by is not None:
+        print(f"budget  {fmt_dur(stop_by - run_t0)} of training, then save and exit")
+
+    why = None
+    announced = None
+    last_step = args.steps - 1
     for step in range(args.steps):
         # 1-2. pick prompts, sample a group each
         idx = rng.choice(len(prompts), size=min(args.prompts_per_step, len(prompts)),
@@ -295,7 +329,20 @@ def main():
 
         mean_r = rewards.mean().item()
         solve = (rewards >= 1.0).float().mean().item()  # fraction that fully passed
-        if step % args.log_every == 0:
+
+        # Decided before the log line, so the step you stop on always gets logged.
+        request = None if stop["now"] else stopfile.read(stop_file)
+        if stop["now"]:
+            why = "signal"
+        else:
+            why = stopfile.reached(request, step)
+            if why is None and request is not None and request != announced:
+                announced = request
+                print(f"[stop] {stop_file.name} asks to {request.describe(step)}")
+        if why is None and stop_by is not None and time.time() >= stop_by:
+            why = f"reached the {fmt_dur(stop_by - run_t0)} budget for this run"
+
+        if step % args.log_every == 0 or why:
             dt = time.time() - t0
             t0 = time.time()
             print(f"step {step:>5} | reward {mean_r:.3f} | solved {solve*100:4.0f}% | "
@@ -311,10 +358,18 @@ def main():
         if step > 0 and step % args.ckpt_every == 0:
             save_checkpoint(out_dir / "grpo_last.pt", policy, optimizer,
                             _rebuild_cfg(ckpt, mcfg, args), step, best_reward)
+        if why:
+            print(f"[stop] {why} -- saving at step {step}")
+            last_step = step
+            break
 
     save_checkpoint(out_dir / "grpo_last.pt", policy, optimizer,
-                    _rebuild_cfg(ckpt, mcfg, args), args.steps - 1, best_reward)
-    print(f"\ndone. best mean reward {best_reward:.3f}. checkpoints in {out_dir}")
+                    _rebuild_cfg(ckpt, mcfg, args), last_step, best_reward)
+    # Clear the honoured request: a stop file left behind would end the *next* run at step 0.
+    if why and stop_file.exists():
+        stop_file.unlink(missing_ok=True)
+    print(f"\ndone. best mean reward {best_reward:.3f}"
+          f"{f' (stopped early: {why})' if why else ''}. checkpoints in {out_dir}")
     logf.close()
     report.write_quietly(out_dir, log="grpo_log.jsonl")
 

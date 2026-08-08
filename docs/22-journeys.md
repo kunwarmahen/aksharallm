@@ -206,6 +206,10 @@ SFT trains every weight, so it needs as much memory per micro-batch as pretraini
 The defaults suit the tiny models; on a bigger one, lower `BS` (and raise `ACCUM` to match)
 — see [the stage knobs](09-running-and-watching.md#when-a-stage-dies-and-the-panel-says-ready).
 
+Like a base run, it stops and resumes: `scripts/stop.sh small-code-sft` saves and exits,
+and running the stage again continues from where it stopped. It is also a run in its own
+right — pick `small-code-sft` in the run picker for its log, loss curve, sessions and cost.
+
 **How you know it worked:** the Playground's Chat mode unlocks. It is hard-refused on a
 base checkpoint on purpose — a base model has never seen a chat token, and letting it try
 would look like a broken model rather than a wrong stage. If the stage dies instead, the

@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import signal
 import sys
 import time
 from datetime import datetime
@@ -51,7 +52,7 @@ from ..config import ModelConfig
 from ..lora import setup as lora_setup
 from ..lora.layer import disable_adapters
 from ..model.transformer import Transformer
-from . import report
+from . import report, stopfile
 from .pretrain import fmt_dur, human, save_checkpoint, stamp
 from .schedule import get_lr
 from .sft import _rebuild_cfg
@@ -160,6 +161,16 @@ def main():
     ap.add_argument("--eval-every", type=int, default=100)
     ap.add_argument("--log-every", type=int, default=10)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    # The same bounded-stop contract pretraining and SFT obey (aksharallm/train/stopfile.py).
+    # DPO is shorter than a pretraining run but not short enough to be un-stoppable: without
+    # this the only way out was SIGKILL, which loses every step since the last eval.
+    ap.add_argument("--stop-file", default=None,
+                    help="poll this file for a stop request (default <out-dir>/STOP). "
+                         "Empty = stop now, a number = stop at that step, @<epoch> = stop "
+                         "at that wall-clock time.")
+    ap.add_argument("--stop-in", default=None, metavar="DURATION",
+                    help="train for this long, then save and exit: 30m / 90s / 2h / 1h30m, "
+                         "or a bare number read as minutes.")
     lora_setup.add_lora_args(ap)
     args = ap.parse_args()
     use_lora = lora_setup.wants_lora(args)
@@ -236,9 +247,33 @@ def main():
     run_t0 = t0  # whole invocation
     prev_log_step = -1
     best_val = float("inf")
-    print(f"started {datetime.now():%Y-%m-%d %H:%M:%S}")
 
+    # ---- stopping early ------------------------------------------------------------
+    # Identical contract to sft.py: a signal or a file, whichever arrives first, breaks out
+    # to the tail below — which evaluates and saves, so a stopped run still leaves a usable
+    # model rather than nothing.
+    stop_file = Path(args.stop_file) if args.stop_file else out_dir / "STOP"
+    stop_by = run_t0 + stopfile.parse_duration(args.stop_in) if args.stop_in else None
+    stop = {"now": False}
+
+    def _request_stop(signum, frame):
+        if stop["now"]:
+            print("\n[stop] second signal -- exiting immediately (this step is lost)")
+            raise KeyboardInterrupt
+        print(f"\n[stop] signal {signum} received -- will save and exit after this step")
+        stop["now"] = True
+
+    signal.signal(signal.SIGINT, _request_stop)
+    signal.signal(signal.SIGTERM, _request_stop)
+    print(f"started {datetime.now():%Y-%m-%d %H:%M:%S}")
+    if stop_by is not None:
+        print(f"budget  {fmt_dur(stop_by - run_t0)} of training, then save and exit")
+
+    why = None
+    announced = None
     for epoch in range(args.epochs):
+        if why:
+            break
         batches = train_ds.epoch_batches(args.batch_size, rng)
         exhausted = False
         while not exhausted:
@@ -273,7 +308,19 @@ def main():
             gnorm = torch.nn.utils.clip_grad_norm_(policy.parameters(), args.grad_clip)
             optimizer.step()
 
-            if step % args.log_every == 0:
+            # Decided before the log line, so the step you stop on always gets logged.
+            request = None if stop["now"] else stopfile.read(stop_file)
+            if stop["now"]:
+                why = "signal"
+            else:
+                why = stopfile.reached(request, step)
+                if why is None and request is not None and request != announced:
+                    announced = request
+                    print(f"[stop] {stop_file.name} asks to {request.describe(step)}")
+            if why is None and stop_by is not None and time.time() >= stop_by:
+                why = f"reached the {fmt_dur(stop_by - run_t0)} budget for this run"
+
+            if step % args.log_every == 0 or why:
                 dt = time.time() - t0
                 t0 = time.time()
                 s_per_step = dt / (step - prev_log_step)   # measured, not assumed
@@ -302,6 +349,9 @@ def main():
                           best_val, va, use_lora, lora_config, lora_report)
                 t0 = time.time()
             step += 1
+            if why:
+                print(f"[stop] {why} -- evaluating and saving at step {step}")
+                break
 
     vl, va = evaluate(policy, ref, val_ds, args.batch_size, 20, args.beta, ctx)
     print(f"\nfinal val loss {vl:.4f} acc {va*100:.1f}%")
@@ -310,7 +360,11 @@ def main():
     if vl < best_val:
         _save(out_dir, "best", policy, optimizer, ckpt, mcfg, args, step, vl, va,
               use_lora, lora_config, lora_report)
-    print(f"ran {step} steps in {fmt_dur(time.time() - run_t0)}, "
+    # Clear the honoured request: a stop file left behind would end the *next* run at step 0.
+    if why and stop_file.exists():
+        stop_file.unlink(missing_ok=True)
+    print(f"ran {step} steps in {fmt_dur(time.time() - run_t0)}"
+          f"{f' (stopped early: {why})' if why else ''}, "
           f"finished {datetime.now():%Y-%m-%d %H:%M:%S}")
     print(f"output in {out_dir}")
     logf.close()

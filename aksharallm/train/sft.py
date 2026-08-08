@@ -124,6 +124,11 @@ def main():
     ap.add_argument("--stop-in", default=None, metavar="DURATION",
                     help="train for this long, then save and exit: 30m / 90s / 2h / 1h30m, "
                          "or a bare number read as minutes.")
+    ap.add_argument("--resume", default=None, metavar="PATH|auto",
+                    help="continue a stopped fine-tune: 'auto' picks <out-dir>/sft_last.pt "
+                         "if it exists and starts fresh if it does not, so the same command "
+                         "both starts and resumes. Restores the optimizer, the epoch and the "
+                         "position in the shuffled epoch. Not available with --lora.")
     lora_setup.add_lora_args(ap)
     args = ap.parse_args()
     use_lora = lora_setup.wants_lora(args)
@@ -170,6 +175,33 @@ def main():
     max_steps = steps_per_epoch * args.epochs
     warmup = max(10, int(max_steps * args.warmup_ratio))
 
+    # ---- resume ---------------------------------------------------------------------
+    # `auto` means "the same command starts a fine-tune and continues a stopped one", which
+    # is what makes stop-and-resume usable from a button. It is not an error for the
+    # checkpoint to be missing: that is simply the first launch.
+    resumed = None
+    resume_path = args.resume
+    # "none" is spelled out because this arrives from `RESUME=` in the environment, where
+    # unsetting a variable is awkward and the obvious value to type is a word, not an empty
+    # string. Without this, `RESUME=none` looks for a checkpoint named "none".
+    if resume_path is not None and str(resume_path).strip().lower() in ("", "none", "off", "no"):
+        resume_path = None
+    if resume_path == "auto":
+        cand = out_dir / "sft_last.pt"
+        resume_path = str(cand) if cand.exists() else None
+    if resume_path and use_lora:
+        raise SystemExit(
+            "--resume does not work with --lora: an adapter file is not a training "
+            "checkpoint (no optimizer state, no epoch position). Re-run without --resume.")
+    if resume_path:
+        prev = torch.load(resume_path, map_location=args.device, weights_only=False)
+        model.load_state_dict(prev["model"])
+        if "optimizer" in prev:
+            optimizer.load_state_dict(prev["optimizer"])
+        resumed = prev.get("sft_progress") or {}
+        resumed.setdefault("step", prev.get("step", 0))
+        resumed["best_val"] = resumed.get("best_val", prev.get("best_val", float("inf")))
+
     print("=" * 78)
     print(f"base       {args.base} (step {ckpt.get('step')})")
     print(f"params     {human(model.num_params())}")
@@ -195,6 +227,28 @@ def main():
     rng = np.random.default_rng(1234)
     best_val = float("inf")
     step = 0
+    start_epoch, skip_batches = 0, 0
+    if resumed:
+        step = int(resumed.get("step", 0))
+        best_val = float(resumed.get("best_val", float("inf")))
+        start_epoch = int(resumed.get("epoch", 0))
+        skip_batches = int(resumed.get("batches_done", 0))
+        if resumed.get("epoch_rng_state") is not None:
+            # Replay the epoch's shuffle exactly; see `_progress`. A checkpoint written
+            # before this existed has no state, and falls back to a fresh shuffle -- not
+            # wrong, just not identical to an uninterrupted run.
+            try:
+                rng.bit_generator.state = resumed["epoch_rng_state"]
+            except (KeyError, TypeError, ValueError) as e:
+                print(f"  note: could not restore the shuffle position ({e}); "
+                      "re-shuffling this epoch from the seed")
+                skip_batches = 0
+        where = f"step {step}, epoch {start_epoch}"
+        if skip_batches:
+            where += f", {skip_batches} batches into that epoch"
+        if best_val < float("inf"):
+            where += f", best val {best_val:.4f}"
+        print(f"resumed from {resume_path} at {where}")
     t0 = time.time()  # current log window
     run_t0 = t0  # whole invocation
     prev_log_step = -1
@@ -223,10 +277,27 @@ def main():
 
     why = None
     announced = None  # the stop request already printed, so it is logged once, not per step
-    for epoch in range(args.epochs):
+    # Defined before the loop: a resume that lands past the last epoch never enters it, and
+    # the save below still has to describe where the run got to.
+    epoch, batches_done, epoch_rng_state = start_epoch, 0, None
+    for epoch in range(start_epoch, args.epochs):
         if why:
             break
+        # Recorded BEFORE the permutation is drawn: this is the state a resume must restore
+        # to replay this epoch's shuffle. `batches_done` is counted against it.
+        epoch_rng_state = rng.bit_generator.state
+        batches_done = 0
         batches = train_ds.epoch_batches(args.batch_size, rng)
+        if skip_batches:
+            # Fast-forward to where the stopped run left off. Advancing the generator is
+            # cheap next to a forward pass and it keeps one definition of the batch order.
+            for _ in range(skip_batches):
+                try:
+                    next(batches)
+                    batches_done += 1
+                except StopIteration:
+                    break
+            skip_batches = 0   # only the first epoch of a resume is partial
         exhausted = False
         while not exhausted:
             lr = get_lr(step, base_lr=args.lr, warmup_steps=warmup,
@@ -242,6 +313,9 @@ def main():
                 except StopIteration:
                     exhausted = True
                     break
+                # Counted here, not after the NaN check below: this tracks how far the
+                # generator has been advanced, which is what a resume has to reproduce.
+                batches_done += 1
                 with ctx:
                     _, loss = model(x, targets=y)
                     loss = loss / args.grad_accum
@@ -302,7 +376,8 @@ def main():
                 if vl < best_val:
                     best_val = vl
                     _save(out_dir, "best", model, optimizer, ckpt, mcfg, args, step,
-                          best_val, use_lora, lora_config, lora_report)
+                          best_val, use_lora, lora_config, lora_report,
+                          _progress(epoch, batches_done, epoch_rng_state, best_val))
                 t0 = time.time()
             step += 1
             if why:
@@ -311,11 +386,16 @@ def main():
 
     vl = evaluate(model, val_ds, args.batch_size, 20, ctx)
     print(f"\nfinal val {vl:.4f}")
+    # A run that finished its last epoch records that, so a later `--resume auto` is a clean
+    # no-op rather than replaying the tail of the final epoch.
+    done_epoch = epoch if why else args.epochs
+    progress = _progress(done_epoch, batches_done if why else 0, epoch_rng_state,
+                         min(best_val, vl))
     _save(out_dir, "last", model, optimizer, ckpt, mcfg, args, step, min(best_val, vl),
-          use_lora, lora_config, lora_report)
+          use_lora, lora_config, lora_report, progress)
     if vl < best_val:
         _save(out_dir, "best", model, optimizer, ckpt, mcfg, args, step, vl,
-              use_lora, lora_config, lora_report)
+              use_lora, lora_config, lora_report, progress)
     # Clear the request now that it has been honoured: a stop file left behind would end the
     # *next* fine-tune at step 0, and that failure looks like a broken script, not a stale file.
     if why and stop_file.exists():
@@ -334,13 +414,15 @@ def main():
 
 
 def _save(out_dir: Path, which: str, model, optimizer, ckpt, mcfg, args, step, val,
-          use_lora: bool, lora_config, lora_report):
+          use_lora: bool, lora_config, lora_report, progress=None):
     """Write an adapter (~MB) or a full checkpoint (~GB), depending on how we trained.
 
     The naming is deliberately different -- `sft_best.lora.pt` rather than `sft_best.pt` --
     because the two are not interchangeable. A full checkpoint is a model; an adapter is
     useless without the base it names in its metadata, and a filename that hid that
     difference would be an easy way to lose a model.
+
+    `progress` is what makes `--resume` exact rather than approximate: see `_progress`.
     """
     if use_lora:
         return lora_setup.save(
@@ -349,7 +431,26 @@ def _save(out_dir: Path, which: str, model, optimizer, ckpt, mcfg, args, step, v
             training={"stage": "sft", "step": step, "val_loss": val, "lr": args.lr,
                       "epochs": args.epochs, "data_dir": args.data_dir})
     cfg_obj = _rebuild_cfg(ckpt, mcfg, args)
-    return save_checkpoint(out_dir / f"sft_{which}.pt", model, optimizer, cfg_obj, step, val)
+    return save_checkpoint(out_dir / f"sft_{which}.pt", model, optimizer, cfg_obj, step, val,
+                           extra={"sft_progress": progress} if progress else None)
+
+
+def _progress(epoch: int, batches_done: int, epoch_rng_state, best_val: float) -> dict:
+    """Where in the *dataset* a fine-tune had got to, not just how many steps it had run.
+
+    Steps alone are not enough to resume an SFT. Pretraining samples random windows from a
+    stream, so restarting the sampler costs you nothing but exactness; SFT iterates a
+    shuffled epoch, and a resume that restarts the shuffle would show the model some
+    conversations twice in one epoch and others not at all -- which is precisely the
+    overfitting SFT is already most at risk of.
+
+    So we record the rng state as of the *start of the current epoch* (the permutation is
+    drawn once, there) plus how many micro-batches of that epoch have been consumed. A
+    resume replays the same permutation and skips forward, which lands on exactly the batch
+    the uninterrupted run would have drawn next.
+    """
+    return {"epoch": epoch, "batches_done": batches_done,
+            "epoch_rng_state": epoch_rng_state, "best_val": best_val}
 
 
 def _rebuild_cfg(ckpt, mcfg, args):

@@ -6,6 +6,9 @@ of answering -- and nothing in the loss curve reveals it.
 """
 
 import math
+import re
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -29,10 +32,17 @@ CORPUS = [
 
 
 @pytest.fixture(scope="module")
-def tok(tmp_path_factory) -> Tokenizer:
+def tok_path(tmp_path_factory) -> Path:
+    """The tokenizer on disk. `sft.py` takes a path, not an object, so the CLI test needs
+    this separately from the `tok` fixture below."""
     path = tmp_path_factory.mktemp("tok") / "tokenizer.json"
     train_bpe(iter(CORPUS), vocab_size=512, out_path=path, min_frequency=1)
-    return Tokenizer(path)
+    return path
+
+
+@pytest.fixture(scope="module")
+def tok(tok_path) -> Tokenizer:
+    return Tokenizer(tok_path)
 
 
 # ---- tokenizer ---------------------------------------------------------------------
@@ -419,3 +429,157 @@ def test_stop_after_and_stop_at_default_to_off_and_parse_from_overrides(tmp_path
                                  "train.stop_after_s=1800"])
     assert (cfg.train.stop_after, cfg.train.stop_at, cfg.train.stop_after_s) \
         == (500, 20000, 1800)
+
+
+# ---- SFT stop and resume -------------------------------------------------------------
+#
+# The property that matters is not "it restarts" but "it restarts *in the right place*".
+# SFT iterates a shuffled epoch rather than sampling a stream, so a resume that re-shuffles
+# shows the model some conversations twice in one epoch and others not at all — the exact
+# overfitting SFT is most exposed to, and invisible in the loss curve.
+
+def _sft_dataset(tmp_path, n=64, seq_len=8):
+    from aksharallm.train.sft import SFTDataset
+    rng = np.random.default_rng(0)
+    tokens = rng.integers(0, 100, size=(n, seq_len), dtype=np.uint16)
+    mask = np.ones((n, seq_len), dtype=np.uint8)
+    np.save(tmp_path / "train_tokens.npy", tokens)
+    np.save(tmp_path / "train_mask.npy", mask)
+    return SFTDataset(tmp_path / "train_tokens.npy", tmp_path / "train_mask.npy", "cpu")
+
+
+def test_a_resumed_epoch_draws_the_batch_the_stopped_run_would_have_drawn_next(tmp_path):
+    """Restore the epoch's rng state, skip the batches already seen, land on the next one."""
+    ds = _sft_dataset(tmp_path)
+    bs, stop_after = 4, 5
+
+    # The uninterrupted run: one epoch, in order.
+    rng = np.random.default_rng(1234)
+    state = rng.bit_generator.state          # what `_progress` records
+    uninterrupted = [x for x, _ in ds.epoch_batches(bs, rng)]
+
+    # The resumed run: same state, skip what was done, continue.
+    rng2 = np.random.default_rng(1234)
+    rng2.bit_generator.state = state
+    it = ds.epoch_batches(bs, rng2)
+    for _ in range(stop_after):
+        next(it)
+    continued = [x for x, _ in it]
+
+    assert len(continued) == len(uninterrupted) - stop_after
+    for a, b in zip(continued, uninterrupted[stop_after:]):
+        assert torch.equal(a, b), "a resume must not re-shuffle the epoch"
+
+
+def test_a_reshuffled_resume_would_repeat_data(tmp_path):
+    """Why the rng state is saved at all: without it the epoch order changes."""
+    ds = _sft_dataset(tmp_path)
+    first = [x for x, _ in ds.epoch_batches(4, np.random.default_rng(1234))]
+    # A resume that just made a fresh generator from the *next* epoch's state:
+    rng = np.random.default_rng(1234)
+    ds.epoch_batches(4, rng).__next__()      # advance the generator as one epoch would
+    second = [x for x, _ in ds.epoch_batches(4, rng)]
+    assert not all(torch.equal(a, b) for a, b in zip(first, second)), (
+        "if a re-shuffle produced the same order this test could not detect the bug")
+
+
+def test_progress_survives_a_checkpoint_round_trip(tmp_path):
+    """`_progress` has to come back out of a .pt file intact — it is a numpy rng state
+    dict, not a scalar, and that is the part most likely to break silently."""
+    from aksharallm.train.sft import _progress
+    rng = np.random.default_rng(1234)
+    p = _progress(epoch=1, batches_done=17, epoch_rng_state=rng.bit_generator.state,
+                  best_val=1.25)
+    torch.save({"sft_progress": p}, tmp_path / "ckpt.pt")
+    back = torch.load(tmp_path / "ckpt.pt", weights_only=False)["sft_progress"]
+    assert back["epoch"] == 1 and back["batches_done"] == 17 and back["best_val"] == 1.25
+    # and it must still drive a generator to the same sequence
+    r2 = np.random.default_rng(0)
+    r2.bit_generator.state = back["epoch_rng_state"]
+    assert np.array_equal(r2.permutation(50), np.random.default_rng(1234).permutation(50))
+
+
+def _tiny_sft_run(tmp_path, tok_path):
+    """A real (tiny) SFT setup: a base checkpoint, packed blocks, and a mask."""
+    from aksharallm.config import ModelConfig
+    from aksharallm.model.transformer import Transformer
+
+    cfg = ModelConfig(vocab_size=512, d_model=32, n_layers=2, n_heads=2, n_kv_heads=1,
+                      max_seq_len=16, tie_embeddings=True, dropout=0.0)
+    base = tmp_path / "base.pt"
+    torch.save({"model": Transformer(cfg).state_dict(), "model_config": dict(vars(cfg)),
+                "config": {"data": {"tokenizer": str(tok_path)}}, "step": 7,
+                "best_val": 2.0}, base)
+
+    data = tmp_path / "data"
+    data.mkdir()
+    rng = np.random.default_rng(0)
+    for split, n in (("train", 32), ("val", 8)):
+        np.save(data / f"{split}_tokens.npy",
+                rng.integers(0, 512, size=(n, 16), dtype=np.uint16))
+        np.save(data / f"{split}_mask.npy", np.ones((n, 16), dtype=np.uint8))
+    return base, data
+
+
+def test_a_stopped_sft_resumes_where_it_stopped(tmp_path, tok_path):
+    """End-to-end, through the real CLI: stop at a step, resume, continue from step+1.
+
+    The unit tests above pin the shuffle mechanics; this one pins that `main()` actually
+    uses them. A resume that silently restarted at step 0 would pass every test above.
+    """
+    base, data = _tiny_sft_run(tmp_path, tok_path)
+    out = tmp_path / "out"
+    stop = tmp_path / "STOP"
+    common = [sys.executable, "-m", "aksharallm.train.sft",
+              "--base", str(base), "--data-dir", str(data),
+              "--tokenizer", str(tok_path), "--out-dir", str(out),
+              "--epochs", "2", "--batch-size", "2", "--grad-accum", "2",
+              "--device", "cpu", "--eval-every", "10000", "--log-every", "1",
+              "--stop-file", str(stop)]
+
+    stop.write_text("2")                      # stop on reaching step 2
+    first = subprocess.run(common, capture_output=True, text=True,
+                           cwd=Path(__file__).resolve().parents[1], timeout=600)
+    assert first.returncode == 0, first.stderr[-3000:]
+    assert "STOP file asked for step 2" in first.stdout, first.stdout[-2000:]
+    assert (out / "sft_last.pt").exists()
+    saved = torch.load(out / "sft_last.pt", weights_only=False)
+    assert saved["sft_progress"]["batches_done"] > 0
+
+    # The honoured request is cleared, so the resume is not stopped again at step 0.
+    assert not stop.exists(), "sft.py must clear the STOP file it acted on"
+
+    second = subprocess.run(common + ["--resume", "auto"], capture_output=True, text=True,
+                            cwd=Path(__file__).resolve().parents[1], timeout=600)
+    assert second.returncode == 0, second.stderr[-3000:]
+    assert "resumed from" in second.stdout, second.stdout[-2000:]
+    # It continues rather than restarting: the first step it logs is past where it stopped.
+    steps = [int(m) for m in re.findall(r"step\s+(\d+)/", second.stdout)]
+    assert steps and steps[0] > 2, f"resumed run restarted at {steps[:3]}"
+
+
+@pytest.mark.parametrize("value", ["none", "None", "off", "no", "  "])
+def test_resume_can_be_switched_off_by_word(tmp_path, tok_path, value):
+    """`RESUME=none scripts/stage.sh sft ...` must start over, not hunt for a file called
+    "none". The value comes from the environment, where a word is the natural way to say
+    "don't", and the failure mode is a FileNotFoundError at launch."""
+    base, data = _tiny_sft_run(tmp_path, tok_path)
+    out = tmp_path / "out"
+    (out).mkdir()
+    # a checkpoint that `auto` WOULD pick up, to prove the word is what turned it off
+    stop = tmp_path / "STOP"
+    stop.write_text("1")
+    argv = [sys.executable, "-m", "aksharallm.train.sft",
+            "--base", str(base), "--data-dir", str(data), "--tokenizer", str(tok_path),
+            "--out-dir", str(out), "--epochs", "1", "--batch-size", "2", "--grad-accum", "2",
+            "--device", "cpu", "--eval-every", "10000", "--log-every", "1",
+            "--stop-file", str(stop)]
+    subprocess.run(argv, capture_output=True, text=True,
+                   cwd=Path(__file__).resolve().parents[1], timeout=600)
+    assert (out / "sft_last.pt").exists()
+
+    stop.write_text("1")
+    r = subprocess.run(argv + ["--resume", value], capture_output=True, text=True,
+                       cwd=Path(__file__).resolve().parents[1], timeout=600)
+    assert r.returncode == 0, r.stderr[-2000:]
+    assert "resumed from" not in r.stdout, "the word should have switched resuming off"

@@ -670,11 +670,12 @@ def _run_extras(store, run: str, item: dict) -> dict:
     between a number and a lie.
     """
     from ..train import runlog
+    from .runs import run_log_path
     out: dict = {}
     try:
         if run not in store.runs():
             return out
-        records = runlog.load_records(store.run_dir(run) / "train_log.jsonl")
+        records = runlog.load_records(run_log_path(store.run_dir(run)))
         last = runlog.latest(records)
         sessions = runlog.summarise_sessions(runlog.split_sessions(records))
     except (OSError, ValueError):

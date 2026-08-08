@@ -158,6 +158,27 @@ def _read_meta(path: Path) -> dict[str, str]:
     return out
 
 
+#: The per-step log a run writes, in the order we look for it. Pretraining and the modality
+#: trainers write `train_log.jsonl`; each post-training stage writes one named for itself.
+#: A run has exactly one of these — the stages train into their own `<base>-<stage>` dir.
+RUN_LOGS = ("train_log.jsonl", "sft_log.jsonl", "dpo_log.jsonl", "grpo_log.jsonl")
+
+
+def run_log_path(run_dir: Path) -> Path:
+    """The step log this run actually writes.
+
+    Hardcoding `train_log.jsonl` is what kept SFT, DPO and GRPO out of the run picker, and
+    with it the log viewer, the loss chart, the sessions table, the report and the cost
+    ledger — every one of which already worked and simply never saw them. Falls back to the
+    pretraining name so a run that has not written a step yet still has a path to watch.
+    """
+    for name in RUN_LOGS:
+        candidate = run_dir / name
+        if candidate.exists():
+            return candidate
+    return run_dir / RUN_LOGS[0]
+
+
 def _read_int(path: Path) -> int | None:
     try:
         digits = re.sub(r"\D", "", path.read_text())
@@ -235,7 +256,7 @@ class RunStore:
         ckpt = self.root / "checkpoints"
         if ckpt.is_dir():
             names |= {p.name for p in ckpt.iterdir()
-                      if p.is_dir() and (p / "train_log.jsonl").exists()}
+                      if p.is_dir() and any((p / n).exists() for n in RUN_LOGS)}
         return sorted(n for n in names if RUN_NAME_RE.match(n))
 
     def check(self, run: str) -> str:
@@ -329,7 +350,7 @@ class RunStore:
         """Everything the dashboard shows for one run, in one read of the disk."""
         self.check(run)
         rdir, ldir = self.run_dir(run), self.log_dir(run)
-        records = runlog.load_records(rdir / "train_log.jsonl")
+        records = runlog.load_records(run_log_path(rdir))
         last = runlog.latest(records)
         sessions = runlog.summarise_sessions(runlog.split_sessions(records))
 
@@ -653,7 +674,7 @@ class RunStore:
                                f"{'count' if mode == 'after' else 'number'}.")
             if mode == "at":
                 cur = runlog.latest(
-                    runlog.load_records(self.run_dir(run) / "train_log.jsonl"))["step"]
+                    runlog.load_records(run_log_path(self.run_dir(run))))["step"]
                 if cur is not None and steps <= cur:
                     raise RunError(f"step {steps} is already behind this run "
                                    f"(it is at {cur}) — use 'stop now'.")

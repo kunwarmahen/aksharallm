@@ -42,6 +42,11 @@ LOG_DIR=logs/$RUN
 LOG=$LOG_DIR/${STAGE}_$(date '+%Y%m%d-%H%M%S').log
 LOG_LINK=train_${RUN}.log
 PID_FILE=$RUN_DIR/train.pid
+# The same path scripts/stop.sh writes and the portal's Stop button drives. Post-training
+# stages get their own run directory, so the plain name is unambiguous here — the trainers'
+# own default of <stage>_STOP exists only for the LoRA path, which writes into the *base*
+# run's directory where a pretraining run would read a file called STOP.
+STOP_FILE=$RUN_DIR/STOP
 LAUNCH_PID_FILE=$RUN_DIR/launch.pid
 LAUNCH_META=$RUN_DIR/launch.meta
 
@@ -87,6 +92,12 @@ if [ -f "$PID_FILE" ] && kill -0 "$(tr -dc '0-9' < "$PID_FILE" 2>/dev/null)" 2>/
     exit 1
 fi
 rm -f "$PID_FILE"
+# A STOP left over from the last run would end this one at step 0, and that reads as a
+# broken launcher rather than a stale file. phase2.sh clears it for the same reason.
+if [ -f "$STOP_FILE" ]; then
+    echo "    cleared a stale STOP from the previous run."
+    rm -f "$STOP_FILE"
+fi
 echo "$$" > "$LAUNCH_PID_FILE"
 launch_stage preflight
 
@@ -117,20 +128,23 @@ case "$STAGE" in
         # tokens/step, measured at ~21 GB peak on a 3090. Raise BS on a bigger card.
         CMD=($PY -m aksharallm.train.sft --base "$BASE_CKPT" --data-dir data/sft
              --tokenizer "$TOK" --out-dir "$RUN_DIR" --epochs "${EPOCHS:-2}" --lr "${LR:-1e-5}"
-             --batch-size "${BS:-8}" --grad-accum "${ACCUM:-8}")
+             --batch-size "${BS:-8}" --grad-accum "${ACCUM:-8}"
+             --stop-file "$STOP_FILE" --resume "${RESUME:-auto}")
         ;;
     dpo)
         DATA=${DATA:-ultrafeedback}
         [ -s data/dpo/train_chosen_tokens.npy ] || $PY -m aksharallm.data.prepare_dpo "$DATA" \
             --tokenizer "$TOK" --out-dir data/dpo --seq-len "$SEQ"
         CMD=($PY -m aksharallm.train.dpo --sft "$SFT_CKPT" --data-dir data/dpo
-             --tokenizer "$TOK" --out-dir "$RUN_DIR" --beta "${BETA:-0.1}" --lr "${LR:-5e-7}")
+             --tokenizer "$TOK" --out-dir "$RUN_DIR" --beta "${BETA:-0.1}" --lr "${LR:-5e-7}"
+             --stop-file "$STOP_FILE")
         ;;
     grpo)
         # Code reward uses the built-in sandbox tasks -- no dataset to prepare.
         CMD=($PY -m aksharallm.train.grpo --init "$SFT_CKPT" --tokenizer "$TOK"
              --out-dir "$RUN_DIR" --reward "${REWARD:-code}" --group-size "${GROUP:-8}"
-             --lr "${LR:-1e-6}" --steps "${STEPS:-500}")
+             --lr "${LR:-1e-6}" --steps "${STEPS:-500}"
+             --stop-file "$STOP_FILE")
         ;;
 esac
 
