@@ -13,16 +13,21 @@
         <a href="#docs?doc=23-speech-recognition.md">Read the chapter</a>.
       </p>
       <div class="au-flow" aria-hidden="true">
-        <span class="au-step">microphone<small>48,000 samples/s</small></span>
+        <span class="au-step">your voice<small>16,000 samples/s</small></span>
         <span class="au-arrow">→</span>
-        <span class="au-step">log-mel<small>80 bands, 100/s</small></span>
+        <span class="au-step">Conformer<small>a letter or blank, 25/s</small></span>
         <span class="au-arrow">→</span>
-        <span class="au-step">Conformer<small>attention + convolution</small></span>
+        <span class="au-step">beam search<small>word LM + your dictionary</small></span>
         <span class="au-arrow">→</span>
-        <span class="au-step au-step-key">a letter or blank<small>25 times a second</small></span>
+        <span class="au-step au-step-key">cleanup<small>punctuation tagger, fillers, commands</small></span>
         <span class="au-arrow">→</span>
-        <span class="au-step">merge repeats,<br>drop blanks</span>
+        <span class="au-step">text<small>typed where your cursor is</small></span>
       </div>
+      <p class="panel-note dim">
+        Every piece is ours. The cleanup is a <strong>tagger</strong>: it labels each word with
+        the punctuation after it and how it is capitalised, and cannot write a word of its own —
+        so cleanup can never put words in your mouth. The day-two checks below count that.
+      </p>
       <div id="dc-empty" class="panel-note warn" hidden>
         No recogniser yet. The smoke run needs no download and takes a few minutes:
         <pre class="au-cmd">.venv/bin/python -m aksharallm.audio corpus --out data/audio/synth-asr --clips 400
@@ -33,8 +38,110 @@ scripts/audio.sh asr-libri100</pre>
       </div>
     </div>
 
+    <div class="panel" id="dc-dictate-panel">
+      <h3>Dictate</h3>
+      <p class="panel-note">
+        Press, talk, press again. What comes back is finished text: punctuated, capitalised,
+        <em>um</em>s removed. Say <b>new line</b>, <b>new paragraph</b> or <b>scratch that</b>
+        (which deletes the sentence you are in). If a word is wrong, fix it in the box and press
+        <b>Teach it</b> — that is how it learns your names.
+      </p>
+      <div class="row">
+        <button id="dc-go" class="primary dc-go" type="button">● Start dictating</button>
+        <label class="field">…or a file <input id="dc-go-file" type="file" accept="audio/*"></label>
+      </div>
+      <p id="dc-pipe" class="panel-note dim"></p>
+      <p id="dc-go-status" class="panel-note"></p>
+      <div id="dc-result" class="dc-out" hidden>
+        <textarea id="dc-final" class="dc-final" rows="4" spellcheck="true"
+                  aria-label="The dictated text — edit it to correct a mistake"></textarea>
+        <div class="row">
+          <button id="dc-copy" type="button">Copy</button>
+          <button id="dc-teach" type="button" disabled>Teach it this correction</button>
+          <span id="dc-teach-note" class="dim"></span>
+        </div>
+        <p id="dc-heard" class="panel-note dim"></p>
+        <p id="dc-result-meta" class="panel-note dim"></p>
+      </div>
+      <details class="dc-details">
+        <summary>Try the cleanup without speaking</summary>
+        <p class="panel-note dim">Type words the way the recogniser writes them — lower case, no
+          punctuation, fillers and commands included — and see what cleanup makes of them. Your
+          dictionary's spellings and replacements apply, as they would to speech.
+          Same as <code>python -m aksharallm.dictate clean "…"</code>.</p>
+        <textarea id="dc-clean-in" class="dc-final" rows="2"
+                  placeholder="um so i met shaun at the station new paragraph can we meet at five scratch that see you tomorrow"></textarea>
+        <div class="row"><button id="dc-clean" type="button">Clean it up</button></div>
+        <p id="dc-clean-out" class="dc-text" hidden></p>
+        <p id="dc-clean-steps" class="panel-note dim"></p>
+      </details>
+      <details class="dc-details">
+        <summary>Recent dictations</summary>
+        <div id="dc-history" class="dc-history"></div>
+      </details>
+    </div>
+
     <div class="panel">
-      <h3>Say something</h3>
+      <h3>What it has learned from you</h3>
+      <p class="panel-note">
+        One correction puts a word in your <b>dictionary</b> (the beam search leans towards it)
+        and remembers your <b>spelling</b> of it (GitHub, not Github). The same fix twice makes a
+        <b>replacement</b> — heard "sean", write "shaun" — but never between two ordinary words:
+        "their" → "there" is a grammar fix, not a rule for every sentence.
+      </p>
+      <p id="dc-learned-sum" class="panel-note"></p>
+      <div class="row">
+        <label class="field">Add a word <input id="dc-add-word" type="text" placeholder="Ramanujan"></label>
+        <button id="dc-add" type="button">Add</button>
+      </div>
+      <div id="dc-words" class="dc-words"></div>
+      <div class="scroll-x"><table class="grid" id="dc-repl"></table></div>
+      <details class="dc-details">
+        <summary>Every correction, and what was learned from it</summary>
+        <div id="dc-corrections" class="dc-history"></div>
+      </details>
+    </div>
+
+    <div class="panel">
+      <h3>On your desktop — dictate into any app</h3>
+      <p class="panel-note">
+        A small background process keeps the models loaded; a keyboard shortcut tells it to
+        start listening, and pressing it again types the text wherever your cursor is. Toggle,
+        not hold: a desktop shortcut has no "key released".
+      </p>
+      <div class="dc-jobs">
+        <div class="dc-job">
+          <h4>1 · The background process</h4>
+          <p id="dc-daemon" class="panel-note"></p>
+          <div class="row">
+            <button id="dc-daemon-start" type="button">Start it</button>
+            <button id="dc-daemon-stop" type="button">Stop it</button>
+          </div>
+          <pre class="au-cmd">python -m aksharallm.dictate daemon --bg</pre>
+        </div>
+        <div class="dc-job">
+          <h4>2 · The shortcut (GNOME)</h4>
+          <p id="dc-shortcut" class="panel-note"></p>
+          <div class="row">
+            <label class="field">Keys <input id="dc-binding" type="text" value="&lt;Super&gt;&lt;Alt&gt;d"></label>
+            <button id="dc-sc-install" type="button">Install</button>
+            <button id="dc-sc-remove" type="button">Remove</button>
+          </div>
+          <pre class="au-cmd">python -m aksharallm.dictate install-shortcut</pre>
+        </div>
+        <div class="dc-job">
+          <h4>3 · What it needs</h4>
+          <div id="dc-tools" class="dc-tools"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Recogniser lab — the raw ear</h3>
+      <p class="panel-note dim">
+        The recogniser alone, before cleanup: pick any checkpoint and decoder, and see greedy
+        beside beam. The beam decoder uses your dictionary from the panel above.
+      </p>
       <div class="row">
         <label class="field">Recogniser
           <select id="dc-ckpt"></select>
@@ -50,10 +157,6 @@ scripts/audio.sh asr-libri100</pre>
           </select>
         </label>
       </div>
-      <label class="field dc-dict-field">Personal dictionary <span class="dim">(names and words it
-        should be able to spell — one per line; used by the beam decoder)</span>
-        <textarea id="dc-dict" rows="3" placeholder="Shaun&#10;Aksharallm&#10;Ramanujan"></textarea>
-      </label>
       <p id="dc-lm-note" class="panel-note dim"></p>
       <p id="dc-status" class="panel-note"></p>
       <div id="dc-out" class="dc-out" hidden>
@@ -79,17 +182,31 @@ scripts/audio.sh asr-libri100</pre>
           <tr><td>1</td><td>it writes words nobody said ("thank you for watching")</td>
               <td>characters written on five clips with no speech — must be <b>0</b></td>
               <td id="dc-check-1"><button id="dc-silence" type="button">Run it</button></td></tr>
-          <tr><td>2</td><td>accents</td><td>WER per speaker, worst beside the median</td>
-              <td id="dc-check-2" class="dim">see the table below</td></tr>
+          <tr><td>2</td><td>accents — some voices much worse than others</td>
+              <td>WER per speaker; the worst beside the median</td>
+              <td id="dc-check-2" class="dim">—</td></tr>
           <tr><td>3</td><td>switching language mid-sentence</td><td>WER on a mixed-language set</td>
-              <td class="dim">not built yet</td></tr>
-          <tr><td>4</td><td>names (Shaun or Sean?)</td><td>words the LM has never seen, recalled with and
-              without a personal dictionary — and how often one is written where nobody said it</td>
-              <td id="dc-check-4" class="dim">run <code>asr eval --decoder beam</code></td></tr>
-          <tr><td>5</td><td>never learns from a correction</td><td>right on the 4th try after 3 corrections?</td>
-              <td class="dim">not built yet</td></tr>
+              <td class="dim">not built — the recogniser is English-only</td></tr>
+          <tr><td>4</td><td>names (Shaun or Sean?)</td><td>words the LM has never seen, recalled
+              without and with a dictionary — and how often one is written where nobody said it</td>
+              <td id="dc-check-4" class="dim">—</td></tr>
+          <tr><td>5</td><td>never learns from a correction</td><td>each unseen word said 4+ times
+              is dictated in order and corrected after every time: is it right more often later?</td>
+              <td id="dc-check-5" class="dim">—</td></tr>
+          <tr><td>+</td><td>cleanup puts words in your mouth</td><td>words in the cleaned text that the
+              recogniser did not write (fillers and commands excepted) — must be <b>0</b></td>
+              <td id="dc-check-6" class="dim">—</td></tr>
+          <tr><td>+</td><td>punctuation in the wrong places</td><td>F1 for , . ? and capitals on
+              held-out text, beside a rules-only baseline</td>
+              <td id="dc-check-7" class="dim">—</td></tr>
         </tbody>
       </table></div>
+      <div class="row">
+        <button id="dc-daytwo" type="button">Run all the checks</button>
+        <button id="dc-punct-eval" type="button">Score the punctuation</button>
+        <span id="dc-daytwo-note" class="dim"></span>
+      </div>
+      <div id="dc-curve" class="dc-curve" hidden></div>
       <div id="dc-silence-out" class="dc-silence" hidden></div>
     </div>
 
@@ -140,7 +257,7 @@ scripts/audio.sh asr-libri100</pre>
               <option value="greedy">greedy</option>
               <option value="beam">beam + word LM</option>
             </select></label>
-            <label class="field"><span><input id="dc-eval-dict" type="checkbox"> use my dictionary</span></label>
+            <label class="field"><span><input id="dc-eval-dict" type="checkbox"> with my dictionary</span></label>
             <button id="dc-eval" class="primary" type="button">Evaluate</button>
           </div>
         </div>

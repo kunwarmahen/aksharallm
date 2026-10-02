@@ -625,6 +625,12 @@ class Engine:
                 f"{loaded.info.rel} is a masked diffusion model (docs/20): it generates by "
                 "unmasking a whole sequence, not by extending a prefix. Use the portal's "
                 "Diffusion tab, or `python -m aksharallm.diffusion`.")
+        if loaded.model.cfg.is_tagger:
+            # A tagger labels words; it was never trained to continue text, and sampling one
+            # would print its label rows as if they were words.
+            raise InferError(
+                f"{loaded.info.rel} is the dictation punctuation tagger (docs/23), not a "
+                "language model. It runs inside dictation: `python -m aksharallm.dictate clean`.")
         if mode in ("complete", "code"):
             if not prompt.strip():
                 raise InferError("nothing to complete — type a prompt first.")

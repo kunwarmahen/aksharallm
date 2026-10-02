@@ -12,12 +12,7 @@
 import { $, api, escHtml, fmt, post } from './core.js';
 import { registerTab } from './router.js';
 
-const dc = { ckpt: null, busy: false, rec: null, maxSeconds: 30 };
-
-/* The dictionary is personal and typed by hand, so it is kept in this browser between visits
- * (a convenience; nothing depends on it surviving). */
-function loadDict() { try { return localStorage.getItem('dc-dict') || ''; } catch { return ''; } }
-function saveDict(v) { try { localStorage.setItem('dc-dict', v); } catch { /* private mode */ } }
+const dc = { ckpt: null, busy: false, rec: null, maxSeconds: 30, maxDictate: 120, last: null };
 
 function status(text, kind = '') {
   const el = $('#dc-status');
@@ -48,7 +43,7 @@ async function send(samples, rate, label) {
   try {
     const res = await post('/api/dictate/transcribe', {
       checkpoint: dc.ckpt, pcm: toPcm16(samples), sample_rate: rate,
-      decoder: $('#dc-decoder').value, dictionary: $('#dc-dict').value,
+      decoder: $('#dc-decoder').value,
     });
     $('#dc-out').hidden = false;
     $('#dc-text').textContent = res.text || '(nothing — it heard no words)';
@@ -68,10 +63,23 @@ async function send(samples, rate, label) {
   }
 }
 
-async function startRecording() {
+/* One capture path for both buttons. `kind` is 'lab' (hold-to-talk, raw recogniser) or
+ * 'dictate' (click to start, click to finish, the cleaned pipeline) — they differ only in the
+ * button, the limit and where the samples go. */
+const KINDS = {
+  lab: { btn: '#dc-rec', idle: '● Hold to talk', live: '■ Listening — release to send',
+         status: (t, k) => status(t, k), limit: () => dc.maxSeconds,
+         send: (all, rate) => send(all, rate, 'your voice') },
+  dictate: { btn: '#dc-go', idle: '● Start dictating', live: '■ Listening — press to finish',
+             status: (t, k) => goStatus(t, k), limit: () => dc.maxDictate,
+             send: (all, rate) => sendDictation(all, rate, 'your voice') },
+};
+
+async function startRecording(kind = 'lab') {
+  const K = KINDS[kind];
   if (dc.rec || dc.busy) return;
   if (!navigator.mediaDevices?.getUserMedia) {
-    status('this browser will not open the microphone here (it needs localhost or https) — use a file', 'warn');
+    K.status('this browser will not open the microphone here (it needs localhost or https) — use a file', 'warn');
     return;
   }
   let stream;
@@ -82,7 +90,7 @@ async function startRecording() {
       audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
     });
   } catch (e) {
-    status(`no microphone: ${e.message}`, 'warn');
+    K.status(`no microphone: ${e.message}`, 'warn');
     return;
   }
   const ctx = new AudioContext();
@@ -93,34 +101,35 @@ async function startRecording() {
   src.connect(proc);
   proc.connect(ctx.destination);
   const t0 = performance.now();
-  dc.rec = { ctx, stream, proc, chunks, t0 };
-  $('#dc-rec').classList.add('dc-live');
-  $('#dc-rec').textContent = '■ Listening — release to send';
-  status('listening…');
-  dc.rec.timer = setTimeout(stopRecording, dc.maxSeconds * 1000);
+  dc.rec = { ctx, stream, proc, chunks, t0, kind };
+  $(K.btn).classList.add('dc-live');
+  $(K.btn).textContent = K.live;
+  K.status('listening…');
+  dc.rec.timer = setTimeout(() => stopRecording(), K.limit() * 1000);
 }
 
 async function stopRecording() {
   const r = dc.rec;
   if (!r) return;
+  const K = KINDS[r.kind];
   dc.rec = null;
   clearTimeout(r.timer);
   r.proc.disconnect();
   r.stream.getTracks().forEach((t) => t.stop());
   const rate = r.ctx.sampleRate;
   await r.ctx.close();
-  $('#dc-rec').classList.remove('dc-live');
-  $('#dc-rec').textContent = '● Hold to talk';
+  $(K.btn).classList.remove('dc-live');
+  $(K.btn).textContent = K.idle;
   const n = r.chunks.reduce((a, c) => a + c.length, 0);
   const all = new Float32Array(n);
   let at = 0;
   for (const c of r.chunks) { all.set(c, at); at += c.length; }
-  if (n / rate < 0.3) { status('too short — hold the button while you speak', 'warn'); return; }
-  await send(all, rate, 'your voice');
+  if (n / rate < 0.3) { K.status('too short — say something first', 'warn'); return; }
+  await K.send(all, rate);
 }
 
-async function fromFile(file) {
-  if (!file) return;
+/* Any audio file -> mono float samples at its own rate, via the browser's decoder. */
+async function decodeFile(file, limit) {
   const ctx = new AudioContext();
   try {
     const buf = await ctx.decodeAudioData(await file.arrayBuffer());
@@ -130,15 +139,197 @@ async function fromFile(file) {
       const ch = buf.getChannelData(c);
       for (let i = 0; i < ch.length; i += 1) mono[i] += ch[i] / buf.numberOfChannels;
     }
-    if (buf.duration > dc.maxSeconds) {
-      status(`${buf.duration.toFixed(0)} s is past the ${dc.maxSeconds} s this tab takes — sending the first ${dc.maxSeconds}`, 'warn');
-    }
-    await send(mono.subarray(0, Math.floor(dc.maxSeconds * buf.sampleRate)), buf.sampleRate, file.name);
-  } catch (e) {
-    status(`could not decode ${file.name}: ${e.message}`, 'warn');
+    return { samples: mono.subarray(0, Math.floor(limit * buf.sampleRate)), rate: buf.sampleRate,
+             cut: buf.duration > limit, duration: buf.duration };
   } finally {
     await ctx.close();
   }
+}
+
+async function fromFile(file) {
+  if (!file) return;
+  try {
+    const d = await decodeFile(file, dc.maxSeconds);
+    if (d.cut) status(`${d.duration.toFixed(0)} s is past the ${dc.maxSeconds} s this panel takes — sending the first ${dc.maxSeconds}`, 'warn');
+    await send(d.samples, d.rate, file.name);
+  } catch (e) {
+    status(`could not decode ${file.name}: ${e.message}`, 'warn');
+  }
+}
+
+/* ---- dictation: the cleaned pipeline, the same one the desktop hotkey runs ------------- */
+
+function goStatus(text, kind = '') {
+  const el = $('#dc-go-status');
+  el.textContent = text;
+  el.className = `panel-note${kind ? ` ${kind}` : ''}`;
+}
+
+const STEP_WORDS = {
+  fillers: (s) => `removed “${s.removed}”`,
+  'scratch that': (s) => `scratch that — removed “${s.removed || '(nothing)'}”`,
+  replacement: (s) => `you taught it: “${s.heard}” → “${s.wrote}”`,
+  'new line': () => 'new line', 'new paragraph': () => 'new paragraph',
+};
+
+function showResult(r) {
+  dc.last = r;
+  $('#dc-result').hidden = false;
+  $('#dc-final').value = r.text || '';
+  $('#dc-final').placeholder = r.text ? '' : (r.note || 'nothing heard');
+  $('#dc-teach').disabled = true;
+  $('#dc-teach-note').textContent = '';
+  const steps = (r.steps || []).map((s) => (STEP_WORDS[s.step] || ((x) => x.step))(s));
+  $('#dc-heard').innerHTML = r.heard
+    ? `the recogniser heard: <i>${escHtml(r.heard)}</i>`
+      + (steps.length ? ` · ${steps.map(escHtml).join(' · ')}` : '')
+    : escHtml(r.note || '');
+  $('#dc-result-meta').textContent = `${r.seconds} s · ${fmt.int(r.ms)} ms (${r.realtime}x real time)`
+    + (r.decoder ? ` · ${r.decoder}` : '') + (r.dictionary ? ` with ${r.dictionary} words of yours` : '')
+    + (r.punctuator ? ` · punctuation: ${r.punctuator === 'tagger' ? 'the tagger' : 'rules only (no tagger trained yet)'}` : '');
+}
+
+async function sendDictation(samples, rate, label) {
+  dc.busy = true;
+  goStatus(`writing ${(samples.length / rate).toFixed(1)} s of ${label}… (the first time loads the models)`);
+  try {
+    const r = await post('/api/dictate/dictate', { pcm: toPcm16(samples), sample_rate: rate });
+    showResult(r);
+    goStatus('');
+    await loadPersonal();
+  } catch (e) {
+    goStatus(e.message, 'warn');
+  } finally {
+    dc.busy = false;
+  }
+}
+
+async function dictateFile(file) {
+  if (!file) return;
+  try {
+    const d = await decodeFile(file, dc.maxDictate);
+    if (d.cut) goStatus(`sending the first ${dc.maxDictate} s`, 'warn');
+    await sendDictation(d.samples, d.rate, file.name);
+  } catch (e) {
+    goStatus(`could not decode ${file.name}: ${e.message}`, 'warn');
+  }
+}
+
+/* Cleanup alone, on typed words: the same `clean` the pipeline runs after the ear. */
+async function cleanTyped() {
+  const text = $('#dc-clean-in').value.trim();
+  if (!text) return;
+  try {
+    const r = await post('/api/dictate/clean', { text });
+    const out = $('#dc-clean-out');
+    out.hidden = false;
+    out.textContent = r.text || '(nothing left — every word was a filler or a command)';
+    const steps = (r.steps || []).map((x) => (STEP_WORDS[x.step] || ((y) => y.step))(x));
+    $('#dc-clean-steps').textContent = `punctuation: ${r.punctuator === 'tagger' ? 'the tagger' : 'rules only (no tagger trained yet)'}`
+      + (steps.length ? ` · ${steps.join(' · ')}` : '');
+  } catch (e) {
+    $('#dc-clean-steps').textContent = e.message;
+  }
+}
+
+async function teach() {
+  const r = dc.last;
+  const corrected = $('#dc-final').value;
+  if (!r || !r.text || corrected === r.text) return;
+  try {
+    const res = await post('/api/dictate/correct', { shown: r.text, corrected, heard: r.heard });
+    const L = res.learned;
+    const parts = [];
+    if (L.words.length) parts.push(`dictionary: ${L.words.join(', ')}`);
+    if (L.spellings.length) parts.push(`spelling: ${L.spellings.join(', ')}`);
+    for (const x of L.replacements) {
+      parts.push(`“${x.from}” → “${x.to}” ${x.active ? '(now automatic)' : `(seen ${x.count}×; automatic after 2)`}`);
+    }
+    for (const x of L.ignored) parts.push(`not learned: “${x.from}” → “${x.to}” — ${x.why}`);
+    $('#dc-teach-note').textContent = parts.length ? `learned — ${parts.join(' · ')}` : 'nothing to learn from that edit';
+    dc.last = { ...r, text: corrected };
+    $('#dc-teach').disabled = true;
+    await loadPersonal();
+  } catch (e) {
+    $('#dc-teach-note').textContent = e.message;
+  }
+}
+
+function renderHistory(rows) {
+  $('#dc-history').innerHTML = rows.length
+    ? rows.map((r, i) => `<div class="dc-hist"><span class="dim">${escHtml(r.time.slice(5, 16))} · ${r.seconds}s</span> `
+      + `${r.text ? escHtml(r.text) : `<span class="dim">(${escHtml(r.note || 'nothing')})</span>`} `
+      + (r.text ? `<button type="button" class="dc-fix" data-i="${i}">fix</button>` : '') + '</div>').join('')
+    : '<p class="dim">nothing dictated yet</p>';
+  $('#dc-history').querySelectorAll('.dc-fix').forEach((b) => {
+    b.onclick = () => {
+      showResult(rows[Number(b.dataset.i)]);
+      $('#dc-final').focus();
+    };
+  });
+}
+
+async function loadPersonal() {
+  try {
+    const p = await api('/api/dictate/personal');
+    const s = p.summary;
+    $('#dc-learned-sum').textContent = `${s.words} word${s.words === 1 ? '' : 's'} in your dictionary, `
+      + `${s.spellings} spelling${s.spellings === 1 ? '' : 's'}, ${s.active_replacements} automatic `
+      + `replacement${s.active_replacements === 1 ? '' : 's'} (${s.replacements - s.active_replacements} waiting for a second correction) · kept in ${p.dir}/`;
+    $('#dc-words').innerHTML = p.words.map((w) => `<span class="dc-chip" title="${escHtml(w.source || '')}, ${w.count || 0}×">`
+      + `${escHtml(w.spelling || w.word)}<button type="button" data-w="${escHtml(w.word)}" aria-label="remove ${escHtml(w.word)}">×</button></span>`).join('');
+    $('#dc-words').querySelectorAll('button').forEach((b) => {
+      b.onclick = async () => {
+        try { await post('/api/dictate/personal', { action: 'remove', word: b.dataset.w }); } catch (e) { goStatus(e.message, 'warn'); }
+        await loadPersonal();
+      };
+    });
+    $('#dc-repl').innerHTML = p.replacements.length
+      ? '<thead><tr><th>heard</th><th>write</th><th>corrections</th><th></th></tr></thead><tbody>'
+        + p.replacements.map((r) => `<tr><td>${escHtml(r.from)}</td><td>${escHtml(r.to)}</td><td>${r.count}</td>`
+          + `<td>${r.active ? '<span class="ok">automatic</span>' : '<span class="dim">needs 2</span>'}</td></tr>`).join('') + '</tbody>'
+      : '';
+    $('#dc-corrections').innerHTML = p.corrections.length
+      ? p.corrections.map((c) => `<div class="dc-hist"><span class="dim">${escHtml(c.time.slice(5, 16))}</span> `
+        + `<s>${escHtml(c.shown)}</s> → ${escHtml(c.corrected)}</div>`).join('')
+      : '<p class="dim">no corrections yet</p>';
+    renderHistory(p.history || []);
+  } catch (e) {
+    $('#dc-learned-sum').textContent = e.message;
+  }
+}
+
+/* ---- the desktop: daemon, shortcut, tools ------------------------------------------- */
+
+function renderDesktop(d) {
+  const st = d.running ? `running (pid ${d.pid}) — ${d.state === 'loading' ? 'loading the models…' : d.state}` : 'not running';
+  $('#dc-daemon').innerHTML = `<b class="${d.running ? 'ok' : ''}">${escHtml(st)}</b>`
+    + (d.last && d.last.text ? `<br><span class="dim">last: “${escHtml(d.last.text.slice(0, 120))}” (${escHtml(d.last.delivered || '')})</span>` : '');
+  $('#dc-daemon-start').disabled = d.running;
+  $('#dc-daemon-stop').disabled = !d.running;
+  $('#dc-shortcut').innerHTML = d.shortcut
+    ? `<b class="ok">${escHtml(d.shortcut.binding)}</b> starts and finishes a dictation`
+    : (d.session && d.session !== 'x11'
+      ? `<b class="bad">this is a ${escHtml(d.session)} session</b> — typing into other apps needs X11`
+      : 'not installed');
+  $('#dc-sc-remove').disabled = !d.shortcut;
+  $('#dc-tools').innerHTML = Object.entries(d.tools).map(([name, t]) => `<div>${t.found ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>'} `
+    + `<code>${escHtml(name)}</code> <span class="dim">— ${escHtml(t.for)}</span>`
+    + (t.found ? '' : `<pre class="au-cmd">${escHtml(t.install)}</pre>`) + '</div>').join('');
+}
+
+async function loadDesktop() {
+  try { renderDesktop(await api('/api/dictate/desktop')); } catch (e) { $('#dc-daemon').textContent = e.message; }
+}
+
+async function desktop(action) {
+  try {
+    renderDesktop(await post('/api/dictate/desktop', { action, binding: $('#dc-binding').value }));
+  } catch (e) {
+    $('#dc-daemon').textContent = e.message;
+  }
+  // A starting daemon loads for a few seconds; look again so "loading" turns into "idle".
+  if (action === 'start') setTimeout(loadDesktop, 4000);
 }
 
 async function runSilence() {
@@ -162,18 +353,72 @@ async function runSilence() {
 
 function pct(v) { return v == null ? '—' : `${(v * 100).toFixed(1)}%`; }
 
-function renderNames(rows) {
-  // Prefer the run that used a dictionary: check 4 is "with and without", and the with is
-  // the claim. Fall back to any beam result.
-  const r = rows.find((x) => x.names && x.dictionary_size) || rows.find((x) => x.names);
-  if (!r) return;
-  const n = r.names;
-  $('#dc-check-4').innerHTML = `${Math.round(n.recall * 100)}% of ${fmt.int(n.said)} unseen words `
-    + `<span class="dim">(${escHtml(r.decoder_desc || '')}; ${n.false_alarms} written where not said)</span>`;
+/* The day-two table, from the latest `asr daytwo` result (or, before one exists, from the
+ * evaluations: names and speakers are in those too). */
+function renderChecks(res) {
+  const d = res.daytwo;
+  const rows = res.results || [];
+  if (d) {
+    const sil = d.silence;
+    $('#dc-check-1').innerHTML = (sil.chars === 0 ? '<b class="ok">0 characters ✓</b>' : `<b class="bad">${sil.chars} characters ✗</b>`)
+      + ' <button id="dc-silence" type="button">Run it again</button>';
+    $('#dc-silence').onclick = runSilence;
+    const sp = d.speakers;
+    $('#dc-check-2').innerHTML = `median ${pct(sp.median)}, <b>worst ${pct(sp.worst)}</b> <span class="dim">(${sp.speakers} speakers)</span>`;
+    const n = d.names;
+    $('#dc-check-4').innerHTML = `${Math.round(n.without.recall * 100)}% → <b>${Math.round(n.with_dictionary.recall * 100)}%</b> `
+      + `of ${n.words} unseen words <span class="dim">(${n.with_dictionary.false_alarms} written where not said)</span>`;
+    const c = d.corrections;
+    $('#dc-check-5').innerHTML = c.curve.length
+      ? `${c.curve.map((x) => `#${x.occurrence} <b>${Math.round(x.recall * 100)}%</b>`).join(' → ')} `
+        + `<span class="dim">(${c.targets} words; ${c.false_insertions} false insertions in ${c.false_insertion_utts} utterances)</span>`
+      : '<span class="dim">no word repeats often enough in this corpus</span>';
+    const cl = d.cleanup;
+    $('#dc-check-6').innerHTML = (cl.invented === 0 && cl.dropped === 0 ? '<b class="ok">0 ✓</b>' : `<b class="bad">${cl.invented} invented, ${cl.dropped} dropped ✗</b>`)
+      + ` <span class="dim">over ${fmt.int(cl.words)} words (${escHtml(cl.punctuator)})</span>`;
+    $('#dc-daytwo-note').textContent = `${d.run} step ${fmt.int(d.step)} on ${d.corpus}, ${d.time}`;
+    renderCurve(c);
+  } else {
+    const r = rows.find((x) => x.names && x.dictionary_size) || rows.find((x) => x.names);
+    if (r) {
+      $('#dc-check-4').innerHTML = `${Math.round(r.names.recall * 100)}% of ${fmt.int(r.names.said)} unseen words `
+        + `<span class="dim">(${escHtml(r.decoder_desc || '')})</span>`;
+    }
+    const latest = rows.find((x) => x.speakers > 1);
+    if (latest) {
+      $('#dc-check-2').innerHTML = `median ${pct(latest.median_speaker)}, worst ${pct(latest.worst[0]?.wer)} `
+        + `<span class="dim">(${escHtml(latest.run)} on ${escHtml(latest.corpus)})</span>`;
+    }
+    $('#dc-daytwo-note').textContent = 'no day-two run yet — Run all the checks (about a minute)';
+  }
+  const pe = res.punct;
+  if (pe) {
+    const t = pe.tagger;
+    const b = pe.rules_only;
+    $('#dc-check-7').innerHTML = ['comma', 'period', 'question', 'capital'].map((k) =>
+      `${{ comma: ',', period: '.', question: '?', capital: 'Aa' }[k]} <b>${Math.round(t[k].f1 * 100)}</b>`
+      + `<span class="dim">/${Math.round(b[k].f1 * 100)}</span>`).join(' · ')
+      + ` <span class="dim">F1, tagger/rules, step ${fmt.int(pe.step)}</span>`;
+  } else {
+    $('#dc-check-7').innerHTML = res.pipeline?.punctuator
+      ? '<span class="dim">not scored yet — Score the punctuation</span>'
+      : '<span class="dim">no tagger trained yet: <code>scripts/experiment.sh punct</code></span>';
+  }
+  $('#dc-punct-eval').disabled = !res.pipeline?.punctuator;
+}
+
+/* Check 5 as a picture: recall on the 1st, 2nd, 3rd… time a word is said, each after the
+ * previous ones were corrected. A system that learns rises; one that only says so is flat. */
+function renderCurve(c) {
+  const box = $('#dc-curve');
+  if (!c.curve.length) { box.hidden = true; return; }
+  box.hidden = false;
+  box.innerHTML = '<div class="dim">how often an unseen word comes out right, by how many times it has been corrected before</div>'
+    + '<div class="dc-bars">' + c.curve.map((x) => `<div class="dc-bar"><div class="dc-bar-fill" style="height:${Math.max(2, x.recall * 100)}%"></div>`
+      + `<b>${Math.round(x.recall * 100)}%</b><span class="dim">${x.occurrence === 1 ? '1st, never corrected' : `${x.occurrence}${['', 'st', 'nd', 'rd'][x.occurrence] || 'th'}`}</span></div>`).join('') + '</div>';
 }
 
 function renderResults(rows) {
-  renderNames(rows);
   $('#dc-results').innerHTML = rows.length
     ? '<thead><tr><th>run</th><th>step</th><th>corpus</th><th>WER</th><th>CER</th>'
       + '<th>speakers</th><th>median speaker</th><th>worst speaker</th><th>silence</th><th>decoder</th></tr></thead><tbody>'
@@ -187,11 +432,6 @@ function renderResults(rows) {
           + `<td class="dim">${escHtml(r.decoder || 'greedy')}</td></tr>`;
       }).join('') + '</tbody>'
     : '<tbody><tr><td>no evaluations yet — <code>python -m aksharallm.asr eval &lt;run&gt; --corpus data/asr/test-clean</code></td></tr></tbody>';
-  const latest = rows.find((r) => r.speakers > 1);
-  if (latest) {
-    $('#dc-check-2').innerHTML = `median ${pct(latest.median_speaker)}, worst ${pct(latest.worst[0]?.wer)} `
-      + `<span class="dim">(${escHtml(latest.run)} on ${escHtml(latest.corpus)})</span>`;
-  }
 }
 
 function renderRuns(rows) {
@@ -228,7 +468,16 @@ async function load() {
       : 'beam uses untuned defaults — run python -m aksharallm.asr tune <run> to choose them on dev-clean');
   $('#dc-silence').disabled = !cks.length;
   renderResults(res.results || []);
+  renderChecks(res);
   renderRuns(res.runs || []);
+  dc.maxDictate = res.max_dictate_seconds || 120;
+  const pi = res.pipeline || {};
+  $('#dc-go').disabled = !pi.recognizer;
+  $('#dc-pipe').textContent = pi.recognizer
+    ? `uses ${pi.recognizer} · ${pi.lm ? 'beam search + word LM' : 'greedy (no word LM built)'} · `
+      + `${pi.punctuator ? `punctuation by the tagger (${pi.punctuator})` : `punctuation by rules only — train the tagger: scripts/experiment.sh punct`}`
+      + ` · up to ${dc.maxDictate} s · settings: configs/portal.yaml → dictate:`
+    : `no recogniser at ${pi.recognizer_name} — see the lab below`;
   if (!dc.busy) status(cks.length ? `runs on the ${res.device} — ${res.device_reason}` : '');
 }
 
@@ -276,13 +525,14 @@ function renderJobs(j) {
     $('#dc-job-log').textContent = (j.log || []).join('\n');
     $('#dc-job-stop').hidden = !j.running;
   }
-  for (const id of ['#dc-fetch', '#dc-pack', '#dc-lmfetch', '#dc-lm', '#dc-tune', '#dc-eval']) {
+  for (const id of ['#dc-fetch', '#dc-pack', '#dc-lmfetch', '#dc-lm', '#dc-tune', '#dc-eval', '#dc-daytwo', '#dc-punct-eval']) {
     if (j.running) $(id).disabled = true;
   }
   if (!j.running) {
     $('#dc-fetch').disabled = !!(cur && cur.downloaded);
     $('#dc-tune').disabled = !lm || !dc.ckpt;
     $('#dc-eval').disabled = !dc.ckpt;
+    $('#dc-daytwo').disabled = !lm || !dc.ckpt;
   }
 }
 
@@ -321,8 +571,10 @@ function wireJobs() {
   $('#dc-eval').onclick = () => startJob({
     kind: 'eval', checkpoint: dc.ckpt, corpus: $('#dc-eval-corpus').value,
     decoder: $('#dc-eval-decoder').value,
-    dictionary: $('#dc-eval-dict').checked ? $('#dc-dict').value : '',
+    personal: $('#dc-eval-dict').checked,
   });
+  $('#dc-daytwo').onclick = () => startJob({ kind: 'daytwo', checkpoint: dc.ckpt, corpus: 'data/asr/test-clean' });
+  $('#dc-punct-eval').onclick = () => startJob({ kind: 'punct_eval', passages: 300 });
   $('#dc-job-stop').onclick = async () => {
     try { await post('/api/dictate/stop', {}); } catch (e) { status(e.message, 'warn'); }
     await pollJobs();
@@ -334,17 +586,38 @@ registerTab('dictate', {
     $('#dc-ckpt').onchange = (e) => { dc.ckpt = e.target.value; };
     const btn = $('#dc-rec');
     // Hold-to-talk with the mouse, a finger, or the space bar.
-    btn.onpointerdown = (e) => { e.preventDefault(); startRecording(); };
+    btn.onpointerdown = (e) => { e.preventDefault(); startRecording('lab'); };
     btn.onpointerup = stopRecording;
     btn.onpointerleave = () => { if (dc.rec) stopRecording(); };
-    btn.onkeydown = (e) => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); startRecording(); } };
+    btn.onkeydown = (e) => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); startRecording('lab'); } };
     btn.onkeyup = (e) => { if (e.key === ' ' || e.key === 'Enter') stopRecording(); };
     $('#dc-file').onchange = (e) => fromFile(e.target.files[0]);
-    $('#dc-dict').value = loadDict();
-    $('#dc-dict').oninput = (e) => saveDict(e.target.value);
     $('#dc-silence').onclick = runSilence;
+    // Dictation: click to start, click to finish -- the same toggle as the desktop shortcut.
+    $('#dc-go').onclick = () => (dc.rec ? stopRecording() : startRecording('dictate'));
+    $('#dc-go-file').onchange = (e) => dictateFile(e.target.files[0]);
+    $('#dc-final').oninput = () => {
+      $('#dc-teach').disabled = !dc.last || !dc.last.text || $('#dc-final').value === dc.last.text;
+    };
+    $('#dc-teach').onclick = teach;
+    $('#dc-clean').onclick = cleanTyped;
+    $('#dc-clean-in').onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) cleanTyped(); };
+    $('#dc-copy').onclick = async () => {
+      try { await navigator.clipboard.writeText($('#dc-final').value); goStatus('copied'); } catch { $('#dc-final').select(); goStatus('select-all is done; press Ctrl+C', 'warn'); }
+    };
+    $('#dc-add').onclick = async () => {
+      const w = $('#dc-add-word').value.trim();
+      if (!w) return;
+      try { await post('/api/dictate/personal', { action: 'add', word: w }); $('#dc-add-word').value = ''; } catch (e) { goStatus(e.message, 'warn'); }
+      await loadPersonal();
+    };
+    $('#dc-daemon-start').onclick = () => desktop('start');
+    $('#dc-daemon-stop').onclick = () => desktop('stop');
+    $('#dc-sc-install').onclick = () => desktop('install');
+    $('#dc-sc-remove').onclick = () => desktop('uninstall');
     wireJobs();
     await load();
+    await Promise.all([loadPersonal(), loadDesktop()]);
     await pollJobs();
   },
   /* Stop a recording the moment the tab is left, so the microphone is never held open, and

@@ -60,13 +60,16 @@ story. **The only thing that changed is what the loss is computed on.** Everythi
 optimiser, the schedule, gradient accumulation, mixed precision, checkpointing, the stop
 file, the throughput counter — is machinery for surviving days of wall-clock, and none of it
 knows or cares. That is why there is no `train/diffusion.py` in this repo: `train/pretrain.py`
-asks an **objective** for a batch and a loss, and there are two objectives.
+asks an **objective** for a batch and a loss. There were two objectives when this chapter was
+written; the dictation punctuation tagger ([doc 23](23-speech-recognition.md) § cleanup) later
+became the third, with no change to the loop — which is the seam doing its job.
 
 ```mermaid
 flowchart LR
   L["train/pretrain.py<br/>the loop: accumulate, clip, step,<br/>log, eval, checkpoint, stop"] --> Q{"model.causal"}
   Q -->|"true"| AR["ARObjective<br/>next-token prediction"]
-  Q -->|"false"| DF["DiffusionObjective<br/>mask, denoise, weight by 1/t"]
+  Q -->|"false + mask_token_id"| DF["DiffusionObjective<br/>mask, denoise, weight by 1/t"]
+  Q -->|"false + tag_classes"| TG["TaggerObjective (docs/23)<br/>a label per word"]
 ```
 
 ### Why the `1/t`

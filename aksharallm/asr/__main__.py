@@ -9,6 +9,7 @@
     python -m aksharallm.asr lm build                          # word trigram LM (piece 5)
     python -m aksharallm.asr tune asr-libri100                 # alpha/beta on dev-clean only
     python -m aksharallm.asr eval asr-libri100 --decoder beam --lm data/asr/lm/trigram.npz
+    python -m aksharallm.asr daytwo asr-libri100               # the five day-two checks at once
 
 A checkpoint argument is a path to a `.pt`, or a run name (`asr-libri100` means
 `checkpoints/asr-libri100/ckpt_best.pt`).
@@ -232,6 +233,63 @@ def cmd_tune(args) -> int:
     return 0
 
 
+def cmd_daytwo(args) -> int:
+    """The day-two suite (asr/daytwo.py): one corpus, one pass, one JSON."""
+    from ..dictate.pipeline import best_tuning
+    from .daytwo import run
+    path = resolve(args.checkpoint)
+    device = _device(args.device)
+    model, blob = load_recognizer(path, device)
+    lm = _load_lm(args.lm)
+    if lm is None:
+        raise SystemExit("daytwo needs the word LM (names and corrections are LM questions): "
+                         "python -m aksharallm.asr lm build")
+    t = best_tuning(Path.cwd(), args.lm) or {}
+    tuning = {"alpha": args.alpha if args.alpha is not None else t.get("alpha", 0.8),
+              "beta": args.beta if args.beta is not None else t.get("beta", 2.0),
+              "unk_penalty": args.unk_penalty if args.unk_penalty is not None else t.get("unk_penalty", -24.0),
+              "beam": t.get("beam", 16)}
+    punctuator = None
+    if args.punctuator and Path(args.punctuator).is_file():
+        from ..dictate.tagger import Punctuator
+        punctuator = Punctuator.load(args.punctuator, "cpu")
+    corpus = Utterances(args.corpus, max_seconds=40.0, limit=args.limit,
+                        feasible=feasibility(model.cfg, model.cfg.sample_rate))
+    print(f"checkpoint   {path}  (step {blob.get('step')})")
+    print(f"corpus       {args.corpus}: {len(corpus.utts):,} utterances; beam a={tuning['alpha']} "
+          f"b={tuning['beta']} unk={tuning['unk_penalty']}" + (" (tuned on dev)" if t else ""))
+    t0 = time.time()
+    r = run(model, device, corpus, lm, tuning, punctuator, workers=args.workers,
+            min_occurrences=args.min_occurrences, score_limit=args.score_limit)
+    sil, sp, nm, co, cl = r["silence"], r["speakers"], r["names"], r["corrections"], r["cleanup"]
+    mark = lambda ok: "pass" if ok else "FAIL"   # noqa: E731
+    print(f"1 silence    {sil['chars']} characters on {sil['clips']} no-speech clips   {mark(sil['pass'])}")
+    print(f"2 speakers   WER {sp['wer'] * 100:.2f}% over {sp['speakers']} speakers: best "
+          f"{sp['best'] * 100:.1f}%  median {sp['median'] * 100:.1f}%  worst {sp['worst'] * 100:.1f}%")
+    print(f"3 languages  {r['languages']['status']} — {r['languages']['why']}")
+    print(f"4 names      {nm['words']} unseen words: recall {nm['without']['recall']:.0%} -> "
+          f"{nm['with_dictionary']['recall']:.0%} with them in a dictionary "
+          f"({nm['with_dictionary']['false_alarms']} written where not said)")
+    curve = "  ".join(f"#{c['occurrence']} {c['recall']:.0%}" for c in co["curve"])
+    print(f"5 learning   {co['targets']} words said {co['min_occurrences']}+ times, corrected after "
+          f"each: {curve}   {mark(co['learns'])}")
+    print(f"             {co['false_insertions']} false insertions of {co['learned_words']} learned "
+          f"words across {co['false_insertion_utts']} utterances that never say them")
+    print(f"+ cleanup    {cl['invented']} words invented, {cl['dropped']} dropped, over "
+          f"{cl['words']:,} words ({cl['punctuator']})   {mark(cl['pass'])}")
+    print(f"took         {time.time() - t0:.0f}s")
+    if not args.no_write:
+        RESULTS.mkdir(parents=True, exist_ok=True)
+        out = RESULTS / f"daytwo-{path.parent.name}-step{blob.get('step')}-{Path(args.corpus).name}.json"
+        out.write_text(json.dumps({"kind": "asr_daytwo", "checkpoint": str(path),
+                                   "run": path.parent.name, "step": blob.get("step"),
+                                   "corpus": str(args.corpus), "lm": args.lm, "tuning": tuning,
+                                   "punctuator": args.punctuator if punctuator else None,
+                                   "time": time.strftime("%Y-%m-%d %H:%M:%S"), **r}, indent=1))
+        print(f"written      {out}")
+    return 0
+
+
 def cmd_silence(args) -> int:
     model, _ = load_recognizer(resolve(args.checkpoint), _device(args.device))
     r = silence_check(model, _device(args.device))
@@ -329,6 +387,25 @@ def main(argv=None) -> int:
     s.add_argument("--workers", type=int, default=12)
     s.add_argument("--device", default=None)
     s.set_defaults(fn=cmd_tune)
+
+    s = sub.add_parser("daytwo", help="the day-two checks: silence, speakers, names, "
+                                      "learning from corrections, cleanup")
+    s.add_argument("checkpoint")
+    s.add_argument("--corpus", default="data/asr/test-clean")
+    s.add_argument("--lm", default="data/asr/lm/trigram.npz")
+    s.add_argument("--punctuator", default="checkpoints/punct/ckpt_best.pt",
+                   help="the cleanup tagger; missing = rules only")
+    s.add_argument("--limit", type=int, default=None, help="only the first N utterances")
+    s.add_argument("--score-limit", type=int, default=None,
+                   help="score speakers/names on the first N only (the replay uses all)")
+    s.add_argument("--min-occurrences", type=int, default=4)
+    s.add_argument("--alpha", type=float, default=None)
+    s.add_argument("--beta", type=float, default=None)
+    s.add_argument("--unk-penalty", type=float, default=None)
+    s.add_argument("--workers", type=int, default=8)
+    s.add_argument("--device", default=None)
+    s.add_argument("--no-write", action="store_true")
+    s.set_defaults(fn=cmd_daytwo)
 
     s = sub.add_parser("silence", help="what it writes on audio with no speech (should be nothing)")
     s.add_argument("checkpoint")

@@ -1,0 +1,65 @@
+# The dictation punctuation tagger (docs/23 § "From words to writing").
+#
+# The recogniser writes "is that alright i think so". This model labels each of those words
+# with what follows it (nothing , . ?) and how it is cased (lower, Capital, UPPER) -- twelve
+# labels -- and never writes a word of its own. It is trained by taking FineWeb-Edu, deleting
+# the punctuation and capitals, and asking for them back (aksharallm/dictate/punct.py).
+#
+#   scripts/experiment.sh punct          (or the portal's Start button)
+#
+# It is the pretraining loop with a third objective (aksharallm/dictate/tagger.py), so it
+# stops, resumes, logs and reports exactly like every other run here.
+
+name: punct
+
+model:
+  # The blend tokenizer's 32,768 ids, plus twelve rows the tokenizer can never emit: those
+  # rows ARE the classifier (tied embeddings), so the architecture is unchanged.
+  vocab_size: 32780
+  tag_classes: 12
+  # A comma after "however" depends on what comes next as much as on what came before.
+  causal: false
+
+  d_model: 384
+  n_layers: 8
+  n_heads: 6
+  n_kv_heads: 6
+  max_seq_len: 256
+  tie_embeddings: true
+  dropout: 0.0
+
+data:
+  # Prose only. Python has punctuation, but not the kind a person dictates.
+  train_bin: data/blend/fineweb-edu-10bt.bin
+  # The blend's validation split. Its code windows mostly fail the normaliser and are
+  # dropped, so what is scored is held-out prose.
+  val_bin: data/blend/val.bin
+  tokenizer: data/blend/tokenizer.json
+
+optim:
+  lr: 1.0e-3
+  min_lr_ratio: 0.1
+  warmup_steps: 500
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/punct
+  batch_size: 64
+  grad_accum: 1
+  seq_len: 256
+  max_steps: 20000
+  eval_every: 1000
+  eval_batches: 20
+  sample_every: 1000
+  ckpt_every: 1000
+  log_every: 50
+  # The batches are built on the CPU from text (decode, normalise, re-encode), which is the
+  # bottleneck at this size; compiling the model would save time where none is spent.
+  compile: false
+  seed: 1337
+  wandb_project: null
+  resume: auto

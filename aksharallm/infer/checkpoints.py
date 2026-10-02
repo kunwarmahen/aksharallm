@@ -234,6 +234,8 @@ class Checkpoint:
     #: which does not fail, it just returns fluent nonsense.
     causal: bool = True
     mask_token_id: int | None = None
+    #: A punctuation tagger (docs/23): a classifier, so no sampler may run it either.
+    tag_classes: int = 0
     error: str | None = None
 
     @property
@@ -268,7 +270,7 @@ class Checkpoint:
             "rope_scaling": self.rope_scaling, "trained_window": self.trained_window,
             "attn_window": self.attn_window, "attn_sinks": self.attn_sinks,
             "causal": self.causal, "mask_token_id": self.mask_token_id,
-            "diffusion": self.is_diffusion,
+            "diffusion": self.is_diffusion, "tagger": bool(self.tag_classes),
             "id": f"{self.run}/{self.name}",
         }
 
@@ -470,7 +472,8 @@ class CheckpointStore:
                # Defaulted rather than required: every checkpoint written before docs/20
                # existed has neither key, and all of them are autoregressive.
                "causal": bool(mcfg.get("causal", True)),
-               "mask_token_id": mcfg.get("mask_token_id")},
+               "mask_token_id": mcfg.get("mask_token_id"),
+               "tag_classes": int(mcfg.get("tag_classes") or 0)},
             error=None)
 
     def _loss_at(self, run_dir: Path, step: int | None) -> float | None:

@@ -203,7 +203,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             # One route carries audio, and only that one gets the larger limit: a recorded
             # sentence is megabytes where every other request here is a few hundred bytes.
-            data = self._body(DICTATE_MAX_BODY if parts == ["api", "dictate", "transcribe"]
+            data = self._body(DICTATE_MAX_BODY if parts in (["api", "dictate", "transcribe"],
+                                                            ["api", "dictate", "dictate"])
                               else MAX_BODY)
             if parts == ["api", "explain"]:
                 return self._explain(data)
@@ -431,6 +432,22 @@ class Handler(BaseHTTPRequestHandler):
                     if parts[2] == "silence":
                         return self._json(self.dictation.silence(
                             str(data.get("checkpoint") or "")))
+                    # The cleaned pipeline -- the same one the desktop hotkey runs.
+                    if parts[2] == "dictate":
+                        return self._json(self.dictation.dictate(
+                            str(data.get("pcm") or ""), int(data.get("sample_rate") or 0)))
+                    if parts[2] == "clean":
+                        return self._json(self.dictation.clean(str(data.get("text") or "")))
+                    if parts[2] == "correct":
+                        return self._json(self.dictation.correct(
+                            str(data.get("shown") or ""), str(data.get("corrected") or ""),
+                            data.get("heard")))
+                    if parts[2] == "personal":
+                        return self._json(self.dictation.personal_edit(
+                            str(data.get("action") or ""), str(data.get("word") or "")))
+                    if parts[2] == "desktop":
+                        return self._json(self.dictation.desktop_action(
+                            str(data.get("action") or ""), str(data.get("binding") or "")))
                     # Detached CLI jobs: fetch / pack / lm / tune / eval. Each one is the
                     # `python -m aksharallm.asr` command a terminal would run.
                     if parts[2] == "job":
@@ -557,6 +574,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.dictation.overview())
         if parts == ["dictate", "jobs"]:
             return self._json(self.dictation.jobs.status())
+        if parts == ["dictate", "personal"]:
+            return self._json(self.dictation.personal())
+        if parts == ["dictate", "desktop"]:
+            return self._json(self.dictation.desktop())
         # vision: which towers and corpora exist.
         if parts == ["vision"]:
             return self._json(self.vision.overview())

@@ -1,8 +1,8 @@
 # 23. Speech recognition: dictation that is still right on day two
 
 > [Doc 21](21-audio.md) taught the transformer to *make* sound. This chapter goes the other
-> way: sound in, text out. It is the first half of Phase 7 — a dictation system — and it is
-> built around a list a dictation company published of what goes wrong with a weekend clone
+> way: sound in, text out — and then finished, punctuated text, typed into whatever window
+> your cursor is in. It is Phase 7 — a dictation system — and it is built around a list a dictation company published of what goes wrong with a weekend clone
 > **once someone actually uses it.** Every item on that list is a failure you can measure, so
 > the chapter is the recogniser *and* the measurements.
 
@@ -11,8 +11,11 @@ flowchart LR
     M["microphone<br/>or a file"] --> F["log-mel<br/>80 bands, 10 ms"]
     F --> E["Conformer encoder<br/>from scratch"]
     E --> C["one guess per 40 ms:<br/>a letter, or blank"]
-    C --> G["merge repeats,<br/>drop blanks"]
-    G --> T["text"]
+    C --> G["beam search<br/>word LM + your dictionary"]
+    G --> W["cleanup: punctuation<br/>tagger, fillers, commands"]
+    W --> T["text, typed where<br/>your cursor is"]
+    U["your corrections"] -.-> G
+    U -.-> W
 ```
 
 **Route A: the ear is ours.** There is a cheaper road — put a "day-two layer" (dictionary,
@@ -32,10 +35,11 @@ written down rather than hidden.
 | 2 | Accents | multi-speaker data; never report only the mean | WER **per speaker**, the worst beside the median |
 | 3 | Switching language mid-sentence | per-segment language id | WER on a mixed set — *not built yet* |
 | 4 | Names (Shaun or Sean?) | beam search biased by a personal dictionary | words the LM has never seen: **5% → 50%** recalled with a dictionary on test-clean, 13 written where not said |
-| 5 | Never learns from a correction | corrections → dictionary now, → LoRA adapter later | right on the 4th try after 3 corrections? — *not built yet* |
+| 5 | Never learns from a correction | a correction → dictionary word + spelling at once, → replacement rule when seen twice | a replay over test-clean's repeated unseen words: **8% right on first hearing → 54% after one correction**, 0 false insertions |
+| + | Cleanup puts words in your mouth | a punctuation **tagger** that labels words and cannot write one | words in the cleaned text the recogniser did not write: **0** over 52,583 |
 
-Checks 1, 2 and 4 are live in this chapter's code. 3 and 5 are the dictation layer, which sits on top
-of the recogniser and is `PLAN.md` § Phase 7's pieces 5–7.
+All but 3 are measured, together, by `python -m aksharallm.asr daytwo` (§ The day-two suite).
+3 is not built: the recogniser is English-only.
 
 ---
 
@@ -336,6 +340,228 @@ added their contacts — and counts the price: 13 dictionary words written where
 
 ---
 
+## From words to writing: the cleanup
+
+The recogniser writes what LibriSpeech transcripts look like — `is that alright i think so`.
+Dictation has to hand back `Is that alright? I think so.` Punctuation is not audible frame by
+frame; it is a property of the sentence, so it is a second model's job.
+
+**That model is a tagger, not a rewriter, and that is the whole design.** The obvious tool is
+a language model asked to "tidy this transcript", and a language model asked that will
+sometimes *improve* a word, drop one, or finish your sentence for you — day-two problem 1
+coming back one layer up. A tagger cannot. For each word it picks one of **twelve labels**:
+what follows the word (nothing , . ?) times how it is cased (lower, Capitalised, UPPER). It
+never emits a word, so `render` can only *decorate* the recogniser's words, and a property
+test feeds it 300 random label sequences and checks that every word comes back unchanged.
+
+```mermaid
+flowchart LR
+    T["web text<br/>'Is that alright? I think so.'"] --> N["normalise like the ear<br/>is that alright i think so"]
+    T --> L["one label per word<br/>Cap · lower · lower+?<br/>Cap · lower · lower+."]
+    N --> M["bidirectional transformer<br/>(ours, causal: false)"]
+    L -.->|cross-entropy| M
+    M --> R["render: decorate the<br/>words, never change them"]
+```
+
+**The training data is free**: any punctuated text, with the punctuation and capitals deleted,
+is a training pair. [`dictate/punct.py`](../aksharallm/dictate/punct.py) does that to
+FineWeb-Edu on the fly, and its rules are the part worth reading, because each one decides
+what the tagger is taught:
+
+* the text is normalised to **exactly the recogniser's alphabet** (`a-z` and `'`) — a model
+  trained on input the ear never produces is trained for a different job;
+* a sentence holding anything the ear cannot write (a digit, `e.g.`, a URL) is **dropped
+  whole**, not cleaned — deleting "1984" from "In 1984, he left." teaches a comma after "in";
+* a line that does not end in `.`, `?` or `!` is a heading or a list item, and is dropped;
+* four punctuation classes, not eight: `!` and `;` are taught as `.`, `:` and dashes as `,`.
+
+About 42% of FineWeb's words survive those rules, which is plenty.
+
+**There is no `train/punct.py`.** It is the pretraining loop with a **third objective**
+([`dictate/tagger.py`](../aksharallm/dictate/tagger.py) `TaggerObjective`), beside
+next-token prediction and masked diffusion ([doc 20](20-diffusion.md) made the seam). So it
+stops, resumes, logs, reports and appears on the Dashboard like every other run. The
+classifier is the embedding matrix: `model.tag_classes: 12` adds twelve rows to the
+vocabulary that the tokenizer can never emit, and the logit for label *k* is the hidden state
+dotted with row `tag_base + k` — nothing about the transformer changes, the same trick masked
+diffusion uses for `[MASK]`. The label sits on the **last BPE piece of each word**, the
+position that has seen the whole word. One thing cost a measurement: building a batch is CPU
+work (decode, normalise, re-encode), and reading four 256-token windows per row from a 17 GB
+file was half of it — one 1,024-token window per row plus a worker pool took a step from 0.28
+to 0.16 s. The windows are still *drawn* by the dataset's own generator, so a resume reads
+what an unbroken run would have.
+
+**How it is judged: per-class F1, never accuracy.** About 85% of words take no punctuation,
+so a tagger that never punctuates scores 85% accuracy. `dictate punct-eval` scores `,` `.` `?`
+and capitals on held-out passages, beside a **rules-only baseline** (capital first, full stop
+last). Measured on a 2,000-step verification run (6 minutes on the card; the real run is
+`scripts/experiment.sh punct`, 20,000 steps, about an hour), 300 held-out passages, 32,538
+words:
+
+| | tagger P / R / F1 | rules only F1 |
+|---|---|---|
+| comma | 68% / 52% / **59%** | 0% |
+| full stop | 75% / 70% / **72%** | 7% |
+| question mark | 71% / 57% / **64%** | 0% |
+| capital | 83% / 75% / **79%** | 16% |
+
+Its mid-run sample at step 1,500 reads *"Hello Mary. How was your trip to Paris? Did you see
+the Eiffel tower? I hope the weather was good. We had rain, snow and wind all week, but
+tomorrow should be better."* — from `hello mary how was your trip to paris did you see…`
+
+**The rest of cleanup is rules, and every removal is listed** in the result
+([`dictate/cleanup.py`](../aksharallm/dictate/cleanup.py)): fillers from a closed list (`um`,
+`uh`, `erm`… — not `like` or `you know`, which are sometimes meant); **new line** and **new
+paragraph**; and **scratch that**, which deletes back to the start of the sentence you are in,
+as the tagger sees it. Spoken punctuation ("comma", "full stop") is deliberately not a
+command: every one of them is also a word. Three rules sit on top of the tagger because a rule
+that is always right beats a model that is usually right: the first word and every word after
+`.`/`?` are capitalised, `i` is always `I`, and the text ends with a full stop.
+
+---
+
+## Learning from corrections (day-two 5)
+
+A dictation app that writes "Sean" every time you say "Shaun", however often you fix it, is
+the one that gets uninstalled. [`dictate/personal.py`](../aksharallm/dictate/personal.py)
+compares what was shown with what you changed it to (word alignment with `difflib`) and keeps
+three kinds of memory, each with its own threshold because each does different damage when it
+is wrong:
+
+| memory | example | learned after | what it does |
+|---|---|---|---|
+| dictionary word | `shaun` | 1 correction | the beam search leans towards it (§ Spelling) |
+| spelling | `github` → `GitHub` | 1 correction | casing at render time |
+| replacement | heard `sean` → `shaun` | **2** identical corrections | rewrites the words before cleanup |
+
+```mermaid
+flowchart LR
+    S["shown: I met Sean at the get hub office."] --> A["align the words"]
+    C["you fixed it: I met Shaun at the GitHub office."] --> A
+    A --> D["dictionary: shaun, github<br/>replacement counts +1"]
+    A --> P["spellings: Shaun, GitHub"]
+    D --> B["next dictation:<br/>beam bias + rewrites"]
+    P --> R["next render"]
+```
+
+Two refusals keep it honest. **A fix between two words the LM already knows teaches nothing**:
+"their" → "there" is a grammar fix in one sentence, not a rule for every "their" from now on
+(and not a word to bias the decoder towards either). **A changed span longer than three words
+is a rewrite** — you changed your mind — and is logged but not learned from. Everything is in
+`logs/dictate/`: `personal.json` and `corrections.jsonl` (every correction and what was
+learned from it).
+
+---
+
+## The day-two suite
+
+`python -m aksharallm.asr daytwo asr-libri100` runs every check on one corpus in one pass and
+writes `logs/asr/daytwo-*.json` ([`asr/daytwo.py`](../aksharallm/asr/daytwo.py)). **Measured
+on test-clean (2,620 utterances, 30 s on the CPU after the encoder):**
+
+| # | failure | result |
+|---|---|---|
+| 1 | words on silence | **0 characters** on 5 no-speech clips |
+| 2 | some voices much worse | WER 7.88%; best speaker 3.4%, median 7.6%, **worst 15.5%** |
+| 3 | language switching | **not built** — the recogniser is English-only |
+| 4 | names | 132 unseen words: **5% → 50%** recalled with them in a dictionary, 13 written where not said |
+| 5 | never learns | **8% → 54% → 38% → 54% → 62% → 60%** (see below), 0 false insertions |
+| + | cleanup invents words | **0 invented, 0 dropped** over 52,583 words |
+
+**Check 5 is a replay, and it is the one worth reading.** For each of the 13 words the LM has
+never seen that occur in four or more test utterances ("montfichet", "boolooroo",
+"servadac"…), the utterances holding it are dictated **in order**, each with whatever a fresh
+memory has learned so far, and after each one the transcript is corrected to the reference,
+exactly as a person would fix it. A system that learns has a rising curve; one that only says
+it learns has a flat one. Ours goes from **8% on first hearing to 54% after one correction** and
+holds around 60%. It does not reach 100% because a dictionary can only *favour* a word whose
+letters the ear already roughly heard — "servadac" heard as two words is not rescued by a
+bias on one — which is what sound-alike matching (below) is for. **Beside the curve, the cost:
+0 of the 17 learned words were written into any of 200 utterances that never say them.**
+
+---
+
+## On the desktop: dictate into any app
+
+The pipeline above is one class, `Dictator`
+([`dictate/pipeline.py`](../aksharallm/dictate/pipeline.py)), and three things drive it: the
+CLI, the portal, and a **background daemon** that a keyboard shortcut talks to.
+
+```mermaid
+sequenceDiagram
+    participant K as GNOME shortcut
+    participant D as daemon (models loaded)
+    participant M as parecord (microphone)
+    participant X as xdotool
+    K->>D: toggle
+    D->>M: record 16 kHz mono
+    K->>D: toggle again
+    D->>M: stop
+    D->>D: hear → beam + your dictionary → cleanup
+    D->>X: type the text where your cursor is
+```
+
+**Why a daemon**: loading the recogniser, the 3.6 GB word LM and the tagger takes seconds, and
+the beam search's word-prefix table another nine (measured: the first dictation after a cold
+start took 9.1 s, the second **181 ms for 9.6 s of speech**). A hotkey that took seconds to
+start listening would lose the first words of every sentence, so the daemon loads everything
+once — including that table — and the shortcut runs a tiny client that only talks to its
+socket. **Why toggle, not hold-to-talk**: a GNOME custom shortcut runs a command on press and
+has no release event. The desktop pieces are other programs on purpose — `parecord` for the
+microphone, `xdotool` to type, `xclip` for the clipboard, `notify-send` to say what is
+happening — and `dictate status` lists any that are missing with the line that installs them.
+X11 only: Wayland does not let one program type into another's window this way.
+
+### Using it, step by step
+
+1. **Once:** `sudo apt install xdotool xclip` — without them the text cannot be typed into
+   another app, and lands in a notification and the portal's history instead.
+2. **Once:** `python -m aksharallm.dictate install-shortcut` (or **Install** in the portal).
+   It appears in Settings → Keyboard → View and Customise Shortcuts → Custom Shortcuts as
+   *aksharallm dictation*. Other keys: `--binding '<Ctrl><Alt>space'` — `--binding` needs a
+   value; on its own it is an error.
+3. **After every reboot:** `python -m aksharallm.dictate daemon --bg` (or **Start it** in the
+   portal). It takes ~10 s to load; until then a key press says "still loading".
+4. Click into any text box, press **Super+Alt+D**, wait for "Listening…", speak, press it
+   again. The text is typed where your cursor is.
+
+`python -m aksharallm.dictate status` says which of these is missing.
+
+### What runs from the portal
+
+Everything except the two that cannot: installing system packages needs your password, which
+a web page must not ask for, and the portal cannot restart itself from its own page (after
+updating the code, `scripts/portal.sh --restart`).
+
+| command | in the portal |
+|---|---|
+| `scripts/experiment.sh punct` | Dashboard: pick **punct** in the run picker, Start |
+| `dictate punct-eval` | Dictation → **Score the punctuation** |
+| `asr daytwo` | Dictation → **Run all the checks** |
+| `dictate daemon --bg` / `--stop` | On your desktop → **Start it** / **Stop it** |
+| `dictate install-shortcut` / `uninstall-shortcut` | On your desktop → **Install** (with a keys box) / **Remove** |
+| `dictate status` | the On your desktop panel |
+| `dictate file`, `correct`, `dictionary`, `history` | the Dictate panel: file picker, **Teach it**, word chips and Add, Recent dictations |
+| `dictate clean` | Dictate → *Try the cleanup without speaking* |
+| `sudo apt install xdotool xclip` | not runnable — shown beside each missing tool |
+
+**The shortcut installer reads back every value it writes, and this is why.** The first
+version reported `installed` and GNOME's Custom Shortcuts list stayed empty. With conda's
+`base` environment active, `/opt/anaconda3/bin/gsettings` comes first on PATH, and conda's
+copy is built without the dconf backend: it falls back to an in-memory store, so every `set`
+succeeds and is forgotten when the process exits. No error, exit code 0. The installer now
+calls the system `/usr/bin/gsettings` and reads each key back, and a value GNOME did not keep
+is an error, not a success message.
+
+Settings live under `dictate:` in `configs/portal.yaml` (recogniser, tagger, output mode —
+`type`, `paste`, `clipboard` — and the recording limit). The beam weights are not copied
+there: they are read from the best `asr tune` result, because α and β belong to a model + LM
+pair and a hand-copied number goes stale the day either is retrained. Every dictation is
+appended to `logs/dictate/history.jsonl` — what was heard, what was written and every step in
+between — which is also what the portal's *fix* button corrects against.
+
+---
+
 ## Running it
 
 ```bash
@@ -359,15 +585,38 @@ scripts/audio.sh asr-libri100
 .venv/bin/python -m aksharallm.asr eval asr-libri100 --corpus data/asr/test-clean \
     --decoder beam --lm data/asr/lm/trigram.npz --alpha 0.8 --beta 2.0 --unk-penalty -24 \
     --dict my-names.txt
+
+# writing: the punctuation tagger (a GPU run like any other, ~1 h) and the day-two suite
+scripts/experiment.sh punct
+.venv/bin/python -m aksharallm.dictate punct-eval checkpoints/punct/ckpt_best.pt
+.venv/bin/python -m aksharallm.asr daytwo asr-libri100
+
+# dictation on the desktop (X11): load once, then a shortcut toggles it
+sudo apt install xdotool xclip                       # typing and the clipboard
+.venv/bin/python -m aksharallm.dictate status          # what is missing, running, learned
+.venv/bin/python -m aksharallm.dictate daemon --bg
+.venv/bin/python -m aksharallm.dictate install-shortcut   # <Super><Alt>d runs `toggle`
+.venv/bin/python -m aksharallm.dictate file me.wav        # the same pipeline on a file
+.venv/bin/python -m aksharallm.dictate correct --shown "I met Sean." --corrected "I met Shaun."
 ```
 
-In the browser: the portal's **Dictation** tab. Hold the button and talk, or drop a file;
+In the browser: the portal's **Dictation** tab. It leads with **Dictate** — press, talk,
+press again, and the finished text comes back in an editable box; fix a word and **Teach it
+this correction** sends the edit to the same `personal.py` the hotkey uses. *Try the cleanup
+without speaking* runs `dictate clean` on words you type — the quickest way to see what the
+tagger and the commands do. Then **What it has
+learned from you** shows the dictionary, spellings and replacements (with which are automatic
+yet), and **On your desktop** starts and stops the daemon, installs the shortcut and lists the
+tools it needs. The day-two table fills from the latest `asr daytwo` result, with check 5 drawn
+as a curve, and *Run all the checks* / *Score the punctuation* run those two commands as jobs.
+
+Below that is the **Recogniser lab** — the raw ear before cleanup. Hold the button and talk, or drop a file;
 it shows what the recogniser wrote, the level it heard you at, and the sample-rate conversion
 it did (a microphone is 48 kHz; the model hears 16, converted by our own resampler). Under
 that, the day-two checks and every `asr eval` result with the worst speaker beside the median.
 The **Decoder** picker switches to beam + word LM (with the weights `asr tune` chose, and it
-says which), the **Personal dictionary** box takes your names one per line, and the result shows
-what greedy alone would have written beside it.
+says which) using your personal dictionary, and the result shows what greedy alone would have
+written beside it.
 
 **Every command above also runs from the tab** — *Run it from here*: download and pack a
 LibriSpeech split, download the LM text and build the LM, tune the beam on dev, evaluate
@@ -384,17 +633,20 @@ Dashboard's Start, like every other run. ([`portal/dictate.py`](../aksharallm/po
 
 ## What is not built yet
 
-* **Corrections** (day-two 5): a correction should become a dictionary entry at once, and a
-  LoRA adapter once there are enough of them. The dictionary is built; the loop is not.
+* **Corrections into the weights.** A correction becomes a dictionary entry, a spelling and
+  (twice seen) a replacement — built and measured above. A LoRA adapter on the encoder, once
+  there are enough corrected recordings, is not built.
 * **Sound-alike dictionary matching.** The dictionary only helps when the letters already start
   the right way; half the unseen names are still missed because they are *heard* differently
   ("bennydeck" as two words). Phonetic matching is the obvious next step.
 * **A smaller LM.** It is 3.6 GB on disk and in memory; pruning singleton trigrams would cut it
   several-fold, at a cost to measure.
 * **Language id per segment** (day-two 3), and a code-switched test set.
-* **Cleanup by our own chat model** — punctuation and filler removal. The recogniser writes
-  lower-case letters and apostrophes only, on purpose: punctuation is not audible frame by
-  frame, it is a property of the sentence, which is a language model's job.
+* **Self-corrections mid-sentence** ("at five, no wait, six"). `scratch that` deletes the
+  whole current sentence; guessing *which phrase* a speaker meant to replace is a model's job,
+  and an unmeasured guess would put words in your mouth.
+* **The full tagger run.** The numbers above are a 2,000-step verification;
+  `scripts/experiment.sh punct` is the real one.
 * **Streaming** (chunked attention), **real-noise testing** (MUSAN), and an **accented-English
   test set** — LibriSpeech is read audiobooks, the most forgiving speech there is.
 * **More audio.** The first real run (test-clean 12.77% greedy, 7.68% beam) trained on 100 h;
@@ -429,6 +681,15 @@ Read [doc 21](21-audio.md) first for the front end this reuses.
 | 11 | [`aksharallm/asr/__main__.py`](../aksharallm/asr/__main__.py) | `eval` — writes `logs/asr/`, never `logs/eval/` (gotcha 18); `tune`, which refuses a test corpus |
 | 12 | [`portal/dictate.py`](../aksharallm/portal/dictate.py) | `transcribe` — the browser's 48 kHz resampled by our own resampler, and said so; `tuned`, which picks the best dev result rather than the newest file; `AsrJobs.command`, where every browser argument is checked against what exists before it reaches the CLI |
 | 13 | [`configs/asr-libri100.yaml`](../configs/asr-libri100.yaml) | the real run's shape, against `asr-synth.yaml` for what real speech costs |
+| 14 | [`dictate/punct.py`](../aksharallm/dictate/punct.py) | `examples_from_text` and `sentences` — every rule that decides what the tagger is taught — then `render`, which can only decorate |
+| 15 | [`dictate/tagger.py`](../aksharallm/dictate/tagger.py) | `tag_logits` (the classifier is the embedding), `TaggerObjective._rows` (labels on word ends; windows drawn by the dataset's generator), `Punctuator.labels` (windowing), `score_labels` (F1, never accuracy) |
+| 16 | [`dictate/cleanup.py`](../aksharallm/dictate/cleanup.py) | `clean` — the order of the steps, and every removal listed |
+| 17 | [`dictate/personal.py`](../aksharallm/dictate/personal.py) | `learn` — the three memories and the two refusals |
+| 18 | [`dictate/pipeline.py`](../aksharallm/dictate/pipeline.py) | `Dictator.dictate`, the one path every surface uses; `split_points`; `best_tuning` |
+| 19 | [`dictate/daemon.py`](../aksharallm/dictate/daemon.py) | `Daemon.load` (why the prefix table is built up front), `deliver`, `install_shortcut` |
+| 20 | [`aksharallm/dictate/__main__.py`](../aksharallm/dictate/__main__.py) | the CLI: `status`, `daemon`, `toggle`, `file`, `correct`, `punct-eval` |
+| 21 | [`asr/daytwo.py`](../aksharallm/asr/daytwo.py) | `correction_replay` — check 5 as a curve, with its false insertions |
+| 22 | [`configs/punct.yaml`](../configs/punct.yaml) | the tagger: `tag_classes`, `causal: false`, prose only |
 
 What pins it: [`tests/test_asr.py`](../tests/test_asr.py) — CTC against `F.ctc_loss` (value,
 gradient, gradcheck, empty and impossible targets), an utterance alone versus padded into a
@@ -437,4 +698,8 @@ reason, the FLAC header read and refused, the trainer end to end through stop an
 for piece 5, Kneser-Ney summing to one in every context, chunked counting equal to one pass, a
 hand-built "karrots" the LM corrects, "shaun" lost to "san" without the dictionary and kept
 with it, and the `<unk>` penalty charged exactly once — every one of the four bookkeeping
-rules mutation-checked red.
+rules mutation-checked red. And [`tests/test_dictate.py`](../tests/test_dictate.py) for the
+writing layer: `render` never changes a word (300 random label sequences), cleanup never adds
+one, labels sit on word ends, a sentence holding a digit is dropped whole, a fix between two
+ordinary words teaches nothing, and the replay's curve rises on a hand-built "zorc" → "zork"
+— seven of its rules mutation-checked red.

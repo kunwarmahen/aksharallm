@@ -256,6 +256,10 @@ def objective_for(cfg: Config):
     if cfg.model.is_diffusion:
         from ..diffusion.objective import DiffusionObjective
         return DiffusionObjective(cfg)
+    if cfg.model.is_tagger:
+        # The third objective: the dictation punctuation tagger (docs/23). Same loop.
+        from ..dictate.tagger import TaggerObjective
+        return TaggerObjective(cfg)
     return ARObjective(cfg)
 
 
@@ -626,7 +630,10 @@ def main():
             # objective the same exp() is an upper *bound* on perplexity, and printing it
             # under the same three letters is how a number ends up in a comparison it has no
             # business being in.
-            ppl_label = "ppl" if objective.comparable_to_ar else "ppl <="
+            # An objective may name its own (a tagger's exp(CE) is "perplexity over 12 labels",
+            # not a bound on anything); otherwise exact for AR and an upper bound otherwise.
+            ppl_label = getattr(objective, "ppl_label",
+                                "ppl" if objective.comparable_to_ar else "ppl <=")
             print(f"  >> val {objective.metric} {val_loss:.4f}  "
                   f"{ppl_label} {math.exp(min(val_loss, 20)):.2f}"
                   f"{'  * best' if val_loss < best_val else ''}"
@@ -688,7 +695,7 @@ def main():
     val_loss = objective.evaluate(model, val_ds, cfg.train.batch_size,
                                   cfg.train.eval_batches, ctx)
     print(f"\nfinal val {objective.metric} {val_loss:.4f}  "
-          f"{'ppl' if objective.comparable_to_ar else 'ppl <='} "
+          f"{getattr(objective, 'ppl_label', 'ppl' if objective.comparable_to_ar else 'ppl <=')} "
           f"{math.exp(min(val_loss, 20)):.2f}")
     if dd.is_main:
         save_checkpoint(out_dir / "ckpt_last.pt", to_save, optimizer, cfg,

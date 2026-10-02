@@ -103,6 +103,7 @@ DOC_HINTS = (
     ("aksharallm/audio", "docs/21-audio.md"),
     ("aksharallm/vision", "docs/22-vision.md"),
     ("aksharallm/asr", "docs/23-speech-recognition.md"),
+    ("aksharallm/dictate", "docs/23-speech-recognition.md"),
     ("aksharallm/portal/explain", "docs/08-scaling.md"),
     ("aksharallm/portal/evals", "docs/13-eval.md"),
     ("aksharallm/portal/quantize", "docs/11-quantization.md"),
@@ -151,6 +152,7 @@ Layout:
   aksharallm/audio/      sound: STFT/mel front end, an RVQ codec, an audio LM, TTS and ASR
   aksharallm/vision/     images into the frozen language model, LLaVA-style
   aksharallm/asr/        speech recognition: a Conformer encoder trained with CTC
+  aksharallm/dictate/    dictation on top of it: punctuation tagger, corrections, hotkey
   aksharallm/portal/     this local web portal (stdlib HTTP server, no dependencies)
   configs/*.yaml         one YAML per run; a run = that file plus `-o key=value` overrides
   scripts/*.sh           the launchers a human would type

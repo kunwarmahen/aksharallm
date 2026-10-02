@@ -273,3 +273,29 @@ cost:
   # which is true and is roughly 30% under what you are billed for.
   #   host_watts: 100
   #   psu_efficiency: 0.9
+
+# Dictation (docs/23 § "On the desktop") — the pipeline the portal's Dictation tab, the
+# desktop shortcut and `python -m aksharallm.dictate` all share. Nothing here affects training.
+dictate:
+  # The ear: a run name (its ckpt_best.pt) or a path to a .pt.
+  recognizer: asr-libri100
+  # The punctuation tagger. Until `scripts/experiment.sh punct` has run, cleanup is rules only
+  # (capital first, full stop last) and every result says so.
+  punctuator: checkpoints/punct/ckpt_best.pt
+  # Beam search with the word LM. The weights are NOT set here: they come from the best
+  # `asr tune` result, because they belong to a model + LM pair. Set alpha/beta/unk_penalty
+  # only to override that.
+  lm: data/asr/lm/trigram.npz
+  decoder: beam
+  # The CPU: a few seconds of speech is cheap there, and a tool that held the card would be
+  # what killed a training run. (The portal's own tab uses its device policy instead.)
+  device: cpu
+  # How the desktop daemon hands the text over: type (xdotool types it), paste (clipboard +
+  # Ctrl+V — fast, but replaces what was on your clipboard), clipboard (only copies), none.
+  output: type
+  # A recording stops itself after this, in case the second key press never comes.
+  max_seconds: 120
+  # Quieter than this over the whole recording, and nothing is transcribed.
+  min_rms_dbfs: -55
+  # The dictionary, corrections and history. Personal, so not in git.
+  personal_dir: logs/dictate

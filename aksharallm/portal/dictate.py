@@ -39,8 +39,12 @@ import torch
 #: Thirty seconds of speech is a long dictated paragraph and a few hundred milliseconds of
 #: compute. Past that, a request is more likely a mistake than a sentence.
 MAX_SECONDS = 30.0
-#: The request body limit for this route only: 30 s at 48 kHz as base64 int16 is ~3.9 MB.
-MAX_BODY = 8 * 1024 * 1024
+#: Dictation (the cleaned pipeline) takes longer: a dictated paragraph can run a minute or
+#: two, and the pipeline splits it at pauses (dictate/pipeline.py).
+MAX_DICTATE_SECONDS = 120.0
+#: The request body limit for the two audio routes only: 120 s at 48 kHz as base64 int16 is
+#: ~15.4 MB.
+MAX_BODY = 20 * 1024 * 1024
 #: The word LM `asr lm build` writes. Optional: without it the tab offers greedy only.
 LM_PATH = Path("data/asr/lm/trigram.npz")
 #: A personal dictionary can be long, but not a novel.
@@ -65,6 +69,7 @@ class Dictation:
         self._device_for = device_for
         self._cache: dict = {}
         self._lm = None
+        self._dictator = None
         self.jobs = AsrJobs(self)
 
     def device(self) -> tuple[str, str]:
@@ -153,38 +158,214 @@ class Dictation:
         return out
 
     def tuned(self) -> dict | None:
-        """The weights the latest `asr tune` chose on dev-clean, or None. The beam option uses
+        """The weights the best `asr tune` chose on dev-clean, or None. The beam option uses
         these rather than defaults: alpha and beta are a property of a model + LM pair."""
+        from ..dictate.pipeline import best_tuning
+        return best_tuning(self.root, LM_PATH)
+
+    def _latest(self, kind: str, pattern: str) -> dict | None:
         best = None
-        for p in sorted((self.root / "logs/asr").glob("tune-*.json")):
+        for p in sorted((self.root / "logs/asr").glob(pattern)):
             try:
                 d = json.loads(p.read_text())
             except (OSError, ValueError):
                 continue
-            if Path(d.get("lm") or "").name != LM_PATH.name or not d.get("best"):
-                continue
-            # The best dev WER across every tuning run for this LM -- not "the newest file",
-            # which a narrower follow-up grid would win just by being written last.
-            if best is None or d["best"]["wer"] < best["wer"]:
-                best = {**d["best"], "beam": d.get("beam", 16), "file": p.name,
-                        "greedy_wer": d.get("greedy_wer")}
+            if d.get("kind") == kind and (best is None or (d.get("time") or "") > (best.get("time") or "")):
+                best = {**d, "file": p.name}
         return best
+
+    def daytwo(self) -> dict | None:
+        """The latest `asr daytwo` result, trimmed to what the checks table shows."""
+        d = self._latest("asr_daytwo", "daytwo-*.json")
+        if d is None:
+            return None
+        sil = d.get("silence") or {}
+        return {"file": d["file"], "time": d.get("time"), "run": d.get("run"), "step": d.get("step"),
+                "corpus": Path(d.get("corpus") or "").name, "utts": d.get("utts"),
+                "silence": {k: sil.get(k) for k in ("chars", "clips", "pass")},
+                "speakers": d.get("speakers"), "languages": d.get("languages"),
+                "names": d.get("names"), "cleanup": d.get("cleanup"),
+                "corrections": {k: v for k, v in (d.get("corrections") or {}).items() if k != "per_word"}}
+
+    def punct_eval(self) -> dict | None:
+        d = self._latest("punct_eval", "punct-*.json")
+        if d is None:
+            return None
+        return {k: d.get(k) for k in ("file", "time", "checkpoint", "step", "passages", "tagger", "rules_only")}
 
     def overview(self) -> dict:
         device, why = self.device()
         return {"checkpoints": self.checkpoints(), "results": self.results(), "runs": self.runs(),
                 "device": device, "device_reason": why, "max_seconds": MAX_SECONDS,
+                "max_dictate_seconds": MAX_DICTATE_SECONDS,
                 "lm": str(LM_PATH) if (self.root / LM_PATH).is_file() else None,
-                "tuned": self.tuned()}
+                "tuned": self.tuned(), "daytwo": self.daytwo(), "punct": self.punct_eval(),
+                "pipeline": self.pipeline_info()}
+
+    # ---- dictation: the cleaned pipeline, shared with the desktop hotkey ------------------
+
+    def dictator(self):
+        """The same `Dictator` the desktop daemon and the CLI use (dictate/pipeline.py), with
+        the portal's device policy: the CPU while a run is training."""
+        from ..dictate.pipeline import Dictator, Settings
+        device, _ = self.device()
+        if self._dictator is None or self._dictator.s.device != device:
+            old = self._dictator
+            self._dictator = Dictator(Settings.load(self.root, device=device), self.root)
+            if old is not None:
+                self._dictator._lm = old._lm   # the LM is device-independent; keep the 3.6 GB
+        return self._dictator
+
+    def pipeline_info(self) -> dict:
+        """What the pipeline will use — from files on disk, without loading anything."""
+        from ..dictate.pipeline import Settings, resolve_recognizer
+        s = Settings.load(self.root)
+        try:
+            rec = str(resolve_recognizer(self.root, s.recognizer).relative_to(self.root))
+        except (FileNotFoundError, ValueError):
+            rec = None
+        return {"recognizer": rec, "recognizer_name": s.recognizer,
+                "punctuator": s.punctuator if (self.root / s.punctuator).is_file() else None,
+                "punctuator_path": s.punctuator,
+                "lm": s.lm if (s.decoder == "beam" and (self.root / s.lm).is_file()) else None,
+                "output": s.output, "max_seconds": s.max_seconds}
+
+    @staticmethod
+    def _pcm(pcm_b64: str, sample_rate: int, max_seconds: float) -> np.ndarray:
+        try:
+            raw = base64.b64decode(pcm_b64, validate=True)
+        except (ValueError, TypeError) as e:
+            raise DictationError("the audio did not arrive as base64 int16") from e
+        if not 8_000 <= int(sample_rate) <= 192_000:
+            raise DictationError(f"a sample rate of {sample_rate} Hz is not a microphone's")
+        x = np.frombuffer(raw[: len(raw) // 2 * 2], dtype="<i2").astype(np.float32) / 32768.0
+        secs = len(x) / sample_rate
+        if secs < 0.2:
+            raise DictationError("that was under 0.2 seconds of audio — speak, then press again")
+        if secs > max_seconds:
+            raise DictationError(f"{secs:.0f} s is past the {max_seconds:.0f} s this accepts")
+        return x
+
+    def dictate(self, pcm_b64: str, sample_rate: int) -> dict:
+        """Audio -> finished text through the whole pipeline; recorded in the history."""
+        d = self.dictator()
+        if d.s.decoder == "beam" and (self.root / d.s.lm).is_file():
+            self._language_model()
+        try:
+            return d.dictate(self._pcm(pcm_b64, sample_rate, MAX_DICTATE_SECONDS),
+                             int(sample_rate), source="portal")
+        except FileNotFoundError as e:
+            raise DictationError(str(e)) from e
+
+    def correct(self, shown: str, corrected: str, heard: str | None = None) -> dict:
+        if not shown.strip() or not corrected.strip():
+            raise DictationError("nothing to learn from: both the shown and the corrected text are needed")
+        if len(shown) > 20_000 or len(corrected) > 20_000:
+            raise DictationError("that is longer than a dictation")
+        if (self.root / LM_PATH).is_file():
+            self._language_model()   # so two ordinary words are never learned as a rule
+        d = self.dictator()
+        learned = d.personal.learn(shown, corrected, heard=heard)
+        return {"learned": learned, "personal": d.personal.summary()}
+
+    def personal(self) -> dict:
+        d = self.dictator()
+        p = d.personal
+        p.load()
+        return {"words": [{"word": w, **v} for w, v in sorted(p.words.items())],
+                "replacements": [{"from": k, **v, "active": v.get("count", 0) >= 2}
+                                 for k, v in sorted(p.replacements.items())],
+                "corrections": p.corrections(20), "history": d.history(20),
+                "summary": p.summary(), "dir": d.s.personal_dir}
+
+    def personal_edit(self, action: str, word: str) -> dict:
+        p = self.dictator().personal
+        p.load()
+        if action == "add":
+            try:
+                p.add_word(word)
+            except ValueError as e:
+                raise DictationError(str(e)) from e
+        elif action == "remove":
+            if not p.remove(word):
+                raise DictationError(f"{word!r} is not in the dictionary")
+        else:
+            raise DictationError(f"unknown action {action!r}")
+        p.save()
+        return self.personal()
+
+    def clean(self, text: str) -> dict:
+        if len(text) > 20_000:
+            raise DictationError("that is longer than a dictation")
+        return self.dictator().clean_text(text)
+
+    # ---- the desktop: daemon, tools, shortcut -----------------------------------------------
+
+    def desktop(self) -> dict:
+        from ..dictate import daemon as dm
+        from ..dictate.pipeline import Settings
+        s = Settings.load(self.root)
+        pid = dm.running(self.root, s)
+        state = dm.send(self.root, s, "status", timeout=3) if pid else None
+        try:
+            sc = dm.shortcut()
+        except Exception:   # noqa: BLE001 -- not GNOME, or no gsettings
+            sc = None
+        return {"running": bool(pid), "pid": pid,
+                "state": (state or {}).get("state"), "last": (state or {}).get("last"),
+                "tools": dm.tools(), "shortcut": sc,
+                "session": os.environ.get("XDG_SESSION_TYPE"),
+                "commands": {"start": "python -m aksharallm.dictate daemon --bg",
+                             "shortcut": "python -m aksharallm.dictate install-shortcut",
+                             "toggle": "python -m aksharallm.dictate toggle"}}
+
+    def desktop_action(self, action: str, binding: str = "") -> dict:
+        """Start/stop the daemon, or add/remove the GNOME shortcut — each the CLI command."""
+        import sys
+        from ..dictate import daemon as dm
+        from ..dictate.pipeline import Settings
+        s = Settings.load(self.root)
+        if action == "start":
+            if dm.running(self.root, s):
+                raise DictationError("the dictation daemon is already running")
+            log = dm.state_dir(self.root, s) / "daemon.log"
+            with open(log, "ab") as fh:
+                _subprocess.Popen([sys.executable, "-u", "-m", "aksharallm.dictate", "daemon"],
+                                  cwd=self.root, stdout=fh, stderr=_subprocess.STDOUT,
+                                  stdin=_subprocess.DEVNULL, start_new_session=True)
+        elif action == "stop":
+            pid = dm.running(self.root, s)
+            if not pid:
+                raise DictationError("the dictation daemon is not running")
+            os.kill(pid, 15)
+        elif action == "install":
+            b = binding or "<Super><Alt>d"
+            if not _re.fullmatch(r"(<[A-Za-z]+>)*[A-Za-z0-9]+", b):
+                raise DictationError(f"{b!r} is not a GNOME key binding like <Super><Alt>d")
+            try:
+                dm.install_shortcut(f"{sys.executable} -m aksharallm.dictate --root {self.root} toggle", b)
+            except (OSError, RuntimeError, _subprocess.CalledProcessError) as e:
+                # RuntimeError: GNOME did not keep what was written (dictate/daemon.py reads
+                # every value back) -- said here rather than claimed as installed.
+                raise DictationError(f"shortcut not installed: {e}") from e
+        elif action == "uninstall":
+            dm.uninstall_shortcut()
+        else:
+            raise DictationError(f"unknown action {action!r}")
+        time.sleep(0.3)
+        return self.desktop()
 
     def _language_model(self):
-        """Loaded once and kept: it is a few hundred MB of arrays and a second to load."""
+        """Loaded once and kept, and shared with the dictation pipeline: it is 3.6 GB."""
         if self._lm is None:
-            from ..asr.ngram import TrigramLM
             path = self.root / LM_PATH
             if not path.is_file():
                 raise DictationError("no word LM yet — build one: python -m aksharallm.asr lm build")
-            self._lm = TrigramLM.load(path)
+            d = self.dictator()
+            if d._lm is None:
+                from ..asr.ngram import TrigramLM
+                d._lm = TrigramLM.load(path)
+            self._lm = d._lm
         return self._lm
 
     # ---- the model ----------------------------------------------------------------------
@@ -248,6 +429,9 @@ class Dictation:
         text, how, words = greedy, "greedy", []
         if decoder == "beam":
             words = [w for w in dictionary.replace(",", " ").split() if w.strip()][:MAX_DICT_WORDS]
+            if not words:
+                # Nothing typed: the personal dictionary the corrections built.
+                words = sorted(self.dictator().personal.dictionary())[:MAX_DICT_WORDS]
             t = self.tuned() or {}
             dec = BeamDecoder(lm=self._language_model(), alpha=t.get("alpha", 0.3),
                               beta=t.get("beta", 1.5), unk_penalty=t.get("unk_penalty", -6.0),
@@ -304,7 +488,9 @@ class AsrJobs:
     training, so pressing Evaluate cannot be what killed a training run.
     """
 
-    KINDS = ("fetch", "pack", "lm_fetch", "lm", "tune", "eval")
+    KINDS = ("fetch", "pack", "lm_fetch", "lm", "tune", "eval", "daytwo", "punct_eval")
+    #: Kinds that are `python -m aksharallm.dictate` rather than `... .asr`.
+    DICTATE_KINDS = ("punct_eval",)
 
     def __init__(self, dictation: Dictation):
         self.d = dictation
@@ -449,7 +635,20 @@ class AsrJobs:
                 # Never overwrite the full LM with a sample of it from a button.
                 argv += ["--out", f"data/asr/lm/trigram-every{every}.npz"]
             return argv, f"build the word LM (1 line in {every})"
+        if kind == "punct_eval":
+            from ..dictate.pipeline import Settings
+            ck = Settings.load(self.root).punctuator
+            if not (self.root / ck).is_file():
+                raise DictationError(f"no tagger at {ck} yet — train it: scripts/experiment.sh punct")
+            n = str(int(self._num(spec.get("passages", 300), 20, 5000, "passages")))
+            return ["punct-eval", ck, "--passages", n], "score the punctuation tagger"
         ckpt = self._ckpt(str(spec.get("checkpoint") or ""))
+        if kind == "daytwo":
+            if not (self.root / LM_PATH).is_file():
+                raise DictationError("the day-two checks need the word LM — build it first")
+            corpus = self._corpus(str(spec.get("corpus") or "data/asr/test-clean"))
+            return (["daytwo", ckpt, "--corpus", corpus, "--device", device],
+                    f"day-two checks on {Path(corpus).name}")
         if kind == "tune":
             corpus = self._corpus(str(spec.get("corpus") or "data/asr/dev-clean"))
             if "test" in corpus:
@@ -470,6 +669,8 @@ class AsrJobs:
                      "--unk-penalty", self._num(spec.get("unk_penalty", t.get("unk_penalty", -24)),
                                                 -100, 0, "unk penalty")]
             words = [w.lower() for w in str(spec.get("dictionary") or "").replace(",", " ").split()]
+            if spec.get("personal"):
+                words += sorted(self.d.dictator().personal.dictionary())
             bad = [w for w in words if not _WORD.match(w)]
             if bad:
                 raise DictationError(f"dictionary words may only use a-z and ': {bad[:3]}")
@@ -485,7 +686,8 @@ class AsrJobs:
         argv, label = self.command(spec)
         job = time.strftime("%Y%m%d-%H%M%S") + "-" + argv[0]
         py = _sys.executable
-        cli = [py, "-u", "-m", "aksharallm.asr", *argv]
+        module = "aksharallm.dictate" if spec.get("kind") in self.DICTATE_KINDS else "aksharallm.asr"
+        cli = [py, "-u", "-m", module, *argv]
         rc = self.dir / f"{job}.rc"
         # A wrapper shell records the CLI's exit code, which is the whole success signal.
         script = " ".join(_shquote(a) for a in cli) + f"; echo $? > {_shquote(str(rc))}"
@@ -500,7 +702,7 @@ class AsrJobs:
         cur = {"job": job, "kind": argv[0], "label": label, "state": "running", "pid": proc.pid,
                "started": time.time(), "cmdline": cmdline,
                # What to type to do the same thing from a terminal — shown in the panel.
-               "command": "python -m aksharallm.asr " + " ".join(_shquote(a) for a in argv)}
+               "command": f"python -m {module} " + " ".join(_shquote(a) for a in argv)}
         (self.dir / "current.json").write_text(json.dumps(cur))
         return {"ok": True, **cur}
 

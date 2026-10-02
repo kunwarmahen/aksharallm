@@ -507,6 +507,16 @@ bug in our own model**: it wrote text on silence until it was trained on clips w
 to say. You know it worked when `asr silence` prints `0 characters`, and when `asr eval`
 shows the worst speaker beside the median rather than one average.
 
+On top of the ear sits the part that makes it **dictation**: a punctuation **tagger** (it
+labels words and cannot write one, so cleanup never puts words in your mouth), a memory of
+your corrections, and a keyboard shortcut that types the finished text into whatever app you
+are in. In order: train the tagger (about an hour on the card), run the day-two suite, then
+start the daemon and install the shortcut. You know it worked when `asr daytwo` prints `0
+words invented` and a rising curve on check 5, and when pressing the shortcut, talking and
+pressing it again types a punctuated sentence where your cursor is. (Typing into other apps needs
+`sudo apt install xdotool xclip` once, and the daemon started after each reboot —
+[chapter 23 § Using it, step by step](23-speech-recognition.md).)
+
 ```bash
 scripts/audio.sh codec-lj                          # train the speech codec
 python -m aksharallm.vision caption vision-shapes  # caption held-out images and score them
@@ -517,14 +527,19 @@ python -m aksharallm.asr silence asr-synth         # day-two check 1: must print
 python -m aksharallm.asr lm fetch                  # the text a word LM is counted from (1.5 GB)
 python -m aksharallm.asr lm build                  # a word LM for spelling
 python -m aksharallm.asr tune asr-libri100         # choose the beam's weights on dev-clean only
+scripts/experiment.sh punct                        # the punctuation tagger (~1 h on the card)
+python -m aksharallm.asr daytwo asr-libri100       # every day-two check in one pass
+python -m aksharallm.dictate daemon --bg           # load the models once, then...
+python -m aksharallm.dictate install-shortcut      # ...<Super><Alt>d dictates into any app
 python -m aksharallm.diffusion tiny-diffusion-smoke infill \
     --prefix "Once upon a time" --suffix "and they all went home."
 ```
 
 📖 [chapter 21 — audio](21-audio.md) · [chapter 22 — vision](22-vision.md) ·
 [chapter 23 — speech recognition](23-speech-recognition.md) ·
-[chapter 20 — diffusion](20-diffusion.md) · in the portal: the **Dictation** tab, whose
-*Run it from here* panel runs every `asr` command above with the same CLI
+[chapter 20 — diffusion](20-diffusion.md) · in the portal: the **Dictation** tab — dictate,
+correct and see what it learned at the top, the desktop shortcut below that, and a *Run it
+from here* panel that runs every `asr` command above with the same CLI
 
 ---
 

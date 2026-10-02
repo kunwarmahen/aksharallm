@@ -53,6 +53,12 @@ class ModelConfig:
     #: config, not the data config, because a checkpoint has to be able to say what its own
     #: mask id was — decoding it as an ordinary token would print a random word.
     mask_token_id: int | None = None
+    #: A **tagger** (docs/23 § cleanup): bidirectional, and instead of predicting tokens it
+    #: labels each one with one of `tag_classes` classes. The classes are extra rows at the
+    #: END of the vocabulary — `vocab_size = tokenizer.vocab_size + tag_classes` — so the tied
+    #: embedding matrix doubles as the classifier and nothing about the architecture changes.
+    #: The punctuation tagger uses 12 (`dictate/punct.py`). 0 = not a tagger.
+    tag_classes: int = 0
 
     # ---- long context (see docs/19) ----------------------------------------------------
     #: How to stretch RoPE past the window the weights were trained on. `type: none` is the
@@ -118,10 +124,20 @@ class ModelConfig:
             if self.attn_window is not None:
                 raise ValueError("attn_window is a causal idea; it does not apply with "
                                  "causal: false (see docs/20)")
-            if self.mask_token_id is None:
+            if self.mask_token_id is None and not self.tag_classes:
                 raise ValueError("causal: false with no mask_token_id — a bidirectional "
                                  "model has no objective to train on. Set "
-                                 "mask_token_id: <vocab_size - 1> for masked diffusion.")
+                                 "mask_token_id: <vocab_size - 1> for masked diffusion, or "
+                                 "tag_classes for a tagger.")
+        if self.tag_classes:
+            if self.causal:
+                raise ValueError("tag_classes needs causal: false — a tagger labels a word "
+                                 "by what comes after it as much as before it")
+            if self.mask_token_id is not None:
+                raise ValueError("a model is a tagger or a diffusion model, not both")
+            if not 0 < self.tag_classes < self.vocab_size:
+                raise ValueError(f"tag_classes {self.tag_classes} does not fit in "
+                                 f"vocab_size {self.vocab_size}")
         if self.mask_token_id is not None and not 0 <= self.mask_token_id < self.vocab_size:
             raise ValueError(f"mask_token_id {self.mask_token_id} is outside the vocabulary "
                              f"(0..{self.vocab_size - 1})")
@@ -155,6 +171,17 @@ class ModelConfig:
         against a diffusion checkpoint produces fluent-looking nonsense rather than an error.
         """
         return not self.causal and self.mask_token_id is not None
+
+    @property
+    def is_tagger(self) -> bool:
+        """A per-token classifier (the punctuation tagger), not a generator. Like
+        `is_diffusion`, this makes a checkpoint self-describing, so a sampler refuses it."""
+        return bool(self.tag_classes)
+
+    @property
+    def tag_base(self) -> int:
+        """The id of the first class row: the tokenizer's ids come first, the classes last."""
+        return self.vocab_size - self.tag_classes
 
     def moe_layer(self, i: int) -> bool:
         """Whether layer `i` is a mixture-of-experts block."""

@@ -80,6 +80,9 @@ LAUNCHERS: dict[str, dict] = {
     # The speech recogniser (Phase 7, docs/23): same launcher, an `asr:` config.
     "asr-synth": {"script": "scripts/audio.sh", "args": ["asr-synth"]},
     "asr-libri100": {"script": "scripts/audio.sh", "args": ["asr-libri100"]},
+    # The dictation punctuation tagger: the pretraining loop with a third objective, at
+    # Phase-1 scale, so the experiment launcher. docs/23 § cleanup.
+    "punct": {"script": "scripts/experiment.sh", "args": ["punct"]},
 }
 
 
