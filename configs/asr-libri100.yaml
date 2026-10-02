@@ -1,0 +1,62 @@
+# The first real recogniser: LibriSpeech train-clean-100 (100 h, 251 speakers), validated on
+# dev-clean, reported on test-clean. Phase 7 route A — the ear is ours (PLAN.md § Phase 7).
+#
+# Get the data first (~7 GB download, ~12 GB packed; minutes to pack):
+#     .venv/bin/python -m aksharallm.asr fetch train-clean-100
+#     .venv/bin/python -m aksharallm.asr fetch dev-clean
+#     .venv/bin/python -m aksharallm.asr fetch test-clean
+#     .venv/bin/python -m aksharallm.asr pack  train-clean-100
+#     .venv/bin/python -m aksharallm.asr pack  dev-clean
+#     .venv/bin/python -m aksharallm.asr pack  test-clean
+# Then:
+#     scripts/audio.sh asr-libri100            # stop/resume like every other run
+#     .venv/bin/python -m aksharallm.asr eval asr-libri100 --corpus data/asr/test-clean
+#
+# Context for the number it will produce: a small Conformer-CTC on 100 h lands around 6-10%
+# WER on test-clean with greedy decoding and no language model. See docs/23.
+name: asr-libri100
+
+asr:
+  d_model: 256
+  n_layers: 12
+  n_heads: 4
+  ff_mult: 4
+  conv_kernel: 31
+  subsample_channels: 256
+  dropout: 0.1
+  normalise: global        # see asr/model.py `normalise` for why not per-utterance
+
+data:
+  train: [data/asr/train-clean-100]
+  val: data/asr/dev-clean
+  min_seconds: 0.5
+  max_seconds: 17.0        # keeps all but a handful of train-clean-100's utterances
+  max_batch_seconds: 400.0 # padded audio per step; memory follows this, not utterances
+  eval_utts: 400
+  no_speech_ratio: 0.05
+
+augment:
+  enabled: true
+  gain_db: [-18.0, 6.0]
+  freq_masks: 2
+  freq_width: 27
+  time_masks: 5
+  time_ratio: 0.05
+
+optim:
+  lr: 1.0e-3
+  min_lr_ratio: 0.02
+  warmup_steps: 5000       # Conformers diverge without a long warmup
+  weight_decay: 1.0e-3
+  beta1: 0.9
+  beta2: 0.98
+  grad_clip: 5.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/asr-libri100
+  max_steps: 60000         # ~50 passes over 100 h at ~400 s per step
+  eval_every: 1000
+  ckpt_every: 1000
+  log_every: 50
+  ctc_impl: torch          # identical to ours (tested); ours costs 3.2x per step on the card

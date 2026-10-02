@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Launch an audio run: the codec, or the audio language model over its tokens.
+# Launch an audio run: the codec, the audio language model over its tokens, or the speech
+# recogniser (docs/23).
 #
 # It publishes exactly the contract phase2.sh and experiment.sh publish -- launch.pid /
 # launch.meta while pre-flighting, train.pid / run.meta / sessions.log once training, one log
@@ -9,6 +10,8 @@
 #   scripts/audio.sh codec-synth      # the codec on synthetic babble (minutes, no download)
 #   scripts/audio.sh codec-lj         # the codec on LJSpeech (docs/21)
 #   scripts/audio.sh audiolm-synth    # the audio LM over a trained codec's tokens
+#   scripts/audio.sh asr-synth        # the Conformer-CTC recogniser on synthetic speech
+#   scripts/audio.sh asr-libri100     # ...on LibriSpeech train-clean-100 (docs/23)
 #
 # Env knobs (same names and meanings as phase2.sh):
 #   STOP_AFTER=500      train 500 steps this launch, then save and exit
@@ -48,8 +51,11 @@ if grep -qE '^codec:' "$CFG"; then
 elif grep -qE '^audiolm:' "$CFG"; then
     TRAINER=aksharallm.audio.train_lm
     KIND=audiolm
+elif grep -qE '^asr:' "$CFG"; then
+    TRAINER=aksharallm.asr.train
+    KIND=asr
 else
-    echo "$CFG has neither a 'codec:' nor an 'audiolm:' section -- not an audio run." >&2
+    echo "$CFG has no 'codec:', 'audiolm:' or 'asr:' section -- not an audio run." >&2
     echo "For a language model over text, use scripts/phase2.sh or scripts/experiment.sh." >&2
     exit 2
 fi
@@ -166,6 +172,10 @@ if [ -n "$CORPUS" ] && [ ! -s "$CORPUS/audio.bin" ]; then
         exit 1
     fi
 fi
+if [ "$KIND" = asr ]; then
+    # A recogniser reads data.train (a list) and data.val, not data.corpus.
+    $PY scripts/asr_data_check.py "$CFG" || exit 1
+fi
 if [ -n "$CORPUS" ]; then
     sz=$(stat -c%s "$CORPUS/audio.bin")
     echo "    $CORPUS/audio.bin: $((sz / 1000000)) MB = $((sz / 2 / 16000 / 60)) minutes at 16 kHz"
@@ -181,9 +191,11 @@ else
     [ "$SKIP_SMOKE" = "1" ] && echo "    SKIP_SMOKE=1 ignored: nothing to resume, so this is a first launch."
     echo "    check: the loss falls, and 'book' is NOT stuck near 1 -- codebook collapse is"
     echo "           invisible in the loss curve and fatal to everything downstream."
+    SMOKE_EXTRA=(-o train.sample_every=0)
+    [ "$KIND" = asr ] && SMOKE_EXTRA=()   # a recogniser writes no audio samples
     $PY -m $TRAINER "$CFG" \
         -o train.max_steps=30 -o train.out_dir=/tmp/aksharallm_audio_smoke \
-        -o train.resume=null -o train.eval_every=0 -o train.sample_every=0 \
+        -o train.resume=null -o train.eval_every=0 "${SMOKE_EXTRA[@]}" \
         -o train.ckpt_every=0 -o train.log_every=10
 fi
 
@@ -230,4 +242,6 @@ echo "    listen:  $RUN_DIR/samples/              (original.wav against stepNNNN
 echo "    stop:    scripts/stop.sh $(basename "$RUN_DIR")"
 if [ "$KIND" = codec ]; then
     echo "    measure: $PY -m aksharallm.audio report $RUN_DIR/ckpt_best.pt"
+elif [ "$KIND" = asr ]; then
+    echo "    measure: $PY -m aksharallm.asr eval $(basename "$RUN_DIR") --corpus data/asr/test-clean"
 fi

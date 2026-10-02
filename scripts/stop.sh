@@ -202,7 +202,7 @@ fi
 # run was declared "not an aksharallm trainer", could not be stopped, AND had its pid file
 # deleted as stale, so nothing could reach it again. Keep this in step with `TRAINERS` in
 # aksharallm/portal/runs.py.
-TRAINERS='aksharallm\.(train\.(pretrain|sft|dpo|grpo)|audio\.train_(codec|lm)|vision\.train)'
+TRAINERS='aksharallm\.(train\.(pretrain|sft|dpo|grpo)|audio\.train_(codec|lm)|vision\.train|asr\.train)'
 ARGS=$(ps -p "$PID" -o args= 2>/dev/null || true)
 if ! printf '%s' "$ARGS" | grep -qE "$TRAINERS"; then
     echo "pid $PID is alive but is not an aksharallm trainer -- refusing to touch it." >&2

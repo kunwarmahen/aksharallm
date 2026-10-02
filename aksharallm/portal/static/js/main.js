@@ -20,6 +20,7 @@ import './longctx.js';  /* likewise */
 import './diffusion.js'; /* likewise */
 import './audio.js';     /* likewise */
 import './vision.js';    /* likewise */
+import './dictate.js';   /* likewise */
 
 function wire() {
   wireNav();

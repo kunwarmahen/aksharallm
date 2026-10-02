@@ -1,0 +1,103 @@
+<!-- The Dictation tab (Phase 7). It leads with the microphone because it is the only tab
+     whose input is YOU — and a recogniser's test set is the most forgiving speech it will
+     ever hear. The measurements come after, and never as a single average. -->
+<section class="view" id="view-dictate" hidden>
+  <div class="page">
+
+    <div class="panel">
+      <h2>Dictation — speech in, text out, and still right on day two</h2>
+      <p class="panel-note">
+        A from-scratch speech recogniser: it turns 10 ms slices of sound into a picture
+        (log-mel), a <strong>Conformer</strong> reads that picture, and every 40 ms it
+        guesses one letter — or <em>blank</em>, meaning "nothing new here".
+        <a href="#docs?doc=23-speech-recognition.md">Read the chapter</a>.
+      </p>
+      <div class="au-flow" aria-hidden="true">
+        <span class="au-step">microphone<small>48,000 samples/s</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">log-mel<small>80 bands, 100/s</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">Conformer<small>attention + convolution</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step au-step-key">a letter or blank<small>25 times a second</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">merge repeats,<br>drop blanks</span>
+      </div>
+      <div id="dc-empty" class="panel-note warn" hidden>
+        No recogniser yet. The smoke run needs no download and takes a few minutes:
+        <pre class="au-cmd">.venv/bin/python -m aksharallm.audio corpus --out data/audio/synth-asr --clips 400
+scripts/audio.sh asr-synth</pre>
+        It only knows five vowel names. For one that knows English, train on LibriSpeech:
+        <pre class="au-cmd">.venv/bin/python -m aksharallm.asr fetch train-clean-100 &amp;&amp; .venv/bin/python -m aksharallm.asr pack train-clean-100
+scripts/audio.sh asr-libri100</pre>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Say something</h3>
+      <div class="row">
+        <label class="field">Recogniser
+          <select id="dc-ckpt"></select>
+        </label>
+        <button id="dc-rec" class="primary" type="button">● Hold to talk</button>
+        <label class="field">…or a file
+          <input id="dc-file" type="file" accept="audio/*">
+        </label>
+      </div>
+      <p id="dc-status" class="panel-note"></p>
+      <div id="dc-out" class="dc-out" hidden>
+        <p id="dc-text" class="dc-text"></p>
+        <p id="dc-meta" class="panel-note dim"></p>
+      </div>
+      <p class="panel-note dim">
+        The microphone needs this page on <code>localhost</code> or https — a browser will not
+        open it for a plain-http address on your network. A file works anywhere. Audio is sent
+        to this portal and nowhere else; nothing is kept.
+      </p>
+    </div>
+
+    <div class="panel">
+      <h3>The day-two checks</h3>
+      <p class="panel-note">
+        A weekend clone works on day one. These are the five ways it stops working once
+        someone actually uses it — each one a measurement here, not a promise.
+      </p>
+      <div class="scroll-x"><table class="grid" id="dc-checks">
+        <thead><tr><th>#</th><th>what goes wrong</th><th>how it is measured</th><th>now</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>it writes words nobody said ("thank you for watching")</td>
+              <td>characters written on five clips with no speech — must be <b>0</b></td>
+              <td id="dc-check-1"><button id="dc-silence" type="button">Run it</button></td></tr>
+          <tr><td>2</td><td>accents</td><td>WER per speaker, worst beside the median</td>
+              <td id="dc-check-2" class="dim">see the table below</td></tr>
+          <tr><td>3</td><td>switching language mid-sentence</td><td>WER on a mixed-language set</td>
+              <td class="dim">not built yet</td></tr>
+          <tr><td>4</td><td>names (Shaun or Sean?)</td><td>name recall with and without a personal dictionary</td>
+              <td class="dim">not built yet</td></tr>
+          <tr><td>5</td><td>never learns from a correction</td><td>right on the 4th try after 3 corrections?</td>
+              <td class="dim">not built yet</td></tr>
+        </tbody>
+      </table></div>
+      <div id="dc-silence-out" class="dc-silence" hidden></div>
+    </div>
+
+    <div class="panel">
+      <h3>Every evaluation so far</h3>
+      <p class="panel-note">
+        Word error rate: wrong, missing and extra words, over the words actually said. Lower is
+        better; 5% is about one word in a sentence of twenty. The <b>worst speaker</b> sits
+        beside the median on purpose — an average is where an accent problem hides.
+        Written by <code>python -m aksharallm.asr eval</code>.
+      </p>
+      <div class="scroll-x"><table class="grid" id="dc-results"></table></div>
+    </div>
+
+    <div class="panel">
+      <h3>Training runs</h3>
+      <div class="scroll-x"><table class="grid" id="dc-runs"></table></div>
+      <p class="panel-note dim">Start, stop and the loss curve live on the Dashboard, like every
+        other run.</p>
+    </div>
+
+  </div>
+</section>

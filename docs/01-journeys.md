@@ -488,6 +488,7 @@ The same transformer, unchanged, pointed at a different kind of data.
 flowchart TD
     T["the same transformer"] --> A["🔊 audio<br/>a codec turns sound into integers"]
     T --> V["🖼️ vision<br/>an image is already a grid of numbers"]
+    A --> R["🎙️ dictation<br/>speech in, text out<br/>(its own encoder, CTC)"]
     T --> D["🎲 diffusion<br/>fill in blanks instead of<br/>predicting the next token"]
     classDef s fill:#2d6cdf,stroke:#1a4a9e,color:#fff
     class T s
@@ -498,15 +499,28 @@ as *one model in two orders*. Vision needed no codec at all — patches replace 
 trains 0.82M new parameters against 13.77M frozen ones. Diffusion needed no second trainer:
 the existing pretraining loop grew one seam for the objective.
 
+**Dictation** is the branch that is *not* the same transformer: listening well wants an
+encoder that reads the spectrogram directly, so it is a Conformer trained with CTC, reusing
+the audio front end. It is measured against a list of what a dictation app gets wrong once
+someone actually uses it — words on silence, accents, names — and **check 1 already found a
+bug in our own model**: it wrote text on silence until it was trained on clips with nothing
+to say. You know it worked when `asr silence` prints `0 characters`, and when `asr eval`
+shows the worst speaker beside the median rather than one average.
+
 ```bash
 scripts/audio.sh codec-lj                          # train the speech codec
 python -m aksharallm.vision caption vision-shapes  # caption held-out images and score them
+scripts/audio.sh asr-synth                         # a recogniser, no download, minutes
+python -m aksharallm.asr fetch train-clean-100     # then pack it, and scripts/audio.sh asr-libri100
+python -m aksharallm.asr eval asr-synth --corpus data/audio/synth-asr --split val --val-clips 40
+python -m aksharallm.asr silence asr-synth         # day-two check 1: must print 0 characters
 python -m aksharallm.diffusion tiny-diffusion-smoke infill \
     --prefix "Once upon a time" --suffix "and they all went home."
 ```
 
 📖 [chapter 21 — audio](21-audio.md) · [chapter 22 — vision](22-vision.md) ·
-[chapter 20 — diffusion](20-diffusion.md)
+[chapter 23 — speech recognition](23-speech-recognition.md) ·
+[chapter 20 — diffusion](20-diffusion.md) · in the portal: the **Dictation** tab
 
 ---
 

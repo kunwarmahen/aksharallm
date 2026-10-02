@@ -51,6 +51,7 @@ TRAINERS: tuple[str, ...] = (
     "aksharallm.audio.train_codec",
     "aksharallm.audio.train_lm",
     "aksharallm.vision.train",
+    "aksharallm.asr.train",
 )
 
 #: Every shell script that pre-flights a run and publishes `launch.pid` / `launch.meta`.
@@ -76,6 +77,9 @@ LAUNCHERS: dict[str, dict] = {
     "codec-synth": {"script": "scripts/audio.sh", "args": ["codec-synth"]},
     "codec-lj": {"script": "scripts/audio.sh", "args": ["codec-lj"]},
     "audiolm-synth": {"script": "scripts/audio.sh", "args": ["audiolm-synth"]},
+    # The speech recogniser (Phase 7, docs/23): same launcher, an `asr:` config.
+    "asr-synth": {"script": "scripts/audio.sh", "args": ["asr-synth"]},
+    "asr-libri100": {"script": "scripts/audio.sh", "args": ["asr-libri100"]},
 }
 
 
@@ -136,9 +140,9 @@ def _cmdline(pid: int) -> str:
 
 #: A top-level section that some trainer in this repo would recognise — the cheap, text-only
 #: test for "this is a run and not a settings file". `model:` is a language model, `codec:`
-#: and `audiolm:` are docs/21, `vision:` is docs/22. Deliberately not a YAML parse: `runs()`
-#: is called on every poll of every open page.
-_RUN_CONFIG_RE = re.compile(r"^(model|codec|audiolm|vision):", re.MULTILINE)
+#: and `audiolm:` are docs/21, `vision:` is docs/22, `asr:` is docs/23. Deliberately not a
+#: YAML parse: `runs()` is called on every poll of every open page.
+_RUN_CONFIG_RE = re.compile(r"^(model|codec|audiolm|vision|asr):", re.MULTILINE)
 
 
 def _is_run_config(path: Path) -> bool:

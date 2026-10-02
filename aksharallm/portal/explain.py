@@ -100,6 +100,9 @@ DOC_HINTS = (
     ("aksharallm/interp", "docs/18-interpretability.md"),
     ("aksharallm/longctx", "docs/19-long-context.md"),
     ("aksharallm/diffusion", "docs/20-diffusion.md"),
+    ("aksharallm/audio", "docs/21-audio.md"),
+    ("aksharallm/vision", "docs/22-vision.md"),
+    ("aksharallm/asr", "docs/23-speech-recognition.md"),
     ("aksharallm/portal/explain", "docs/08-scaling.md"),
     ("aksharallm/portal/evals", "docs/13-eval.md"),
     ("aksharallm/portal/quantize", "docs/11-quantization.md"),
@@ -110,6 +113,9 @@ DOC_HINTS = (
     ("aksharallm/portal/longctx", "docs/19-long-context.md"),
     ("aksharallm/portal/diffusion", "docs/20-diffusion.md"),
     ("aksharallm/portal/serving", "docs/17-serving.md"),
+    ("aksharallm/portal/audio", "docs/21-audio.md"),
+    ("aksharallm/portal/vision", "docs/22-vision.md"),
+    ("aksharallm/portal/dictate", "docs/23-speech-recognition.md"),
     ("aksharallm/portal", "docs/10-running-and-watching.md"),
     ("docs/lessons", "docs/16-learning-path.md"),
     ("scripts", "docs/10-running-and-watching.md"),
@@ -141,7 +147,10 @@ Layout:
   aksharallm/quant/      int8/int4/NF4 from scratch: RTN, GPTQ, AWQ, QAT, a Triton kernel
   aksharallm/lora/       LoRA and QLoRA adapters from scratch
   aksharallm/synth/      generating training data with a local teacher, and checking it
-  aksharallm/learn/      the learning path: nineteen lessons over this repo
+  aksharallm/learn/      the learning path: lessons over this repo that end in breaking it
+  aksharallm/audio/      sound: STFT/mel front end, an RVQ codec, an audio LM, TTS and ASR
+  aksharallm/vision/     images into the frozen language model, LLaVA-style
+  aksharallm/asr/        speech recognition: a Conformer encoder trained with CTC
   aksharallm/portal/     this local web portal (stdlib HTTP server, no dependencies)
   configs/*.yaml         one YAML per run; a run = that file plus `-o key=value` overrides
   scripts/*.sh           the launchers a human would type

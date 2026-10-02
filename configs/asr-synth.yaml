@@ -1,0 +1,52 @@
+# The recogniser smoke config: synthetic vowel babble, no download, minutes on a CPU.
+#
+# Build the corpus first (about 20 seconds):
+#     .venv/bin/python -m aksharallm.audio corpus --out data/audio/synth-asr --clips 400
+# Then:
+#     scripts/audio.sh asr-synth
+#
+# The transcripts are the vowel names the synthesiser chose ("aa ee oh"), so they are exact,
+# and a WER on this corpus is a real WER — of an easy task. It is the same shape as
+# asr-libri100.yaml with smaller numbers, so diffing the two shows what real speech costs.
+# See docs/23-speech-recognition.md.
+name: asr-synth
+
+asr:
+  d_model: 96
+  n_layers: 4
+  n_heads: 4
+  conv_kernel: 15
+  subsample_channels: 32
+  dropout: 0.1
+
+data:
+  train: [data/audio/synth-asr]
+  val_clips: 40            # held out by clip from the end of the corpus
+  min_seconds: 0.5
+  max_seconds: 16.0
+  max_batch_seconds: 64.0
+  eval_utts: 40
+
+augment:
+  enabled: true
+  freq_masks: 2
+  freq_width: 15
+  time_masks: 2
+  time_ratio: 0.05
+
+optim:
+  lr: 2.0e-3
+  warmup_steps: 100
+  weight_decay: 1.0e-3
+  beta1: 0.9
+  beta2: 0.98
+  grad_clip: 5.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/asr-synth
+  max_steps: 600
+  eval_every: 100
+  ckpt_every: 300
+  log_every: 20
+  ctc_impl: ours           # the hand-written CTC really trains here; on a CPU it costs little

@@ -117,6 +117,7 @@ grep is one line away from the prose. `tests/test_docs.py` fails if either point
 | 20 | [Diffusion](docs/20-diffusion.md) | The *other* way to build a language model: fill in blanks with attention running both ways, and generate by unmasking what you are surest about. Infilling, a compute dial, no KV cache — and the ELBO you must never compare with a cross-entropy |
 | 21 | [Audio](docs/21-audio.md) | The same transformer, on sound: an RVQ-VAE codec that turns speech into fifty integers a second, the delay pattern that keeps eight codebooks honest in one stream, and TTS/ASR as one model with the sequence written in two orders — plus the bitrate ladder you judge with your ears |
 | 22 | [Vision](docs/22-vision.md) | A picture into a model that has never seen one: patches instead of a codec, a two-layer projector that is the whole of LLaVA, and a corpus whose captions are known exactly so the answer can be *scored* rather than admired — plus the double shift that trained to a loss of 0.003 and captioned everything `'w green'` |
+| 23 | [Speech recognition](docs/23-speech-recognition.md) | Dictation that is still right on day two: a from-scratch Conformer trained with a from-scratch CTC (bit-identical to PyTorch's in float64), measured against a published list of what a dictation app gets wrong once used — and the first check found our own model writing words on silence until it was shown clips with nothing to say |
 
 ---
 
@@ -131,7 +132,9 @@ aksharallm/
 │   ├── tiny-moe.yaml     the MoE experiment: tiny.yaml + 8 experts, matched active params
 │   ├── codec-synth.yaml  the audio codec on synthetic babble — no download, ~4 minutes
 │   ├── codec-lj.yaml     the audio codec on LJSpeech: 24 h of one reader
-│   └── audiolm-synth.yaml  a language model over codec tokens
+│   ├── audiolm-synth.yaml  a language model over codec tokens
+│   ├── asr-synth.yaml    the speech recogniser on synthetic speech — no download, minutes
+│   └── asr-libri100.yaml   the recogniser on 100 h of LibriSpeech
 ├── aksharallm/
 │   ├── config.py         dataclass config loading + CLI overrides
 │   ├── tokenizer/        byte-level BPE training and the chat template
@@ -160,6 +163,12 @@ aksharallm/
 │   │   ├── delay.py          the shift that turns 8 codebooks into one stream
 │   │   ├── lm.py             the SAME Transformer, 8 embeddings in and 8 heads out
 │   │   └── speech.py         TTS and ASR: one model, one flag apart
+│   ├── asr/              speech recognition, for dictation — see docs/23
+│   │   ├── ctc.py            CTC loss (alpha-beta, from scratch) and greedy decoding
+│   │   ├── model.py          the Conformer: conv subsampling, attention + convolution
+│   │   ├── data.py           LibriSpeech fetch/pack, length buckets, every drop counted
+│   │   ├── noise.py          clips with nothing to say — the fix for words on silence
+│   │   └── measure.py        corpus WER per speaker, and the silence check
 │   ├── vision/           a second modality that needs no codec — see docs/22
 │   │   ├── image.py          a shapes corpus whose captions are known exactly
 │   │   ├── encoder.py        patches, a small ViT, and the LLaVA projector

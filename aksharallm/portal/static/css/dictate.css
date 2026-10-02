@@ -1,0 +1,31 @@
+/* The Dictation tab. Reuses `.au-flow` / `.au-step` / `.au-cmd` from audio.css: it is the
+ * audio phase's front end pointed the other way, and looking alike says so.
+ *
+ * `.dc-text` gets `overflow-wrap: anywhere` because a recogniser that has not learned to
+ * emit spaces yet writes one long "word", and an unbreakable word is the gotcha-#8 way to
+ * push a phone's page sideways. */
+
+.dc-out {
+  margin-top: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  min-width: 0;
+}
+.dc-text {
+  font-size: 1.25rem;
+  line-height: 1.5;
+  margin: 0 0 0.3rem;
+  overflow-wrap: anywhere;
+}
+#dc-rec { touch-action: none; user-select: none; }
+#dc-rec.dc-live { background: var(--critical); border-color: var(--critical); color: #fff; }
+.dc-silence {
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+  display: grid;
+  gap: 0.2rem;
+  overflow-wrap: anywhere;
+}
+#view-dictate .ok { color: var(--good); }
+#view-dictate .bad { color: var(--critical); }

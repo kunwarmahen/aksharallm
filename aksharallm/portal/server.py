@@ -55,6 +55,8 @@ from .pipeline import Pipeline
 from .finetune import FinetuneJobs
 from .quantize import QuantJobs
 from .audio import Audio, AudioError
+from .dictate import MAX_BODY as DICTATE_MAX_BODY
+from .dictate import Dictation, DictationError
 from .vision import Vision, VisionError
 from .diffusion import Diffusion
 from .interp import Interp
@@ -93,7 +95,7 @@ class Handler(BaseHTTPRequestHandler):
                  pipeline: Pipeline, quant: QuantJobs, finetune: FinetuneJobs,
                  evals: EvalJobs, synth: SynthJobs, learn: Learn, interp: Interp,
                  longctx: LongContext, diffusion: Diffusion, serving: ServeJobs,
-                 audio: Audio, vision: Vision,
+                 audio: Audio, vision: Vision, dictation: Dictation,
                  cost: CostConfig, quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
@@ -113,6 +115,7 @@ class Handler(BaseHTTPRequestHandler):
         self.serving = serving
         self.audio = audio
         self.vision = vision
+        self.dictation = dictation
         self.cost = cost
         self.quiet = quiet
         super().__init__(*args, **kw)
@@ -143,9 +146,9 @@ class Handler(BaseHTTPRequestHandler):
     def _error(self, code: int, msg: str):
         self._json({"ok": False, "error": msg}, code)
 
-    def _body(self) -> dict:
+    def _body(self, limit: int = MAX_BODY) -> dict:
         n = int(self.headers.get("Content-Length") or 0)
-        if n > MAX_BODY:
+        if n > limit:
             raise RunError("request body too large")
         if not n:
             return {}
@@ -198,7 +201,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(403, f"missing {GUARD_HEADER}: 1 header — "
                                     "the portal's own page sends it")
         try:
-            data = self._body()
+            # One route carries audio, and only that one gets the larger limit: a recorded
+            # sentence is megabytes where every other request here is a few hundred bytes.
+            data = self._body(DICTATE_MAX_BODY if parts == ["api", "dictate", "transcribe"]
+                              else MAX_BODY)
             if parts == ["api", "explain"]:
                 return self._explain(data)
             if parts == ["api", "infer", "generate"]:
@@ -412,6 +418,19 @@ class Handler(BaseHTTPRequestHandler):
                             str(data.get("split") or "val")))
                 except VisionError as e:
                     return self._json({"error": str(e)}, code=400)
+            # dictation: /api/dictate/<transcribe|silence>. Inline like vision — a few seconds
+            # of speech is one forward pass of a 20M encoder.
+            if len(parts) == 3 and parts[:2] == ["api", "dictate"]:
+                try:
+                    if parts[2] == "transcribe":
+                        return self._json(self.dictation.transcribe(
+                            str(data.get("checkpoint") or ""), str(data.get("pcm") or ""),
+                            int(data.get("sample_rate") or 0)))
+                    if parts[2] == "silence":
+                        return self._json(self.dictation.silence(
+                            str(data.get("checkpoint") or "")))
+                except DictationError as e:
+                    return self._json({"error": str(e)}, code=400)
             # the learning path: /api/learn/<check|reset>
             if len(parts) == 3 and parts[:2] == ["api", "learn"]:
                 if parts[2] == "check":
@@ -525,6 +544,9 @@ class Handler(BaseHTTPRequestHandler):
                 float((query.get("factor") or [4.0])[0])))
         if parts == ["longctx", "result"]:
             return self._json(self.longctx.result((query.get("name") or [""])[0]))
+        # dictation: which recognisers exist, every evaluation so far, and the runs.
+        if parts == ["dictate"]:
+            return self._json(self.dictation.overview())
         # vision: which towers and corpora exist.
         if parts == ["vision"]:
             return self._json(self.vision.overview())
@@ -958,13 +980,15 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
                     device_for=lambda: (lambda p: (p.device, p.reason))(playground.engine.plan()))
     audio = Audio(store.root,
                   device_for=lambda: (lambda p: (p.device, p.reason))(playground.engine.plan()))
+    dictation = Dictation(store.root,
+                          device_for=lambda: (lambda p: (p.device, p.reason))(playground.engine.plan()))
     serving = ServeJobs(store.root)
     handler = partial(Handler, store=store, scheduler=scheduler, sampler=sampler,
                       source=source, explain=explain, playground=playground,
                       pipeline=pipeline, quant=quant, finetune=finetune, evals=evals,
                       synth=synth, learn=learn, interp=interp, longctx=longctx,
                       diffusion=diffusion, serving=serving, audio=audio,
-                      vision=vision,
+                      vision=vision, dictation=dictation,
                       cost=cost,
                       quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True
