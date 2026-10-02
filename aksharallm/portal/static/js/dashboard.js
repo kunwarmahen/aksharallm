@@ -519,9 +519,13 @@ function renderConfig(s) {
   if (c.error) add('problem', c.error);
   add('architecture', c.arch);
   add('vocab', c.vocab_size == null ? null : fmt.int(c.vocab_size));
-  add('batch', c.batch && `${c.batch} = ${fmt.int(c.tokens_per_step)} tokens/step`);
-  add('budget', c.max_steps == null ? null
-    : `${fmt.int(c.max_steps)} steps = ${fmt.compact(c.max_steps * (c.tokens_per_step || 0))} tokens`);
+  /* tokens/step only when the run is counted in tokens: a recogniser's batch is seconds of
+   * audio, and "0 tokens" for it read as a broken config. */
+  add('batch', c.batch && (c.tokens_per_step
+    ? `${c.batch} = ${fmt.int(c.tokens_per_step)} tokens/step` : c.batch));
+  add('budget', c.max_steps == null ? null : (c.tokens_per_step
+    ? `${fmt.int(c.max_steps)} steps = ${fmt.compact(c.max_steps * c.tokens_per_step)} tokens`
+    : `${fmt.int(c.max_steps)} steps`));
   add('optimiser', c.lr == null ? null
     : `lr ${fmt.exp(c.lr)} ${c.schedule} · grad clip ${c.grad_clip}`);
   add('cadence', c.eval_every == null ? null
@@ -529,9 +533,7 @@ function renderConfig(s) {
   add('data', (c.sources || []).filter(Boolean).length ? code((c.sources || []).join('  ')) : null);
   /* Which launcher this run actually uses — there are two now, and naming the wrong one
    * sends someone to a script that does not know how to build their data. */
-  add('launch', s.can_start || s.pid || s.finished
-    ? code(s.run.startsWith('tiny') ? `scripts/experiment.sh ${s.run}`
-      : `scripts/phase2.sh   (run ${s.run})`) : null);
+  add('launch', (s.can_start || s.pid || s.finished) && s.launch_cmd ? code(s.launch_cmd) : null);
 
   const rows = (s.checkpoints || []).map((k) => [
     k.name, fmt.bytes(k.size), fmt.clock(k.mtime), fmt.ago(k.mtime)]);

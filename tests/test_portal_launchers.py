@@ -21,6 +21,8 @@ import subprocess
 import sys
 import time
 
+from pathlib import Path
+
 import pytest
 
 from aksharallm.portal import runs as runs_mod
@@ -208,3 +210,26 @@ def test_the_series_keys_are_what_the_trainers_write():
     from aksharallm.train.runlog import SERIES_KEYS
 
     assert "tok_per_sec" in SERIES_KEYS and "loss" in SERIES_KEYS
+
+
+def _run_configs():
+    from aksharallm.portal.runs import _is_run_config
+    root = Path(__file__).resolve().parent.parent
+    return sorted(p.stem for p in (root / "configs").glob("*.yaml") if _is_run_config(p))
+
+
+@pytest.mark.parametrize("run", _run_configs())
+def test_every_run_config_has_a_configuration_panel(run):
+    """The panel parsed every YAML with the language model's loader, so every codec, audio-LM,
+    vision and recogniser run showed "unknown config key 'asr' for Config" -- read by its owner
+    as a fault in the run that was training perfectly well beside it."""
+    root = Path(__file__).resolve().parent.parent
+    summary = RunStore(root)._config_summary(run)
+    assert "error" not in summary, summary.get("error")
+    assert summary["arch"] and summary["max_steps"]
+
+
+def test_the_launch_line_names_the_runs_own_launcher():
+    root = Path(__file__).resolve().parent.parent
+    st = RunStore(root).status("asr-synth", max_points=0)
+    assert st["launch_cmd"] == "scripts/audio.sh asr-synth"

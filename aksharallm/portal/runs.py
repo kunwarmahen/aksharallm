@@ -471,6 +471,10 @@ class RunStore:
             "size_bytes": self.dir_bytes(run),
             "pid": pid,
             "launcher": launcher,
+            # The command a Start button runs, from `LAUNCHERS` -- the browser used to guess it
+            # from the run's name and labelled every non-`tiny` run `scripts/phase2.sh`.
+            "launch_cmd": (" ".join([launcher_for(run)[0], *launcher_for(run)[1]])
+                           if run in LAUNCHERS else None),
             "stop": stop,
             "uptime_s": uptime,
             "step": step,
@@ -884,11 +888,22 @@ class RunStore:
 
     def _config_summary(self, run: str) -> dict:
         """The handful of config fields worth showing. Parsed with the project's own loader
-        so defaults and `d_ff`-style derived values are the ones the trainer would use."""
+        so defaults and `d_ff`-style derived values are the ones the trainer would use.
+
+        **The loader is the run's own, chosen by its top-level section** (`_RUN_CONFIG_RE`).
+        This used to call the language model's `load_config` for everything, so every codec,
+        audio-LM, vision and recogniser run showed "unknown config key 'asr' for Config" in
+        the Configuration panel -- an error about the panel, read as an error about the run.
+        """
         path = self.config_path(run)
         if not path.exists():
             return {}
+        text = self._text(path, limit=1_000_000) or ""
+        kind = next((k for k in ("asr", "codec", "audiolm", "vision")
+                     if re.search(rf"^{k}:", text, re.MULTILINE)), "model")
         try:
+            if kind != "model":
+                return self._other_config_summary(path, kind)
             from ..config import load_config
             cfg = load_config(str(path))
         except Exception as exc:  # a half-edited YAML must not blank the whole dashboard
@@ -909,6 +924,47 @@ class RunStore:
             "ckpt_every": t.ckpt_every,
             "sources": [s.get("bin") for s in (cfg.data.train_sources or [])] or
                        [cfg.data.train_bin],
+        }
+
+    def _other_config_summary(self, path: Path, kind: str) -> dict:
+        """The same panel for a run that is not a language model over text (docs/21-23).
+
+        No `tokens_per_step`: a recogniser's batch is seconds of audio and a codec's is
+        windows, and the dashboard prints "N tokens/step" only when the number means that.
+        """
+        if kind == "asr":
+            from ..asr.config import load_asr_config
+            cfg = load_asr_config(str(path))
+            arch = cfg.asr.describe()
+            batch = f"{cfg.data.max_batch_seconds:g} s of padded audio per step"
+            sources = list(cfg.data.train) + ([f"val: {cfg.data.val}"] if cfg.data.val else [])
+        elif kind == "codec":
+            from ..audio.config import load_codec_config
+            cfg = load_codec_config(str(path))
+            arch = cfg.codec.describe()
+            batch = f"{cfg.train.batch_size} x {cfg.data.window_seconds:g} s windows"
+            sources = [cfg.data.corpus]
+        elif kind == "audiolm":
+            from ..audio.train_lm import load_audiolm_config
+            cfg = load_audiolm_config(str(path))
+            a = cfg.audiolm
+            arch = f"{a.n_codebooks} codebooks x {a.codebook_size}, {a.max_frames} frames"
+            batch = f"{cfg.train.batch_size} x {cfg.data.window_frames} frames"
+            sources = [cfg.data.codes]
+        else:
+            from ..vision.train import load_vision_config
+            cfg = load_vision_config(str(path))
+            v = cfg.vision
+            arch = (f"ViT d={v.d_vision} L={v.n_layers} H={v.n_heads}, {v.image_size}px / "
+                    f"{v.patch}px patches -> {v.n_tokens} tokens")
+            batch = f"{cfg.train.batch_size} images"
+            sources = [cfg.data.corpus]
+        t, o = cfg.train, cfg.optim
+        return {
+            "path": str(path.relative_to(self.root)), "kind": kind, "arch": arch,
+            "batch": batch, "max_steps": t.max_steps, "lr": o.lr, "schedule": o.schedule,
+            "grad_clip": o.grad_clip, "eval_every": t.eval_every, "ckpt_every": t.ckpt_every,
+            "sources": sources,
         }
 
     def _config_max_steps(self, run: str) -> int | None:
