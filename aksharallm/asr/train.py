@@ -187,7 +187,10 @@ def load_recognizer(path: str | Path, device: str = "cpu") -> tuple[Recognizer, 
         # it would transcribe everything confidently wrong.
         raise ValueError(f"{path} was trained with alphabet {blob.get('alphabet')!r}, "
                          f"this code uses {vocab.ALPHABET!r}")
-    model = Recognizer(AsrModelConfig(**blob["asr"])).to(device)
+    shape = dict(blob["asr"])
+    # Checkpoints from before `block_norm` existed were all trained with the per-block norm.
+    shape.setdefault("block_norm", True)
+    model = Recognizer(AsrModelConfig(**shape)).to(device)
     model.load_state_dict(blob["model"])
     model.eval()
     return model, blob
@@ -256,7 +259,10 @@ def main(argv=None) -> int:
         if "sampler" in blob:
             mix.load_state(blob["sampler"])
         if "augment_rng" in blob:
-            gen.set_state(blob["augment_rng"])
+            # `.cpu()`: the blob was loaded with map_location=device, so on a GPU run this
+            # tensor comes back on the card, and a CPU generator refuses it. Every resume of
+            # the first LibriSpeech run died here; the CPU-only resume test could not see it.
+            gen.set_state(blob["augment_rng"].cpu())
         if "noise_rng" in blob:
             noise_rng.bit_generator.state = blob["noise_rng"]
         start_step = int(blob.get("step", -1)) + 1

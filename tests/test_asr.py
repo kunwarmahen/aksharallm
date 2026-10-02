@@ -334,3 +334,45 @@ def test_an_empty_no_speech_row_does_not_dominate_the_batch_loss():
             "target_lengths": torch.tensor([150, 0])}
     mixed, _ = compute_loss(lp, torch.tensor([T, T]), both, "torch")
     assert float(mixed) < 3 * float(alone)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a GPU")
+def test_a_gpu_run_resumes(tmp_path):
+    """Every resume of the first LibriSpeech run died on start: the checkpoint is loaded with
+    map_location='cuda', so the augment generator's state came back as a CUDA tensor and a CPU
+    generator refused it. The CPU resume test above cannot see that, so this one exists."""
+    from aksharallm.asr.train import main
+    (tmp_path / "c").mkdir()
+    d = _corpus(tmp_path / "c", ["aa ee"] * 30, [1.0] * 30)
+    cfg = tmp_path / "run.yaml"
+    out = tmp_path / "out"
+    cfg.write_text(f"""
+name: t
+asr: {json.dumps(TINY)}
+data: {{train: [{d}], val_clips: 4, eval_utts: 4, max_batch_seconds: 8.0}}
+optim: {{lr: 1.0e-3, warmup_steps: 2}}
+train: {{out_dir: {out}, max_steps: 4, eval_every: 0, ckpt_every: 0, log_every: 1}}
+""")
+    assert main([str(cfg), "--device", "cuda", "-o", "train.stop_after=2"]) == 0
+    assert main([str(cfg), "--device", "cuda"]) == 0
+    recs = [json.loads(x) for x in (out / "train_log.jsonl").read_text().splitlines()]
+    assert [r["start_step"] for r in recs if r.get("event") == "session_start"] == [0, 2]
+
+
+def test_the_default_layout_is_pre_norm_and_old_checkpoints_still_load(tmp_path):
+    """The paper's per-block LayerNorm pinned the residual stream at |x| ~ 16 while sub-layers
+    emitted time-constant vectors of norm 100-500: on LibriSpeech every utterance got the same
+    transcript for 11,737 steps. Pre-norm is the default; the old layout loads only for the
+    checkpoints trained with it."""
+    from aksharallm.asr.model import Recognizer as R
+    from aksharallm.asr.train import load_recognizer
+    m = R(AsrModelConfig(**TINY))
+    assert all(isinstance(b.norm, torch.nn.Identity) for b in m.blocks)
+    assert isinstance(m.in_norm, torch.nn.LayerNorm) and isinstance(m.out_norm, torch.nn.LayerNorm)
+    old_cfg = AsrModelConfig(**TINY, block_norm=True)
+    old = R(old_cfg)
+    shape = {k: v for k, v in vars(old_cfg).items() if k != "block_norm"}   # as saved before the fix
+    p = tmp_path / "old.pt"
+    torch.save({"model": old.state_dict(), "asr": shape, "alphabet": vocab.ALPHABET, "stage": "asr"}, p)
+    loaded, _ = load_recognizer(p)
+    assert loaded.cfg.block_norm and isinstance(loaded.blocks[0].norm, torch.nn.LayerNorm)

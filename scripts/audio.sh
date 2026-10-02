@@ -209,7 +209,10 @@ EXTRA=()
 [ -n "$STOP_AFTER" ] && EXTRA+=(-o "train.stop_after=$STOP_AFTER")
 [ -n "$STOP_IN" ] && EXTRA+=(-o "train.stop_after_s=$STOP_IN_S")
 
-nohup $PY -m $TRAINER "$CFG" "${EXTRA[@]}" > "$LOG" 2>&1 &
+# Unbuffered: redirected to a file, Python holds stdout in a 8 KB buffer, so the log -- and
+# `tail -f`, and the startup check below, which greps it for the first step -- stayed EMPTY
+# for minutes while the trainer was training. Found on the first LibriSpeech launch.
+PYTHONUNBUFFERED=1 nohup $PY -m $TRAINER "$CFG" "${EXTRA[@]}" > "$LOG" 2>&1 &
 PID=$!
 ln -sfn "$LOG" "$LOG_LINK"
 
@@ -223,13 +226,28 @@ cmd     $PY -m $TRAINER $CFG ${EXTRA[*]-}
 META
 echo "$(date '+%Y-%m-%d %H:%M:%S')  pid $PID  $LOG" >> "$RUN_DIR/sessions.log"
 
-sleep 5
-if ! kill -0 "$PID" 2>/dev/null; then
-    echo "    ERROR: the trainer died within 5s. Last lines of $LOG:" >&2
-    tail -20 "$LOG" >&2
-    rm -f "$PID_FILE"
-    exit 1
-fi
+# Watch the trainer until it has logged a training step, not for a fixed few seconds. A
+# `sleep 5` here let a recogniser that crashed on RESUME -- ~30 s in, after loading 28k
+# utterances -- print the success block below twice in one night, leaving a pid file naming a
+# dead process and a dashboard still showing the previous run (gotcha 22, again: stage.sh had
+# already been fixed for exactly this). CRASH_WINDOW caps the wait.
+CRASH_WINDOW=${CRASH_WINDOW:-180}
+started=0
+for _ in $(seq "$CRASH_WINDOW"); do
+    sleep 1
+    if ! kill -0 "$PID" 2>/dev/null; then
+        echo "    ERROR: the trainer died during startup. Last lines of $LOG:" >&2
+        tail -20 "$LOG" >&2
+        rm -f "$PID_FILE"
+        exit 1
+    fi
+    if grep -qE '^step +[0-9]+ ' "$LOG" 2>/dev/null; then
+        started=1
+        break
+    fi
+done
+[ "$started" = 1 ] && echo "    first step logged -- the trainer is past startup" \
+    || echo "    still starting after ${CRASH_WINDOW}s (no step logged yet) -- watch the log"
 
 echo "    pid $PID  ->  $PID_FILE  (config: $CFG)"
 [ -n "$STOP_AFTER" ] && echo "    will stop itself after $STOP_AFTER steps"

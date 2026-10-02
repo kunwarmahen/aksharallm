@@ -85,6 +85,14 @@ class AsrModelConfig:
     #: `normalise`). Gain augmentation (`augment.gain_db`) is what stops `global` from
     #: learning one microphone's level instead.
     normalise: str = "global"
+    #: The paper's layout ends every block with a LayerNorm. **Measured to kill the input on
+    #: LibriSpeech:** that norm pins the residual stream at |x| ~ 16, sub-layers learned to emit
+    #: time-constant vectors of norm 100-500, and by block 4 two different utterances had
+    #: identical hidden states — 11,737 steps at ~100% WER, the same transcript for every
+    #: input. False (the default) is pre-norm: no per-block norm, one after subsampling and
+    #: one before the head, the layout `model/transformer.py` uses. True exists only so the
+    #: checkpoints trained before the fix still load (`load_recognizer` sets it for them).
+    block_norm: bool = False
 
     @property
     def mel(self) -> MelConfig:
@@ -269,7 +277,7 @@ class ConformerBlock(nn.Module):
         self.attn = SelfAttention(d, cfg.n_heads, cfg.dropout)
         self.conv = ConvModule(d, cfg.conv_kernel, cfg.dropout)
         self.ff2 = FeedForward(d, cfg.ff_mult, cfg.dropout)
-        self.norm = nn.LayerNorm(d)
+        self.norm = nn.LayerNorm(d) if cfg.block_norm else nn.Identity()
 
     def forward(self, x, frame_mask, cos, sin):
         # Macaron: the feed-forward is split in two halves around attention and convolution,
@@ -294,6 +302,11 @@ class Recognizer(nn.Module):
         self.cfg = cfg
         self.subsample = Subsample(cfg.n_mels, cfg.subsample_channels, cfg.d_model)
         self.blocks = nn.ModuleList(ConformerBlock(cfg) for _ in range(cfg.n_layers))
+        # Pre-norm needs the stream normalised once at each end: after subsampling (whose
+        # output measured |x| = 584, which would otherwise swamp every block's contribution)
+        # and before the head. The old layout normalised inside every block instead.
+        self.in_norm = nn.Identity() if cfg.block_norm else nn.LayerNorm(cfg.d_model)
+        self.out_norm = nn.Identity() if cfg.block_norm else nn.LayerNorm(cfg.d_model)
         self.head = nn.Linear(cfg.d_model, cfg.vocab_size)
         cos, sin = build_cache(cfg.d_model // cfg.n_heads, cfg.max_frames, cfg.rope_theta)
         self.register_buffer("rope_cos", cos, persistent=False)
@@ -362,7 +375,7 @@ class Recognizer(nn.Module):
 
     def encode(self, feats: torch.Tensor, lengths: torch.Tensor):
         """Normalised log-mel -> `(log_probs (B, T', V) float32, out_lengths (B,))`."""
-        x = self.subsample(feats)
+        x = self.in_norm(self.subsample(feats))
         T = x.shape[1]
         if T > self.rope_cos.shape[0]:
             raise ValueError(
@@ -379,7 +392,7 @@ class Recognizer(nn.Module):
         x = x * mask[..., None]
         for blk in self.blocks:
             x = blk(x, mask, self.rope_cos, self.rope_sin)
-        logits = self.head(x).float()
+        logits = self.head(self.out_norm(x)).float()
         return logits.log_softmax(-1), out_len
 
     def forward(self, wave: torch.Tensor, n_samples: torch.Tensor, augment: dict | None = None,

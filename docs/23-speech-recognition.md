@@ -129,6 +129,27 @@ flowchart TB
 Before the blocks, two stride-2 convolutions cut 100 frames a second to **25** — enough for
 English's ~15 letters a second with room to spare, and 16× cheaper attention than 100 would be.
 
+**Pre-norm, not the paper's layout — and this one was learned the hard way.** The paper ends
+every block with a LayerNorm. On LibriSpeech that pinned the residual stream at |x| ≈ 16
+while the sub-layers learned to emit vectors of norm 100–500 that did not change over time;
+add one to the other and normalise, and the constant wins. By **block 4** two different
+utterances had identical hidden states, so for 11,737 steps (two hours) the model gave every
+input the same transcript — `"e e a a i"` for both "the twenties" and "to pickle eggs" — at
+~100% WER, with a loss that had stalled at the letter-frequency guess (~2.5 per letter). The
+loss curve looked like a slow run, not a broken one. Pre-norm — no per-block norm, one after
+subsampling (whose output measured |x| = 584) and one before the head, the layout
+`model/transformer.py` uses — fixed it. Same seed, same 2,000 steps:
+
+| | val loss at 500 / 1,000 / 1,500 | CER | transcripts | silence |
+|---|---|---|---|---|
+| per-block LayerNorm (paper) | 2.94 / 2.86 / 2.72 | 100 → 83 → 73% | identical for every input | up to 100 chars |
+| **pre-norm** | 2.51 / 2.05 / **1.69** | 64 → 53 → **43%** | follow the audio | **0** |
+
+How it was found, because it is the reusable part: two different inputs, the same output, so
+measure the *difference between two utterances' hidden states* layer by layer — 0.52 at block
+1, 0.09 at block 2, 0.000 at block 4 — then each sub-layer's norm and its variation over
+time. `asr.block_norm: true` still exists, only so checkpoints trained before the fix load.
+
 Reused, not rewritten: RoPE is `model/rope.py`'s (the language model's own positions — the
 Conformer paper used Transformer-XL relative positions, and RoPE is relative too). The
 attention is **bidirectional**: the encoder hears the whole utterance before committing.
@@ -272,7 +293,11 @@ that, the day-two checks and every `asr eval` result with the worst speaker besi
   frame, it is a property of the sentence, which is a language model's job.
 * **Streaming** (chunked attention), **real-noise testing** (MUSAN), and an **accented-English
   test set** — LibriSpeech is read audiobooks, the most forgiving speech there is.
-* **The LibriSpeech run itself.** Everything above it is built and tested. A full-size step
+* **The LibriSpeech result.** The first real run is training (started 2026-10-02, after the
+  pre-norm fix). Two launcher bugs surfaced on the way and are fixed: every *resume* crashed
+  on start (the augment generator's saved state came back on the GPU — a CPU-only resume test
+  could not see it; there is a GPU one now), and the launcher declared success after 5 s while
+  the crash came ~30 s in, behind an empty log (stdout was buffered). A full-size step
   (400 s of audio, 25 × 16 s) measured **110 ms = 3,622 audio-seconds per second at a 4.6 GB
   peak**, so 60,000 steps is ~**1.8 h of compute** — plus data loading and evals, which that
   timing excludes. It does not fit beside a resident 18 GB Ollama model; unload it first.
