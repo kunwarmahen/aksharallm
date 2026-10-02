@@ -394,16 +394,19 @@ what an unbroken run would have.
 **How it is judged: per-class F1, never accuracy.** About 85% of words take no punctuation,
 so a tagger that never punctuates scores 85% accuracy. `dictate punct-eval` scores `,` `.` `?`
 and capitals on held-out passages, beside a **rules-only baseline** (capital first, full stop
-last). Measured on a 2,000-step verification run (6 minutes on the card; the real run is
-`scripts/experiment.sh punct`, 20,000 steps, about an hour), 300 held-out passages, 32,538
-words:
+last). Measured on the full run (`scripts/experiment.sh punct`: 20,000 steps, 61 minutes on
+the 3090), 300 held-out passages, 32,538 words, beside the 2,000-step verification run that
+came first:
 
-| | tagger P / R / F1 | rules only F1 |
-|---|---|---|
-| comma | 68% / 52% / **59%** | 0% |
-| full stop | 75% / 70% / **72%** | 7% |
-| question mark | 71% / 57% / **64%** | 0% |
-| capital | 83% / 75% / **79%** | 16% |
+| | tagger P / R / F1 (20k steps) | F1 at 2k steps | rules only F1 |
+|---|---|---|---|
+| comma | 73% / 65% / **69%** | 59% | 0% |
+| full stop | 85% / 82% / **83%** | 72% | 7% |
+| question mark | 87% / 73% / **80%** | 64% | 0% |
+| capital | 89% / 87% / **88%** | 79% | 16% |
+
+The comma is the hard one, and it should be: whether a clause takes a comma is often a matter
+of style, and the held-out text's own writers disagree with each other.
 
 Its mid-run sample at step 1,500 reads *"Hello Mary. How was your trip to Paris? Did you see
 the Eiffel tower? I hope the weather was good. We had rain, snow and wind all week, but
@@ -645,8 +648,6 @@ Dashboard's Start, like every other run. ([`portal/dictate.py`](../aksharallm/po
 * **Self-corrections mid-sentence** ("at five, no wait, six"). `scratch that` deletes the
   whole current sentence; guessing *which phrase* a speaker meant to replace is a model's job,
   and an unmeasured guess would put words in your mouth.
-* **The full tagger run.** The numbers above are a 2,000-step verification;
-  `scripts/experiment.sh punct` is the real one.
 * **Streaming** (chunked attention), **real-noise testing** (MUSAN), and an **accented-English
   test set** — LibriSpeech is read audiobooks, the most forgiving speech there is.
 * **More audio.** The first real run (test-clean 12.77% greedy, 7.68% beam) trained on 100 h;
