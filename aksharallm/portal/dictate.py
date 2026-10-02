@@ -65,6 +65,7 @@ class Dictation:
         self._device_for = device_for
         self._cache: dict = {}
         self._lm = None
+        self.jobs = AsrJobs(self)
 
     def device(self) -> tuple[str, str]:
         if self._device_for is not None:
@@ -273,3 +274,246 @@ class Dictation:
         model, step, device = self._model(checkpoint)
         r = silence_check(model, device)
         return {"checkpoint": checkpoint, "step": step, "device": device, **r}
+
+
+# ---------------------------------------------------------------------------------------
+# jobs: everything `python -m aksharallm.asr` does, runnable from the tab
+# ---------------------------------------------------------------------------------------
+
+import re as _re  # noqa: E402
+import subprocess as _subprocess  # noqa: E402
+import sys as _sys  # noqa: E402
+
+_WORD = _re.compile(r"^[a-z']{1,40}$")
+
+
+class AsrJobs:
+    """Fetch, pack, build the LM, tune and evaluate — from the browser, through the CLI.
+
+    **Every job is the exact `python -m aksharallm.asr ...` command a terminal would run**, and
+    the panel prints it. There is no second implementation to drift: the browser chooses the
+    arguments, the CLI does the work, and the same JSON lands in `logs/asr/` either way.
+
+    One job at a time (`logs/asr/jobs/asr.pid`), detached so closing the page or restarting
+    the portal does not kill it. **Success is the exit code**, written by a wrapper shell into
+    `<job>.rc` — not "an output file appeared", which is the check that reported every Eval
+    audit as failed on success (gotcha 20): five kinds of job write five kinds of file, and an
+    exit code is one thing to read for all of them.
+
+    Device policy is the Playground's, like the rest of the tab: `--device cpu` while a run is
+    training, so pressing Evaluate cannot be what killed a training run.
+    """
+
+    KINDS = ("fetch", "pack", "lm_fetch", "lm", "tune", "eval")
+
+    def __init__(self, dictation: Dictation):
+        self.d = dictation
+        self.root = dictation.root
+
+    @property
+    def dir(self) -> Path:
+        p = self.root / "logs" / "asr" / "jobs"
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def _current(self) -> dict:
+        try:
+            return json.loads((self.dir / "current.json").read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def _pid(self) -> int | None:
+        cur = self._current()
+        pid = cur.get("pid")
+        if not pid:
+            return None
+        try:
+            os.kill(int(pid), 0)
+            live = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+        except (OSError, ValueError):
+            return None
+        # A recycled pid would not reproduce the command line recorded at launch.
+        return int(pid) if live == cur.get("cmdline") else None
+
+    # ---- what can be acted on ------------------------------------------------------------
+
+    def corpora(self) -> list[dict]:
+        out = []
+        for man in sorted(self.root.glob("data/asr/*/manifest.json")) + \
+                sorted(self.root.glob("data/audio/synth-asr/manifest.json")):
+            if (man.parent / "audio.bin").is_file() and (man.parent / "transcripts.json").is_file():
+                try:
+                    secs = json.loads(man.read_text()).get("seconds", 0)
+                except (OSError, ValueError):
+                    secs = 0
+                out.append({"rel": str(man.parent.relative_to(self.root)), "hours": round(secs / 3600, 2)})
+        return out
+
+    def splits(self) -> list[dict]:
+        from ..asr.data import LIBRISPEECH_SIZES_GB
+        out = []
+        for split, gb in LIBRISPEECH_SIZES_GB.items():
+            out.append({"split": split, "gb": gb,
+                        "downloaded": (self.root / "data/asr/librispeech/LibriSpeech" / split).is_dir(),
+                        "packed": (self.root / "data/asr" / split / "audio.bin").is_file()})
+        return out
+
+    def lm_info(self) -> dict | None:
+        side = self.root / LM_PATH.with_suffix(".json")
+        if not side.is_file():
+            return None
+        try:
+            m = json.loads(side.read_text())["meta"]
+        except (OSError, ValueError, KeyError):
+            return None
+        return {k: m.get(k) for k in ("vocab", "words", "every", "oov_rate", "D2", "D3", "built",
+                                      "seconds", "perplexity", "overlap")}
+
+    def status(self, tail: int = 40) -> dict:
+        cur = self._current()
+        pid = self._pid()
+        if cur and cur.get("state") == "running" and pid is None:
+            rc = self._rc(cur.get("job", ""))
+            cur = {**cur, "state": "done" if rc == 0 else ("failed" if rc is not None else "lost"),
+                   "rc": rc}
+        log = []
+        if cur.get("job"):
+            try:
+                log = (self.dir / f"{cur['job']}.log").read_text(errors="replace").splitlines()[-tail:]
+            except OSError:
+                pass
+        corpus_text = (self.root / "data/asr/lm/librispeech-lm-norm.txt.gz").is_file()
+        return {"running": pid is not None, "current": cur or None, "log": log,
+                "corpora": self.corpora(), "splits": self.splits(), "lm": self.lm_info(),
+                "lm_text": corpus_text, "device": self.d.device()[0]}
+
+    def _rc(self, job: str) -> int | None:
+        try:
+            return int((self.dir / f"{job}.rc").read_text().strip())
+        except (OSError, ValueError):
+            return None
+
+    # ---- starting one ---------------------------------------------------------------------
+
+    def _ckpt(self, rel: str) -> str:
+        if rel not in {c["rel"] for c in self.d.checkpoints()}:
+            raise DictationError(f"not a recogniser checkpoint: {rel!r}")
+        return rel
+
+    def _corpus(self, rel: str) -> str:
+        if rel not in {c["rel"] for c in self.corpora()}:
+            raise DictationError(f"not a packed corpus with transcripts: {rel!r}")
+        return rel
+
+    @staticmethod
+    def _num(v, lo: float, hi: float, name: str) -> str:
+        try:
+            x = float(v)
+        except (TypeError, ValueError):
+            raise DictationError(f"{name} must be a number") from None
+        if not lo <= x <= hi:
+            raise DictationError(f"{name} must be between {lo} and {hi}")
+        return f"{x:g}"
+
+    def command(self, spec: dict) -> tuple[list[str], str]:
+        """`(argv after "python -m aksharallm.asr", a label)` for a job spec, validated.
+
+        Everything the browser sends is checked against what exists (a checkpoint from the
+        list, a corpus that is packed, a split LibriSpeech has) or parsed as a bounded number
+        — nothing from the request reaches a command line unexamined.
+        """
+        from ..asr.data import LIBRISPEECH_SIZES_GB
+        kind = spec.get("kind")
+        if kind not in self.KINDS:
+            raise DictationError(f"unknown job {kind!r}")
+        device = "cpu" if self.d.device()[0] == "cpu" else "cuda"
+        if kind in ("fetch", "pack"):
+            split = spec.get("split")
+            if split not in LIBRISPEECH_SIZES_GB:
+                raise DictationError(f"unknown LibriSpeech split {split!r}")
+            if kind == "pack" and not (self.root / "data/asr/librispeech/LibriSpeech" / split).is_dir():
+                raise DictationError(f"{split} is not downloaded yet — fetch it first")
+            return [kind, split], f"{kind} {split}"
+        if kind == "lm_fetch":
+            return ["lm", "fetch"], "download the LM text (1.5 GB)"
+        if kind == "lm":
+            if not (self.root / "data/asr/lm/librispeech-lm-norm.txt.gz").is_file():
+                raise DictationError(
+                    "the LM text is not downloaded: data/asr/lm/librispeech-lm-norm.txt.gz "
+                    "(OpenSLR 11, 1.5 GB) — see docs/23 § Running it")
+            every = int(self._num(spec.get("every", 1), 1, 1000, "every"))
+            argv = ["lm", "build", "--every", str(every), "--check", "data/asr/dev-clean"]
+            if spec.get("overlap"):
+                argv.append("--overlap")
+            if every > 1:
+                # Never overwrite the full LM with a sample of it from a button.
+                argv += ["--out", f"data/asr/lm/trigram-every{every}.npz"]
+            return argv, f"build the word LM (1 line in {every})"
+        ckpt = self._ckpt(str(spec.get("checkpoint") or ""))
+        if kind == "tune":
+            corpus = self._corpus(str(spec.get("corpus") or "data/asr/dev-clean"))
+            if "test" in corpus:
+                raise DictationError("tune on dev, never on test")
+            limit = str(int(self._num(spec.get("limit", 800), 50, 5000, "limit")))
+            return (["tune", ckpt, "--corpus", corpus, "--limit", limit, "--device", device],
+                    f"tune the beam on {Path(corpus).name}")
+        # eval
+        corpus = self._corpus(str(spec.get("corpus") or "data/asr/test-clean"))
+        argv = ["eval", ckpt, "--corpus", corpus, "--device", device]
+        if spec.get("decoder") == "beam":
+            if not (self.root / LM_PATH).is_file():
+                raise DictationError("no word LM yet — build it first")
+            t = self.d.tuned() or {}
+            argv += ["--decoder", "beam", "--lm", str(LM_PATH),
+                     "--alpha", self._num(spec.get("alpha", t.get("alpha", 0.8)), 0, 5, "alpha"),
+                     "--beta", self._num(spec.get("beta", t.get("beta", 2.0)), -5, 20, "beta"),
+                     "--unk-penalty", self._num(spec.get("unk_penalty", t.get("unk_penalty", -24)),
+                                                -100, 0, "unk penalty")]
+            words = [w.lower() for w in str(spec.get("dictionary") or "").replace(",", " ").split()]
+            bad = [w for w in words if not _WORD.match(w)]
+            if bad:
+                raise DictationError(f"dictionary words may only use a-z and ': {bad[:3]}")
+            if words:
+                p = self.dir / f"dict-{int(time.time())}.txt"
+                p.write_text("\n".join(sorted(set(words))[:MAX_DICT_WORDS]) + "\n")
+                argv += ["--dict", str(p.relative_to(self.root))]
+        return argv, f"evaluate on {Path(corpus).name}" + (" (beam)" if "--decoder" in argv else "")
+
+    def start(self, spec: dict) -> dict:
+        if self._pid() is not None:
+            raise DictationError("a job is already running — wait for it or stop it")
+        argv, label = self.command(spec)
+        job = time.strftime("%Y%m%d-%H%M%S") + "-" + argv[0]
+        py = _sys.executable
+        cli = [py, "-u", "-m", "aksharallm.asr", *argv]
+        rc = self.dir / f"{job}.rc"
+        # A wrapper shell records the CLI's exit code, which is the whole success signal.
+        script = " ".join(_shquote(a) for a in cli) + f"; echo $? > {_shquote(str(rc))}"
+        with open(self.dir / f"{job}.log", "wb") as fh:
+            proc = _subprocess.Popen(["/bin/sh", "-c", script], cwd=self.root,
+                                     stdin=_subprocess.DEVNULL, stdout=fh,
+                                     stderr=_subprocess.STDOUT, start_new_session=True)
+        try:
+            cmdline = Path(f"/proc/{proc.pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+        except OSError:
+            cmdline = ""
+        cur = {"job": job, "kind": argv[0], "label": label, "state": "running", "pid": proc.pid,
+               "started": time.time(), "cmdline": cmdline,
+               # What to type to do the same thing from a terminal — shown in the panel.
+               "command": "python -m aksharallm.asr " + " ".join(_shquote(a) for a in argv)}
+        (self.dir / "current.json").write_text(json.dumps(cur))
+        return {"ok": True, **cur}
+
+    def stop(self) -> dict:
+        pid = self._pid()
+        if pid is None:
+            raise DictationError("no job is running")
+        os.killpg(pid, 15)   # the shell and the CLI under it
+        cur = self._current()
+        (self.dir / "current.json").write_text(json.dumps({**cur, "state": "stopped"}))
+        return {"ok": True, "stopped": pid}
+
+
+def _shquote(s: str) -> str:
+    import shlex
+    return shlex.quote(s)

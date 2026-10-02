@@ -529,3 +529,43 @@ def test_a_dictionary_word_is_never_charged_while_it_is_being_spelt(tmp_path):
         st = d._extend(st, ch)
         worst = min(worst, st.extra)
     assert worst >= 0.0
+
+
+# ---------------------------------------------------------------------------------------
+# the portal runs the same CLI
+# ---------------------------------------------------------------------------------------
+
+
+def _jobs(tmp_path):
+    from aksharallm.portal.dictate import AsrJobs, Dictation
+    d = Dictation(tmp_path, device_for=lambda: ("cpu", "test"))
+    return d, AsrJobs(d)
+
+
+def test_a_portal_job_refuses_anything_it_cannot_name(tmp_path):
+    from aksharallm.portal.dictate import DictationError
+    _, jobs = _jobs(tmp_path)
+    for spec in [{"kind": "rm"}, {"kind": "fetch", "split": "../../etc"},
+                 {"kind": "eval", "checkpoint": "x; rm -rf /"},
+                 {"kind": "pack", "split": "dev-clean"},          # not downloaded
+                 {"kind": "lm"}]:                                  # no LM text
+        with pytest.raises(DictationError):
+            jobs.command(spec)
+    assert jobs.command({"kind": "fetch", "split": "dev-clean"})[0] == ["fetch", "dev-clean"]
+
+
+@pytest.mark.parametrize("argv,state", [(["--help"], "done"), (["no-such-command"], "failed")])
+def test_a_portal_job_is_judged_by_the_clis_exit_code(tmp_path, monkeypatch, argv, state):
+    """Not by "an output file appeared" -- the check that called every Eval audit failed on
+    success (gotcha 20). One exit code covers every kind of job."""
+    import time as _t
+    d, jobs = _jobs(tmp_path)
+    monkeypatch.setattr(jobs, "command", lambda spec: (argv, "test"))
+    cur = jobs.start({"kind": "fetch"})
+    assert cur["command"].startswith("python -m aksharallm.asr ")
+    for _ in range(100):
+        st = jobs.status()
+        if not st["running"]:
+            break
+        _t.sleep(0.1)
+    assert st["current"]["state"] == state

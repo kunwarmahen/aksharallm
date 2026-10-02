@@ -31,3 +31,16 @@
 #view-dictate .bad { color: var(--critical); }
 .dc-dict-field { display: block; margin-top: 0.5rem; min-width: 0; }
 .dc-dict-field textarea { width: 100%; max-width: 100%; box-sizing: border-box; font: inherit; }
+.dc-jobs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr));
+  gap: 0.8rem;
+}
+.dc-job { min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.7rem; }
+.dc-job h4 { margin: 0 0 0.3rem; }
+.dc-job .row > * { min-width: 0; }
+.dc-jobbox { margin-top: 0.8rem; min-width: 0; }
+.dc-log {
+  max-height: 16rem; overflow: auto; font-size: 0.8rem; white-space: pre-wrap;
+  overflow-wrap: anywhere; background: var(--wash); padding: 0.5rem; border-radius: 6px;
+}

@@ -514,7 +514,8 @@ scripts/audio.sh asr-synth                         # a recogniser, no download, 
 python -m aksharallm.asr fetch train-clean-100     # then pack it, and scripts/audio.sh asr-libri100
 python -m aksharallm.asr eval asr-synth --corpus data/audio/synth-asr --split val --val-clips 40
 python -m aksharallm.asr silence asr-synth         # day-two check 1: must print 0 characters
-python -m aksharallm.asr lm build                  # a word LM for spelling (needs OpenSLR 11's text)
+python -m aksharallm.asr lm fetch                  # the text a word LM is counted from (1.5 GB)
+python -m aksharallm.asr lm build                  # a word LM for spelling
 python -m aksharallm.asr tune asr-libri100         # choose the beam's weights on dev-clean only
 python -m aksharallm.diffusion tiny-diffusion-smoke infill \
     --prefix "Once upon a time" --suffix "and they all went home."
@@ -522,7 +523,8 @@ python -m aksharallm.diffusion tiny-diffusion-smoke infill \
 
 📖 [chapter 21 — audio](21-audio.md) · [chapter 22 — vision](22-vision.md) ·
 [chapter 23 — speech recognition](23-speech-recognition.md) ·
-[chapter 20 — diffusion](20-diffusion.md) · in the portal: the **Dictation** tab
+[chapter 20 — diffusion](20-diffusion.md) · in the portal: the **Dictation** tab, whose
+*Run it from here* panel runs every `asr` command above with the same CLI
 
 ---
 

@@ -89,33 +89,60 @@ def fetch_librispeech(split: str, dest: str | Path = "data/asr/librispeech", pro
         return out
     dest.mkdir(parents=True, exist_ok=True)
     archive = dest / f"{split}.tar.gz"
-    if not archive.exists():
-        url = LIBRISPEECH.format(split=split)
-        part = archive.with_suffix(".gz.part")
-        have = part.stat().st_size if part.exists() else 0
-        req = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})
-        progress(f"downloading {url} (~{LIBRISPEECH_SIZES_GB[split]} GB)"
-                 + (f", resuming at {have / 1e9:.2f} GB" if have else ""))
-        with urllib.request.urlopen(req) as r, open(part, "ab" if have else "wb") as f:  # noqa: S310
-            if have and r.status != 206:
-                # The server ignored the Range header and is sending the whole file again.
-                f.seek(0)
-                f.truncate()
-                have = 0
-            total = have + int(r.headers.get("Content-Length", 0))
-            done, last = have, time.time()
-            while chunk := r.read(1 << 20):
-                f.write(chunk)
-                done += len(chunk)
-                if time.time() - last > 10:
-                    progress(f"  {done / 1e9:.2f} / {total / 1e9:.2f} GB")
-                    last = time.time()
-        part.rename(archive)
+    download(LIBRISPEECH.format(split=split), archive, progress=progress,
+             note=f"~{LIBRISPEECH_SIZES_GB[split]} GB")
     progress(f"extracting {archive}")
     with tarfile.open(archive, "r:gz") as t:
         t.extractall(dest, filter="data")
     progress(f"extracted to {out}. The archive can be deleted: {archive}")
     return out
+
+
+def download(url: str, out: Path, *, progress=print, note: str = "") -> Path:
+    """Fetch `url` to `out`, **resuming** an interrupted download.
+
+    Writes `<out>.part` with an HTTP Range request and renames it only once complete, so a
+    half-downloaded file is never mistaken for a whole one. A 6 GB file over a home connection
+    will be interrupted at least once, and `urlretrieve` starts again from zero.
+    """
+    out = Path(out)
+    if out.exists():
+        progress(f"already downloaded: {out}")
+        return out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    part = out.with_name(out.name + ".part")
+    have = part.stat().st_size if part.exists() else 0
+    req = urllib.request.Request(url, headers={"Range": f"bytes={have}-"} if have else {})
+    progress(f"downloading {url}" + (f" ({note})" if note else "")
+             + (f", resuming at {have / 1e9:.2f} GB" if have else ""))
+    with urllib.request.urlopen(req) as r, open(part, "ab" if have else "wb") as f:  # noqa: S310
+        if have and r.status != 206:
+            # The server ignored the Range header and is sending the whole file again.
+            f.seek(0)
+            f.truncate()
+            have = 0
+        total = have + int(r.headers.get("Content-Length", 0))
+        done, last = have, time.time()
+        while chunk := r.read(1 << 20):
+            f.write(chunk)
+            done += len(chunk)
+            if time.time() - last > 10:
+                progress(f"  {done / 1e9:.2f} / {total / 1e9:.2f} GB")
+                last = time.time()
+    part.rename(out)
+    return out
+
+
+#: OpenSLR resource 11: the text the word LM is counted from (asr/ngram.py). Public-domain
+#: books with the dev and test books excluded by its authors -- checked, not trusted, by
+#: `asr lm build --overlap`.
+LM_TEXT_URL = "https://www.openslr.org/resources/11/librispeech-lm-norm.txt.gz"
+
+
+def fetch_lm_text(dest: str | Path = "data/asr/lm", progress=print) -> Path:
+    """Download the LibriSpeech LM corpus (1.5 GB, 803M words). Resumes if interrupted."""
+    return download(LM_TEXT_URL, Path(dest) / "librispeech-lm-norm.txt.gz", progress=progress,
+                    note="1.5 GB")
 
 
 # ---------------------------------------------------------------------------------------

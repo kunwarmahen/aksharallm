@@ -232,6 +232,103 @@ async function load() {
   if (!dc.busy) status(cks.length ? `runs on the ${res.device} — ${res.device_reason}` : '');
 }
 
+/* ---- jobs: the CLI, from the browser ------------------------------------------------- */
+
+let jobTimer = null;
+
+function renderJobs(j) {
+  const sel = $('#dc-split');
+  const keep = sel.value;
+  sel.innerHTML = j.splits.map((s) => `<option value="${escHtml(s.split)}">${escHtml(s.split)} — `
+    + `${s.gb} GB${s.packed ? ' · packed' : s.downloaded ? ' · downloaded' : ''}</option>`).join('');
+  if (keep) sel.value = keep;
+  const cur = j.splits.find((s) => s.split === sel.value) || j.splits[0];
+  $('#dc-split-note').textContent = cur
+    ? (cur.packed ? `${cur.split} is ready to train or evaluate on.`
+      : cur.downloaded ? `${cur.split} is downloaded; pack it next.` : `${cur.split} is not downloaded.`)
+    : '';
+  $('#dc-pack').disabled = !(cur && cur.downloaded);
+  const lm = j.lm;
+  $('#dc-lmfetch').disabled = j.lm_text;
+  $('#dc-lmfetch').textContent = j.lm_text ? 'LM text downloaded ✓' : 'Download its text (1.5 GB)';
+  $('#dc-lm').disabled = !j.lm_text;
+  $('#dc-lm-info').textContent = lm
+    ? `built ${lm.built}: ${fmt.int(lm.vocab)} words of vocabulary from ${fmt.compact(lm.words)} words of text`
+      + (lm.perplexity?.['dev-clean'] ? `, perplexity ${lm.perplexity['dev-clean'].perplexity.toFixed(0)} on dev-clean` : '')
+      + (lm.overlap?.['test-clean'] ? `, ${(lm.overlap['test-clean'].rate * 100).toFixed(2)}% of test sentences verbatim in its text` : '')
+    : 'not built yet';
+  const ec = $('#dc-eval-corpus');
+  const keepC = ec.value;
+  ec.innerHTML = j.corpora.map((c) => `<option value="${escHtml(c.rel)}">${escHtml(c.rel)} — ${c.hours} h</option>`).join('');
+  if (keepC) ec.value = keepC; else if (j.corpora.some((c) => c.rel.endsWith('test-clean'))) ec.value = 'data/asr/test-clean';
+  $('#dc-eval-decoder').querySelector('option[value="beam"]').disabled = !lm;
+
+  const box = $('#dc-jobbox');
+  const c = j.current;
+  box.hidden = !c;
+  if (c) {
+    const st = j.running ? 'running' : c.state;
+    $('#dc-job-state').textContent = st;
+    $('#dc-job-state').className = st === 'done' ? 'ok' : (st === 'failed' || st === 'lost') ? 'bad' : '';
+    $('#dc-job-label').textContent = ` ${c.label} · started ${fmt.ago(c.started)}`
+      + (c.rc != null && c.rc !== 0 ? ` · exit code ${c.rc}` : '');
+    $('#dc-job-cmd').textContent = c.command;
+    $('#dc-job-log').textContent = (j.log || []).join('\n');
+    $('#dc-job-stop').hidden = !j.running;
+  }
+  for (const id of ['#dc-fetch', '#dc-pack', '#dc-lmfetch', '#dc-lm', '#dc-tune', '#dc-eval']) {
+    if (j.running) $(id).disabled = true;
+  }
+  if (!j.running) {
+    $('#dc-fetch').disabled = !!(cur && cur.downloaded);
+    $('#dc-tune').disabled = !lm || !dc.ckpt;
+    $('#dc-eval').disabled = !dc.ckpt;
+  }
+}
+
+async function pollJobs(again = true) {
+  clearTimeout(jobTimer);
+  try {
+    const j = await api('/api/dictate/jobs');
+    const wasRunning = dc.jobRunning;
+    dc.jobRunning = j.running;
+    renderJobs(j);
+    // A job that just finished may have written a result; refresh the tables once.
+    if (wasRunning && !j.running) await load();
+    if (again) jobTimer = setTimeout(pollJobs, j.running ? 2000 : 10000);
+  } catch (e) {
+    status(`jobs: ${e.message}`, 'warn');
+    if (again) jobTimer = setTimeout(pollJobs, 10000);
+  }
+}
+
+async function startJob(spec) {
+  try {
+    await post('/api/dictate/job', spec);
+    await pollJobs();
+  } catch (e) {
+    status(e.message, 'warn');
+  }
+}
+
+function wireJobs() {
+  $('#dc-split').onchange = () => pollJobs(false);
+  $('#dc-fetch').onclick = () => startJob({ kind: 'fetch', split: $('#dc-split').value });
+  $('#dc-pack').onclick = () => startJob({ kind: 'pack', split: $('#dc-split').value });
+  $('#dc-lmfetch').onclick = () => startJob({ kind: 'lm_fetch' });
+  $('#dc-lm').onclick = () => startJob({ kind: 'lm', every: Number($('#dc-every').value), overlap: $('#dc-overlap').checked });
+  $('#dc-tune').onclick = () => startJob({ kind: 'tune', checkpoint: dc.ckpt, limit: Number($('#dc-tune-n').value) || 800 });
+  $('#dc-eval').onclick = () => startJob({
+    kind: 'eval', checkpoint: dc.ckpt, corpus: $('#dc-eval-corpus').value,
+    decoder: $('#dc-eval-decoder').value,
+    dictionary: $('#dc-eval-dict').checked ? $('#dc-dict').value : '',
+  });
+  $('#dc-job-stop').onclick = async () => {
+    try { await post('/api/dictate/stop', {}); } catch (e) { status(e.message, 'warn'); }
+    await pollJobs();
+  };
+}
+
 registerTab('dictate', {
   async open() {
     $('#dc-ckpt').onchange = (e) => { dc.ckpt = e.target.value; };
@@ -246,8 +343,11 @@ registerTab('dictate', {
     $('#dc-dict').value = loadDict();
     $('#dc-dict').oninput = (e) => saveDict(e.target.value);
     $('#dc-silence').onclick = runSilence;
+    wireJobs();
     await load();
+    await pollJobs();
   },
-  /* Stop a recording the moment the tab is left, so the microphone is never held open. */
-  leave() { if (dc.rec) stopRecording(); },
+  /* Stop a recording the moment the tab is left, so the microphone is never held open, and
+   * stop polling the job runner — a job keeps running; only this page stops asking. */
+  leave() { if (dc.rec) stopRecording(); clearTimeout(jobTimer); },
 });

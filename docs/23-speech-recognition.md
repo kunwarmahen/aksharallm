@@ -353,7 +353,7 @@ scripts/audio.sh asr-libri100
 .venv/bin/python -m aksharallm.asr transcribe asr-libri100 me.wav
 
 # spelling: the word LM (OpenSLR 11, 1.5 GB) and the beam search
-curl -O https://www.openslr.org/resources/11/librispeech-lm-norm.txt.gz   # into data/asr/lm/
+.venv/bin/python -m aksharallm.asr lm fetch                                # resumes if cut off
 .venv/bin/python -m aksharallm.asr lm build --check data/asr/dev-clean data/asr/test-clean --overlap
 .venv/bin/python -m aksharallm.asr tune asr-libri100                       # dev-clean only
 .venv/bin/python -m aksharallm.asr eval asr-libri100 --corpus data/asr/test-clean \
@@ -368,6 +368,17 @@ that, the day-two checks and every `asr eval` result with the worst speaker besi
 The **Decoder** picker switches to beam + word LM (with the weights `asr tune` chose, and it
 says which), the **Personal dictionary** box takes your names one per line, and the result shows
 what greedy alone would have written beside it.
+
+**Every command above also runs from the tab** — *Run it from here*: download and pack a
+LibriSpeech split, download the LM text and build the LM, tune the beam on dev, evaluate
+(greedy or beam, with or without your dictionary). Each button runs **the same
+`python -m aksharallm.asr …` command** and prints it, so there is one implementation and the
+terminal and the browser cannot disagree; results land in the same `logs/asr/` files. One job
+at a time, detached (closing the page does not stop it), with its log live and a Stop button.
+A job is judged **by the CLI's exit code**, not by "an output file appeared" — the check that
+once reported every Eval audit as failed on success (gotcha 20). Training stays on the
+Dashboard's Start, like every other run. ([`portal/dictate.py`](../aksharallm/portal/dictate.py)
+`AsrJobs`.)
 
 ---
 
@@ -416,7 +427,7 @@ Read [doc 21](21-audio.md) first for the front end this reuses.
 | 9 | [`asr/config.py`](../aksharallm/asr/config.py) | `max_batch_seconds` — the batch size, in seconds |
 | 10 | [`asr/train.py`](../aksharallm/asr/train.py) | `compute_loss` (drop and count), `evaluate`, and the docstring's "what to watch": `val_wer`, then `silence_chars` |
 | 11 | [`aksharallm/asr/__main__.py`](../aksharallm/asr/__main__.py) | `eval` — writes `logs/asr/`, never `logs/eval/` (gotcha 18); `tune`, which refuses a test corpus |
-| 12 | [`portal/dictate.py`](../aksharallm/portal/dictate.py) | `transcribe` — the browser's 48 kHz resampled by our own resampler, and said so; `tuned`, which picks the best dev result rather than the newest file |
+| 12 | [`portal/dictate.py`](../aksharallm/portal/dictate.py) | `transcribe` — the browser's 48 kHz resampled by our own resampler, and said so; `tuned`, which picks the best dev result rather than the newest file; `AsrJobs.command`, where every browser argument is checked against what exists before it reaches the CLI |
 | 13 | [`configs/asr-libri100.yaml`](../configs/asr-libri100.yaml) | the real run's shape, against `asr-synth.yaml` for what real speech costs |
 
 What pins it: [`tests/test_asr.py`](../tests/test_asr.py) — CTC against `F.ctc_loss` (value,

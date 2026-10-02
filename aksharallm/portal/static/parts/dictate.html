@@ -94,6 +94,66 @@ scripts/audio.sh asr-libri100</pre>
     </div>
 
     <div class="panel">
+      <h3>Run it from here</h3>
+      <p class="panel-note">
+        Everything below runs the <b>same command</b> you would type — shown under each button —
+        one job at a time, in the background (closing this page does not stop it). Results land
+        in <code>logs/asr/</code> and appear in the table below.
+      </p>
+      <div class="dc-jobs">
+        <div class="dc-job">
+          <h4>1 · Speech data</h4>
+          <div class="row">
+            <label class="field">LibriSpeech split <select id="dc-split"></select></label>
+            <button id="dc-fetch" type="button">Download</button>
+            <button id="dc-pack" type="button">Pack</button>
+          </div>
+          <p id="dc-split-note" class="panel-note dim"></p>
+        </div>
+        <div class="dc-job">
+          <h4>2 · Word language model</h4>
+          <div class="row">
+            <button id="dc-lmfetch" type="button">Download its text (1.5 GB)</button>
+            <label class="field">Sample <select id="dc-every">
+              <option value="1">all 803M words (~8 min)</option>
+              <option value="40">1 line in 40 (~1 min, a test)</option>
+            </select></label>
+            <label class="field"><span><input id="dc-overlap" type="checkbox"> check test overlap</span></label>
+            <button id="dc-lm" type="button">Build</button>
+          </div>
+          <p id="dc-lm-info" class="panel-note dim"></p>
+        </div>
+        <div class="dc-job">
+          <h4>3 · Tune the beam (dev only)</h4>
+          <div class="row">
+            <label class="field">Utterances <input id="dc-tune-n" type="number" min="50" max="5000" value="800"></label>
+            <button id="dc-tune" type="button">Tune</button>
+          </div>
+          <p class="panel-note dim">Chooses alpha, beta and the &lt;unk&gt; penalty on dev-clean. It
+            refuses a test set: the test number has to be one the weights were not chosen on.</p>
+        </div>
+        <div class="dc-job">
+          <h4>4 · Evaluate</h4>
+          <div class="row">
+            <label class="field">Corpus <select id="dc-eval-corpus"></select></label>
+            <label class="field">Decoder <select id="dc-eval-decoder">
+              <option value="greedy">greedy</option>
+              <option value="beam">beam + word LM</option>
+            </select></label>
+            <label class="field"><span><input id="dc-eval-dict" type="checkbox"> use my dictionary</span></label>
+            <button id="dc-eval" class="primary" type="button">Evaluate</button>
+          </div>
+        </div>
+      </div>
+      <div id="dc-jobbox" class="dc-jobbox" hidden>
+        <div class="row"><b id="dc-job-state"></b><span id="dc-job-label"></span>
+          <button id="dc-job-stop" type="button">Stop</button></div>
+        <pre id="dc-job-cmd" class="au-cmd"></pre>
+        <pre id="dc-job-log" class="dc-log"></pre>
+      </div>
+    </div>
+
+    <div class="panel">
       <h3>Every evaluation so far</h3>
       <p class="panel-note">
         Word error rate: wrong, missing and extra words, over the words actually said. Lower is

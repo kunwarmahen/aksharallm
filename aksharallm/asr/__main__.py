@@ -5,6 +5,7 @@
     python -m aksharallm.asr eval  asr-libri100 --corpus data/asr/test-clean
     python -m aksharallm.asr silence asr-libri100              # day-two problem 1
     python -m aksharallm.asr transcribe asr-libri100 me.wav
+    python -m aksharallm.asr lm fetch                          # its text, 1.5 GB (OpenSLR 11)
     python -m aksharallm.asr lm build                          # word trigram LM (piece 5)
     python -m aksharallm.asr tune asr-libri100                 # alpha/beta on dev-clean only
     python -m aksharallm.asr eval asr-libri100 --decoder beam --lm data/asr/lm/trigram.npz
@@ -164,6 +165,12 @@ def cmd_eval(args) -> int:
     return 0
 
 
+def cmd_lm_fetch(args) -> int:
+    from .data import fetch_lm_text
+    fetch_lm_text(args.dest)
+    return 0
+
+
 def cmd_lm_build(args) -> int:
     from .ngram import TrigramLM, verbatim_overlap
     lm = TrigramLM.build(args.corpus, vocab_size=args.vocab_size, max_words=args.max_words,
@@ -292,6 +299,9 @@ def main(argv=None) -> int:
 
     s = sub.add_parser("lm", help="build the word language model the beam search uses")
     lsub = s.add_subparsers(dest="lm_cmd", required=True)
+    f = lsub.add_parser("fetch", help="download the LM text corpus (OpenSLR 11, 1.5 GB)")
+    f.add_argument("--dest", default="data/asr/lm")
+    f.set_defaults(fn=cmd_lm_fetch)
     b = lsub.add_parser("build", help="count a trigram Kneser-Ney LM from a text corpus")
     b.add_argument("--corpus", default="data/asr/lm/librispeech-lm-norm.txt.gz")
     b.add_argument("--out", default="data/asr/lm/trigram.npz")

@@ -431,6 +431,12 @@ class Handler(BaseHTTPRequestHandler):
                     if parts[2] == "silence":
                         return self._json(self.dictation.silence(
                             str(data.get("checkpoint") or "")))
+                    # Detached CLI jobs: fetch / pack / lm / tune / eval. Each one is the
+                    # `python -m aksharallm.asr` command a terminal would run.
+                    if parts[2] == "job":
+                        return self._json(self.dictation.jobs.start(data))
+                    if parts[2] == "stop":
+                        return self._json(self.dictation.jobs.stop())
                 except DictationError as e:
                     return self._json({"error": str(e)}, code=400)
             # the learning path: /api/learn/<check|reset>
@@ -549,6 +555,8 @@ class Handler(BaseHTTPRequestHandler):
         # dictation: which recognisers exist, every evaluation so far, and the runs.
         if parts == ["dictate"]:
             return self._json(self.dictation.overview())
+        if parts == ["dictate", "jobs"]:
+            return self._json(self.dictation.jobs.status())
         # vision: which towers and corpora exist.
         if parts == ["vision"]:
             return self._json(self.vision.overview())
