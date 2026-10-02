@@ -43,7 +43,18 @@ scripts/audio.sh asr-libri100</pre>
         <label class="field">…or a file
           <input id="dc-file" type="file" accept="audio/*">
         </label>
+        <label class="field">Decoder
+          <select id="dc-decoder">
+            <option value="greedy">greedy — one letter per frame</option>
+            <option value="beam">beam + word LM — knows which words exist</option>
+          </select>
+        </label>
       </div>
+      <label class="field dc-dict-field">Personal dictionary <span class="dim">(names and words it
+        should be able to spell — one per line; used by the beam decoder)</span>
+        <textarea id="dc-dict" rows="3" placeholder="Shaun&#10;Aksharallm&#10;Ramanujan"></textarea>
+      </label>
+      <p id="dc-lm-note" class="panel-note dim"></p>
       <p id="dc-status" class="panel-note"></p>
       <div id="dc-out" class="dc-out" hidden>
         <p id="dc-text" class="dc-text"></p>
@@ -72,8 +83,9 @@ scripts/audio.sh asr-libri100</pre>
               <td id="dc-check-2" class="dim">see the table below</td></tr>
           <tr><td>3</td><td>switching language mid-sentence</td><td>WER on a mixed-language set</td>
               <td class="dim">not built yet</td></tr>
-          <tr><td>4</td><td>names (Shaun or Sean?)</td><td>name recall with and without a personal dictionary</td>
-              <td class="dim">not built yet</td></tr>
+          <tr><td>4</td><td>names (Shaun or Sean?)</td><td>words the LM has never seen, recalled with and
+              without a personal dictionary — and how often one is written where nobody said it</td>
+              <td id="dc-check-4" class="dim">run <code>asr eval --decoder beam</code></td></tr>
           <tr><td>5</td><td>never learns from a correction</td><td>right on the 4th try after 3 corrections?</td>
               <td class="dim">not built yet</td></tr>
         </tbody>

@@ -31,10 +31,10 @@ written down rather than hidden.
 | 1 | It writes words nobody said ("thank you for watching") | CTC instead of a text decoder, **and** training on clips with nothing to say | characters written on five no-speech clips — **must be 0** |
 | 2 | Accents | multi-speaker data; never report only the mean | WER **per speaker**, the worst beside the median |
 | 3 | Switching language mid-sentence | per-segment language id | WER on a mixed set — *not built yet* |
-| 4 | Names (Shaun or Sean?) | beam search biased by a personal dictionary | name recall, with and without — *not built yet* |
+| 4 | Names (Shaun or Sean?) | beam search biased by a personal dictionary | words the LM has never seen: **5% → 50%** recalled with a dictionary on test-clean, 13 written where not said |
 | 5 | Never learns from a correction | corrections → dictionary now, → LoRA adapter later | right on the 4th try after 3 corrections? — *not built yet* |
 
-Checks 1 and 2 are live in this chapter's code. 3–5 are the dictation layer, which sits on top
+Checks 1, 2 and 4 are live in this chapter's code. 3 and 5 are the dictation layer, which sits on top
 of the recogniser and is `PLAN.md` § Phase 7's pieces 5–7.
 
 ---
@@ -260,6 +260,82 @@ lands around **6–10% WER on test-clean** with greedy decoding and no language 
 
 ---
 
+## Spelling: beam search with a word list
+
+The first LibriSpeech run reached **12.77% WER on test-clean, greedy — but only 3.98% CER**.
+One wrong letter costs a whole word, and the wrong letters were *spelling*, not hearing:
+"stew" → "stoo", "carrots" → "karots", "counselled" → "countlled". The model hears the sounds
+and spells them phonetically, because a decoder that picks one character per frame has no idea
+which words exist. Two pieces fix that, both from scratch:
+
+```mermaid
+flowchart LR
+    E["encoder<br/>per-frame letter probs"] --> B["prefix beam search<br/>16 best transcripts"]
+    B -->|a word ends| L["word trigram LM<br/>Kneser-Ney, ours"]
+    B -->|a word ends| D["personal dictionary<br/>bonus"]
+    L --> B
+    D --> B
+    B --> T["text"]
+```
+
+**A word language model** ([`asr/ngram.py`](../aksharallm/asr/ngram.py)): interpolated
+Kneser-Ney trigrams, counted with numpy over LibriSpeech's own LM corpus — **803M words of
+public-domain books, 204M distinct trigrams, built in 8 minutes**, perplexity **172 on
+dev-clean, 179 on test-clean**. Kneser-Ney's idea in one example: "francisco" is common, but
+only after "san", so its *backoff* estimate counts how many different words it follows, not how
+often it occurs. Every count is an `np.unique` over three word ids packed into one int64; a
+lookup is `np.searchsorted`. Two things about the corpus that cost thought:
+
+* **It is sorted alphabetically** (line 20M is "JULIA PERSISTED"), so "the first N words" is a
+  sample made entirely of sentences starting with "a". `--every N` takes one line in N across
+  the whole file instead; `--max-words` is a prefix and says so.
+* **Its authors excluded the books the test audio comes from — checked rather than trusted.**
+  23 of test-clean's 2,535 sentences (0.91%) occur verbatim in it: mostly stock phrases ("he
+  could wait no longer"), and a few genuine lines from other editions of the same fairy tales.
+  Small, and on the record.
+
+**CTC prefix beam search** ([`asr/decode.py`](../aksharallm/asr/decode.py)) keeps the best 16
+transcripts so far and sums the frame paths into each one; when a word ends it adds `α · log
+P(word | previous two)` and a per-word bonus `β`. Words the LM has never seen score as `<unk>`
+plus a penalty — the dial between "karots" (should lose to "carrots") and "quilter" (a real
+name, which should still be writable). The penalty is charged **the moment the letters stop
+being the start of any known word**, not at the word's end: the LM only speaks at word
+boundaries, so an unfinished misspelling otherwise looks free beside finished words that have
+paid, and a strong α fills the beam with them (α = 1.0 took dev WER from 14% to 46% before this).
+
+**Tuned on dev-clean only** (`asr tune`: the encoder runs once, each grid point is only a
+search). Three grids, 60 points, because the first two put their best on an edge. Then
+test-clean was scored **once**, with what dev chose — α 0.8, β 2.0, `<unk>` −24:
+
+| decoder | test-clean WER | CER | worst speaker | unseen words right | written where not said |
+|---|---|---|---|---|---|
+| greedy | 12.77% | 3.98% | 23.3% | – | – |
+| beam + word LM | **7.88%** | 3.09% | 15.5% | 5% | 0 |
+| beam + LM + dictionary | **7.68%** | 3.03% | 15.5% | **50%** | 13 |
+
+A **38% relative cut**, at ~1,800× real time (encoder 6.5 s, search 4.4 s for 5.4 hours of
+audio on 12 processes). The worst speaker improved more than the median, which is the shape
+you want. "karots" and "countlled" are fixed; "stoo" is not — it occurs in the books.
+
+**The `<unk>` penalty is a trade, and the names column is what it costs.** On dev-clean:
+−12 gives 8.08% WER and 12% of unseen words right; −24 gives 7.52% and 7%. A harsher penalty
+fixes more misspellings by refusing to write any word the LM does not know — which is
+day-two problem 4 exactly: the name becomes the nearest word it does know (a test pins
+"shaun" → "san", from "san francisco").
+
+**The personal dictionary** is that mechanism with a bonus: a word in it gets `word_bonus`
+when it completes, no `<unk>` penalty, a score floor of a rare word (a small LM gives `<unk>`
+log P ≈ −50 and no bonus recovers that), and `prefix_bonus` per letter while it is being
+spelt — refunded if the letters turn out to spell something else, so the words it merely
+starts like are not nudged. **One bug here is worth knowing**: the early `<unk>` charge first
+fired *while a dictionary word was being spelt* — "ambrosch" paid ~−19 the moment it left the
+LM's vocabulary, fell out of the beam, and never reached the end where the refund was. Right
+on paper, fatal in a search. Fixed, dictionary recall on dev went **20% → 51%**. The test
+above gives the dictionary exactly the test set's unseen words — the scenario of a user who has
+added their contacts — and counts the price: 13 dictionary words written where nobody said them.
+
+---
+
 ## Running it
 
 ```bash
@@ -275,26 +351,44 @@ scripts/audio.sh asr-libri100
 .venv/bin/python -m aksharallm.asr eval asr-libri100 --corpus data/asr/test-clean
 .venv/bin/python -m aksharallm.asr silence asr-libri100
 .venv/bin/python -m aksharallm.asr transcribe asr-libri100 me.wav
+
+# spelling: the word LM (OpenSLR 11, 1.5 GB) and the beam search
+curl -O https://www.openslr.org/resources/11/librispeech-lm-norm.txt.gz   # into data/asr/lm/
+.venv/bin/python -m aksharallm.asr lm build --check data/asr/dev-clean data/asr/test-clean --overlap
+.venv/bin/python -m aksharallm.asr tune asr-libri100                       # dev-clean only
+.venv/bin/python -m aksharallm.asr eval asr-libri100 --corpus data/asr/test-clean \
+    --decoder beam --lm data/asr/lm/trigram.npz --alpha 0.8 --beta 2.0 --unk-penalty -24 \
+    --dict my-names.txt
 ```
 
 In the browser: the portal's **Dictation** tab. Hold the button and talk, or drop a file;
 it shows what the recogniser wrote, the level it heard you at, and the sample-rate conversion
 it did (a microphone is 48 kHz; the model hears 16, converted by our own resampler). Under
 that, the day-two checks and every `asr eval` result with the worst speaker beside the median.
+The **Decoder** picker switches to beam + word LM (with the weights `asr tune` chose, and it
+says which), the **Personal dictionary** box takes your names one per line, and the result shows
+what greedy alone would have written beside it.
 
 ---
 
 ## What is not built yet
 
-* **Beam search with a personal dictionary** (day-two 4) and **corrections** (day-two 5).
+* **Corrections** (day-two 5): a correction should become a dictionary entry at once, and a
+  LoRA adapter once there are enough of them. The dictionary is built; the loop is not.
+* **Sound-alike dictionary matching.** The dictionary only helps when the letters already start
+  the right way; half the unseen names are still missed because they are *heard* differently
+  ("bennydeck" as two words). Phonetic matching is the obvious next step.
+* **A smaller LM.** It is 3.6 GB on disk and in memory; pruning singleton trigrams would cut it
+  several-fold, at a cost to measure.
 * **Language id per segment** (day-two 3), and a code-switched test set.
 * **Cleanup by our own chat model** — punctuation and filler removal. The recogniser writes
   lower-case letters and apostrophes only, on purpose: punctuation is not audible frame by
   frame, it is a property of the sentence, which is a language model's job.
 * **Streaming** (chunked attention), **real-noise testing** (MUSAN), and an **accented-English
   test set** — LibriSpeech is read audiobooks, the most forgiving speech there is.
-* **The LibriSpeech result.** The first real run is training (started 2026-10-02, after the
-  pre-norm fix). Two launcher bugs surfaced on the way and are fixed: every *resume* crashed
+* **More audio.** The first real run (test-clean 12.77% greedy, 7.68% beam) trained on 100 h;
+  train-clean-360 is the biggest lever on hearing itself.
+  It started 2026-10-02, after the pre-norm fix. Two launcher bugs surfaced on the way and are fixed: every *resume* crashed
   on start (the augment generator's saved state came back on the GPU — a CPU-only resume test
   could not see it; there is a GPU one now), and the launcher declared success after 5 s while
   the crash came ~30 s in, behind an empty log (stdout was buffered). A full-size step
@@ -317,13 +411,19 @@ Read [doc 21](21-audio.md) first for the front end this reuses.
 | 4 | [`asr/data.py`](../aksharallm/asr/data.py) | `flac_info` and `decode_flac` (read the header, refuse a conversion), `Utterances.dropped`, `buckets` |
 | 5 | [`asr/noise.py`](../aksharallm/asr/noise.py) | `no_speech` — the fix for day-two 1 — and why its families differ from the check's |
 | 6 | [`asr/measure.py`](../aksharallm/asr/measure.py) | `score` (corpus WER, per speaker) and `silence_check` |
-| 7 | [`asr/config.py`](../aksharallm/asr/config.py) | `max_batch_seconds` — the batch size, in seconds |
-| 8 | [`asr/train.py`](../aksharallm/asr/train.py) | `compute_loss` (drop and count), `evaluate`, and the docstring's "what to watch": `val_wer`, then `silence_chars` |
-| 9 | [`aksharallm/asr/__main__.py`](../aksharallm/asr/__main__.py) | `eval` — writes `logs/asr/`, never `logs/eval/` (gotcha 18) |
-| 10 | [`portal/dictate.py`](../aksharallm/portal/dictate.py) | `transcribe` — the browser's 48 kHz resampled by our own resampler, and said so |
-| 11 | [`configs/asr-libri100.yaml`](../configs/asr-libri100.yaml) | the real run's shape, against `asr-synth.yaml` for what real speech costs |
+| 7 | [`asr/ngram.py`](../aksharallm/asr/ngram.py) | `_statistics` — every Kneser-Ney count as one `np.unique` — then `logprob`, which is the formula in the docstring line for line, and `_lines` on why the corpus is sampled with `every` |
+| 8 | [`asr/decode.py`](../aksharallm/asr/decode.py) | `decode` (two probabilities per prefix, and why), then `_extend` and `_word`: where the LM, β, the early `<unk>` charge and the dictionary's bonus and refund each happen |
+| 9 | [`asr/config.py`](../aksharallm/asr/config.py) | `max_batch_seconds` — the batch size, in seconds |
+| 10 | [`asr/train.py`](../aksharallm/asr/train.py) | `compute_loss` (drop and count), `evaluate`, and the docstring's "what to watch": `val_wer`, then `silence_chars` |
+| 11 | [`aksharallm/asr/__main__.py`](../aksharallm/asr/__main__.py) | `eval` — writes `logs/asr/`, never `logs/eval/` (gotcha 18); `tune`, which refuses a test corpus |
+| 12 | [`portal/dictate.py`](../aksharallm/portal/dictate.py) | `transcribe` — the browser's 48 kHz resampled by our own resampler, and said so; `tuned`, which picks the best dev result rather than the newest file |
+| 13 | [`configs/asr-libri100.yaml`](../configs/asr-libri100.yaml) | the real run's shape, against `asr-synth.yaml` for what real speech costs |
 
 What pins it: [`tests/test_asr.py`](../tests/test_asr.py) — CTC against `F.ctc_loss` (value,
 gradient, gradcheck, empty and impossible targets), an utterance alone versus padded into a
 batch in both normalisation modes, corpus WER against a mean of rates, every drop counted by
-reason, the FLAC header read and refused, and the trainer end to end through stop and resume.
+reason, the FLAC header read and refused, the trainer end to end through stop and resume; and
+for piece 5, Kneser-Ney summing to one in every context, chunked counting equal to one pass, a
+hand-built "karrots" the LM corrects, "shaun" lost to "san" without the dictionary and kept
+with it, and the `<unk>` penalty charged exactly once — every one of the four bookkeeping
+rules mutation-checked red.

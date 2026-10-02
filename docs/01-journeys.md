@@ -514,6 +514,8 @@ scripts/audio.sh asr-synth                         # a recogniser, no download, 
 python -m aksharallm.asr fetch train-clean-100     # then pack it, and scripts/audio.sh asr-libri100
 python -m aksharallm.asr eval asr-synth --corpus data/audio/synth-asr --split val --val-clips 40
 python -m aksharallm.asr silence asr-synth         # day-two check 1: must print 0 characters
+python -m aksharallm.asr lm build                  # a word LM for spelling (needs OpenSLR 11's text)
+python -m aksharallm.asr tune asr-libri100         # choose the beam's weights on dev-clean only
 python -m aksharallm.diffusion tiny-diffusion-smoke infill \
     --prefix "Once upon a time" --suffix "and they all went home."
 ```

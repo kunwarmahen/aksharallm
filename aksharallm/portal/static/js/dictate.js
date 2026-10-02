@@ -14,6 +14,11 @@ import { registerTab } from './router.js';
 
 const dc = { ckpt: null, busy: false, rec: null, maxSeconds: 30 };
 
+/* The dictionary is personal and typed by hand, so it is kept in this browser between visits
+ * (a convenience; nothing depends on it surviving). */
+function loadDict() { try { return localStorage.getItem('dc-dict') || ''; } catch { return ''; } }
+function saveDict(v) { try { localStorage.setItem('dc-dict', v); } catch { /* private mode */ } }
+
 function status(text, kind = '') {
   const el = $('#dc-status');
   el.textContent = text;
@@ -41,16 +46,20 @@ async function send(samples, rate, label) {
   dc.busy = true;
   status(`transcribing ${(samples.length / rate).toFixed(1)} s of ${label}…`);
   try {
-    const res = await post('/api/dictate/transcribe',
-      { checkpoint: dc.ckpt, pcm: toPcm16(samples), sample_rate: rate });
+    const res = await post('/api/dictate/transcribe', {
+      checkpoint: dc.ckpt, pcm: toPcm16(samples), sample_rate: rate,
+      decoder: $('#dc-decoder').value, dictionary: $('#dc-dict').value,
+    });
     $('#dc-out').hidden = false;
     $('#dc-text').textContent = res.text || '(nothing — it heard no words)';
     $('#dc-text').classList.toggle('dim', !res.text);
+    // Greedy beside beam, so what the language model changed is visible, not asserted.
+    const diff = res.greedy !== res.text ? ` · greedy alone wrote: “${res.greedy}”` : '';
     const conv = res.resampled ? `resampled ${fmt.int(res.rate_in)} → ${fmt.int(res.rate_model)} Hz` : `${fmt.int(res.rate_model)} Hz`;
     const quiet = res.rms_dbfs < -45 ? ' — that was very quiet; move closer or speak up' : '';
     $('#dc-meta').textContent = `${res.seconds} s · ${conv} · level ${res.rms_dbfs} dBFS rms, `
       + `peak ${res.peak_dbfs}${quiet} · ${res.ms} ms on the ${res.device} (${res.realtime}x real time) · `
-      + `step ${fmt.int(res.step)}`;
+      + `step ${fmt.int(res.step)} · ${res.decoder}${diff}`;
     status('');
   } catch (e) {
     status(e.message, 'warn');
@@ -153,17 +162,29 @@ async function runSilence() {
 
 function pct(v) { return v == null ? '—' : `${(v * 100).toFixed(1)}%`; }
 
+function renderNames(rows) {
+  // Prefer the run that used a dictionary: check 4 is "with and without", and the with is
+  // the claim. Fall back to any beam result.
+  const r = rows.find((x) => x.names && x.dictionary_size) || rows.find((x) => x.names);
+  if (!r) return;
+  const n = r.names;
+  $('#dc-check-4').innerHTML = `${Math.round(n.recall * 100)}% of ${fmt.int(n.said)} unseen words `
+    + `<span class="dim">(${escHtml(r.decoder_desc || '')}; ${n.false_alarms} written where not said)</span>`;
+}
+
 function renderResults(rows) {
+  renderNames(rows);
   $('#dc-results').innerHTML = rows.length
     ? '<thead><tr><th>run</th><th>step</th><th>corpus</th><th>WER</th><th>CER</th>'
-      + '<th>speakers</th><th>median speaker</th><th>worst speaker</th><th>silence</th></tr></thead><tbody>'
+      + '<th>speakers</th><th>median speaker</th><th>worst speaker</th><th>silence</th><th>decoder</th></tr></thead><tbody>'
       + rows.map((r) => {
         const w = r.worst[0];
         return `<tr><td>${escHtml(r.run)}</td><td>${fmt.int(r.step)}</td><td>${escHtml(r.corpus)}</td>`
           + `<td><b>${pct(r.wer)}</b> <span class="dim">± ${pct(r.wer_pm)}</span></td><td>${pct(r.cer)}</td>`
           + `<td>${r.speakers}</td><td>${pct(r.median_speaker)}</td>`
           + `<td>${w ? `${pct(w.wer)} <span class="dim">(${escHtml(w.speaker)})</span>` : '—'}</td>`
-          + `<td>${r.silence_chars == null ? '—' : (r.silence_chars === 0 ? '<span class="ok">0</span>' : `<b class="bad">${r.silence_chars}</b>`)}</td></tr>`;
+          + `<td>${r.silence_chars == null ? '—' : (r.silence_chars === 0 ? '<span class="ok">0</span>' : `<b class="bad">${r.silence_chars}</b>`)}</td>`
+          + `<td class="dim">${escHtml(r.decoder || 'greedy')}</td></tr>`;
       }).join('') + '</tbody>'
     : '<tbody><tr><td>no evaluations yet — <code>python -m aksharallm.asr eval &lt;run&gt; --corpus data/asr/test-clean</code></td></tr></tbody>';
   const latest = rows.find((r) => r.speakers > 1);
@@ -195,6 +216,16 @@ async function load() {
     $('#dc-ckpt').value = dc.ckpt;
   }
   $('#dc-rec').disabled = !cks.length;
+  const beam = $('#dc-decoder').querySelector('option[value="beam"]');
+  beam.disabled = !res.lm;
+  if (!res.lm) $('#dc-decoder').value = 'greedy';
+  $('#dc-lm-note').textContent = !res.lm
+    ? 'beam + word LM is off: build the LM first — python -m aksharallm.asr lm build'
+    : (res.tuned
+      ? `beam uses alpha ${res.tuned.alpha}, beta ${res.tuned.beta}, unk ${res.tuned.unk_penalty} — `
+        + `chosen on dev-clean (${res.tuned.file}), where it took WER from `
+        + `${pct(res.tuned.greedy_wer)} to ${pct(res.tuned.wer)}`
+      : 'beam uses untuned defaults — run python -m aksharallm.asr tune <run> to choose them on dev-clean');
   $('#dc-silence').disabled = !cks.length;
   renderResults(res.results || []);
   renderRuns(res.runs || []);
@@ -212,6 +243,8 @@ registerTab('dictate', {
     btn.onkeydown = (e) => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); startRecording(); } };
     btn.onkeyup = (e) => { if (e.key === ' ' || e.key === 'Enter') stopRecording(); };
     $('#dc-file').onchange = (e) => fromFile(e.target.files[0]);
+    $('#dc-dict').value = loadDict();
+    $('#dc-dict').oninput = (e) => saveDict(e.target.value);
     $('#dc-silence').onclick = runSilence;
     await load();
   },

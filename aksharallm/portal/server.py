@@ -425,7 +425,9 @@ class Handler(BaseHTTPRequestHandler):
                     if parts[2] == "transcribe":
                         return self._json(self.dictation.transcribe(
                             str(data.get("checkpoint") or ""), str(data.get("pcm") or ""),
-                            int(data.get("sample_rate") or 0)))
+                            int(data.get("sample_rate") or 0),
+                            str(data.get("decoder") or "greedy"),
+                            str(data.get("dictionary") or "")))
                     if parts[2] == "silence":
                         return self._json(self.dictation.silence(
                             str(data.get("checkpoint") or "")))

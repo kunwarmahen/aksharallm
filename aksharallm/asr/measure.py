@@ -104,6 +104,33 @@ def transcribe(model, waves: list[np.ndarray], device: str, batch: int = 16) -> 
     return out
 
 
+@torch.no_grad()
+def log_probs(model, waves: list[np.ndarray], device: str, batch: int = 16) -> list[np.ndarray]:
+    """The encoder's output for each waveform, trimmed to its own length, as float32 numpy.
+
+    Separate from decoding on purpose: the encoder is the expensive part and runs once, and a
+    beam search can then be re-run under any weights (tuning α and β) for the cost of the
+    search alone.
+    """
+    was = model.training
+    model.eval()
+    out = []
+    for i in range(0, len(waves), batch):
+        chunk = waves[i : i + batch]
+        N = max(len(w) for w in chunk)
+        x = torch.zeros(len(chunk), N)
+        for r, w in enumerate(chunk):
+            x[r, : len(w)] = torch.from_numpy(np.asarray(w, dtype=np.float32))
+        n = torch.tensor([len(w) for w in chunk])
+        with torch.autocast(device_type=device.split(":")[0], dtype=torch.bfloat16,
+                            enabled=device.startswith("cuda")):
+            lp, ln = model(x.to(device), n.to(device))
+        lp = lp.float().cpu().numpy()
+        out += [lp[r, : int(ln[r])] for r in range(len(chunk))]
+    model.train(was)
+    return out
+
+
 def no_speech_clips(sample_rate: int = 16_000, seconds: float = 4.0, seed: int = 0) -> dict:
     """Five clips with nothing to transcribe. Named, because which one fails is the diagnosis."""
     rng = np.random.default_rng(seed)
@@ -136,3 +163,23 @@ def silence_check(model, device: str, sample_rate: int = 16_000) -> dict:
         "clips": len(hyps),
         "outputs": per,
     }
+
+
+def name_recall(refs: list[str], hyps: list[str], targets: set[str]) -> dict:
+    """Of the reference words in `targets` (names, usually), how many came out right — and how
+    many times a target word was written where it was NOT said.
+
+    The second number is what keeps a dictionary honest. A bias strong enough to write "shaun"
+    every time it is said, and also in places nobody said it, has moved the error rather than
+    fixed it; recall alone would call that a success.
+    """
+    from collections import Counter
+
+    said = hit = false = 0
+    for r, h in zip(refs, hyps, strict=True):
+        rc = Counter(w for w in r.split() if w in targets)
+        hc = Counter(w for w in h.split() if w in targets)
+        said += sum(rc.values())
+        hit += sum(min(n, hc[w]) for w, n in rc.items())
+        false += sum(max(0, n - rc[w]) for w, n in hc.items())
+    return {"said": said, "recalled": hit, "recall": hit / max(said, 1), "false_alarms": false}

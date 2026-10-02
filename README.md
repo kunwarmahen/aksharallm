@@ -168,7 +168,9 @@ aksharallm/
 │   │   ├── model.py          the Conformer: conv subsampling, attention + convolution
 │   │   ├── data.py           LibriSpeech fetch/pack, length buckets, every drop counted
 │   │   ├── noise.py          clips with nothing to say — the fix for words on silence
-│   │   └── measure.py        corpus WER per speaker, and the silence check
+│   │   ├── ngram.py          a Kneser-Ney word trigram LM, counted with numpy
+│   │   ├── decode.py         CTC prefix beam search + the LM + a personal dictionary
+│   │   └── measure.py        corpus WER per speaker, name recall, and the silence check
 │   ├── vision/           a second modality that needs no codec — see docs/22
 │   │   ├── image.py          a shapes corpus whose captions are known exactly
 │   │   ├── encoder.py        patches, a small ViT, and the LLaVA projector

@@ -41,6 +41,10 @@ import torch
 MAX_SECONDS = 30.0
 #: The request body limit for this route only: 30 s at 48 kHz as base64 int16 is ~3.9 MB.
 MAX_BODY = 8 * 1024 * 1024
+#: The word LM `asr lm build` writes. Optional: without it the tab offers greedy only.
+LM_PATH = Path("data/asr/lm/trigram.npz")
+#: A personal dictionary can be long, but not a novel.
+MAX_DICT_WORDS = 2000
 
 
 class DictationError(RuntimeError):
@@ -60,6 +64,7 @@ class Dictation:
         self.root = Path(root) if root else Path.cwd()
         self._device_for = device_for
         self._cache: dict = {}
+        self._lm = None
 
     def device(self) -> tuple[str, str]:
         if self._device_for is not None:
@@ -113,6 +118,10 @@ class Dictation:
                 "median_speaker": rates[len(rates) // 2] if rates else None,
                 "worst": (d.get("worst_speakers") or [])[:3],
                 "silence_chars": (d.get("silence") or {}).get("chars"),
+                "decoder": d.get("decoder", "greedy"),
+                "decoder_desc": d.get("decoder_desc"),
+                "dictionary_size": d.get("dictionary_size", 0),
+                "names": d.get("names"),
             })
         return sorted(out, key=lambda r: r.get("time") or "", reverse=True)
 
@@ -142,10 +151,40 @@ class Dictation:
                         "step": step, "val_wer": wer, "silence_chars": silence})
         return out
 
+    def tuned(self) -> dict | None:
+        """The weights the latest `asr tune` chose on dev-clean, or None. The beam option uses
+        these rather than defaults: alpha and beta are a property of a model + LM pair."""
+        best = None
+        for p in sorted((self.root / "logs/asr").glob("tune-*.json")):
+            try:
+                d = json.loads(p.read_text())
+            except (OSError, ValueError):
+                continue
+            if Path(d.get("lm") or "").name != LM_PATH.name or not d.get("best"):
+                continue
+            # The best dev WER across every tuning run for this LM -- not "the newest file",
+            # which a narrower follow-up grid would win just by being written last.
+            if best is None or d["best"]["wer"] < best["wer"]:
+                best = {**d["best"], "beam": d.get("beam", 16), "file": p.name,
+                        "greedy_wer": d.get("greedy_wer")}
+        return best
+
     def overview(self) -> dict:
         device, why = self.device()
         return {"checkpoints": self.checkpoints(), "results": self.results(), "runs": self.runs(),
-                "device": device, "device_reason": why, "max_seconds": MAX_SECONDS}
+                "device": device, "device_reason": why, "max_seconds": MAX_SECONDS,
+                "lm": str(LM_PATH) if (self.root / LM_PATH).is_file() else None,
+                "tuned": self.tuned()}
+
+    def _language_model(self):
+        """Loaded once and kept: it is a few hundred MB of arrays and a second to load."""
+        if self._lm is None:
+            from ..asr.ngram import TrigramLM
+            path = self.root / LM_PATH
+            if not path.is_file():
+                raise DictationError("no word LM yet — build one: python -m aksharallm.asr lm build")
+            self._lm = TrigramLM.load(path)
+        return self._lm
 
     # ---- the model ----------------------------------------------------------------------
 
@@ -167,9 +206,18 @@ class Dictation:
             self._cache = {"key": key, "model": model, "step": blob.get("step")}
         return self._cache["model"], self._cache["step"], device
 
-    def transcribe(self, checkpoint: str, pcm_b64: str, sample_rate: int) -> dict:
-        """Base64 little-endian int16 mono at `sample_rate` -> what the recogniser wrote."""
-        from ..asr.measure import transcribe
+    def transcribe(self, checkpoint: str, pcm_b64: str, sample_rate: int,
+                   decoder: str = "greedy", dictionary: str = "") -> dict:
+        """Base64 little-endian int16 mono at `sample_rate` -> what the recogniser wrote.
+
+        `decoder="beam"` runs the prefix beam search with the word LM and the dictionary (one
+        word per line or space); the response carries the greedy text too, so the difference
+        the language model made is on screen rather than asserted.
+        """
+        from ..asr import vocab
+        from ..asr.ctc import greedy_decode
+        from ..asr.decode import BeamDecoder
+        from ..asr.measure import log_probs
         from ..audio.io import resample
 
         if not checkpoint:
@@ -193,10 +241,24 @@ class Dictation:
         peak = float(np.abs(x).max()) if x.size else 0.0
         rms = float(np.sqrt(np.mean(x ** 2))) if x.size else 0.0
         t0 = time.time()
-        text = transcribe(model, [x], device)[0]
+        lp = log_probs(model, [x], device)[0]
+        greedy = " ".join(vocab.decode(greedy_decode(torch.from_numpy(lp)[None],
+                                                     torch.tensor([len(lp)]))[0]).split())
+        text, how, words = greedy, "greedy", []
+        if decoder == "beam":
+            words = [w for w in dictionary.replace(",", " ").split() if w.strip()][:MAX_DICT_WORDS]
+            t = self.tuned() or {}
+            dec = BeamDecoder(lm=self._language_model(), alpha=t.get("alpha", 0.3),
+                              beta=t.get("beta", 1.5), unk_penalty=t.get("unk_penalty", -6.0),
+                              beam=t.get("beam", 16), dictionary=set(words))
+            text = dec.decode(lp)
+            how = (f"beam {dec.beam} + word LM (alpha {dec.alpha}, beta {dec.beta}"
+                   + (", tuned on dev-clean" if t else ", untuned defaults") + ")"
+                   + (f" + {len(dec.dictionary)} dictionary words" if dec.dictionary else ""))
         ms = (time.time() - t0) * 1000
         return {
-            "text": text, "seconds": round(len(x) / sr, 2), "ms": round(ms, 1),
+            "text": text, "greedy": greedy, "decoder": how,
+            "seconds": round(len(x) / sr, 2), "ms": round(ms, 1),
             "realtime": round(len(x) / sr / max(ms / 1000, 1e-9), 1),
             "rate_in": int(sample_rate), "rate_model": sr, "resampled": sample_rate != sr,
             "peak_dbfs": round(20 * math.log10(max(peak, 1e-9)), 1),

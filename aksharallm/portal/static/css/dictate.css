@@ -29,3 +29,5 @@
 }
 #view-dictate .ok { color: var(--good); }
 #view-dictate .bad { color: var(--critical); }
+.dc-dict-field { display: block; margin-top: 0.5rem; min-width: 0; }
+.dc-dict-field textarea { width: 100%; max-width: 100%; box-sizing: border-box; font: inherit; }

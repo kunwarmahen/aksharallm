@@ -18,6 +18,7 @@ against something unarguable:
 from __future__ import annotations
 
 import json
+import math
 import struct
 
 import numpy as np
@@ -376,3 +377,155 @@ def test_the_default_layout_is_pre_norm_and_old_checkpoints_still_load(tmp_path)
     torch.save({"model": old.state_dict(), "asr": shape, "alphabet": vocab.ALPHABET, "stage": "asr"}, p)
     loaded, _ = load_recognizer(p)
     assert loaded.cfg.block_norm and isinstance(loaded.blocks[0].norm, torch.nn.LayerNorm)
+
+
+# ---------------------------------------------------------------------------------------
+# the word language model and the beam search (piece 5)
+# ---------------------------------------------------------------------------------------
+
+
+def _lm(tmp_path, lines):
+    from aksharallm.asr.ngram import TrigramLM
+    p = tmp_path / "lm.txt"
+    p.write_text("\n".join(lines) + "\n")
+    return TrigramLM.build(p, vocab_size=1000, chunk_words=7, progress=None)
+
+
+CORPUS = ["the cat sat on the mat", "the dog sat on the log", "a cat ate the fish",
+          "the cat ate", "san francisco is a city", "the city of san francisco",
+          "i ate turnips and carrots", "turnips and carrots and stew"]
+
+
+def test_kneser_ney_is_a_probability_distribution_in_every_context(tmp_path):
+    """A smoothing bug still yields a plausible-looking number; summing to one does not lie."""
+    lm = _lm(tmp_path, CORPUS)
+    from aksharallm.asr.ngram import BOS
+    for ctx in [("the", "cat"), ("<s>", "<s>"), ("zzz", "the"), ("and", "carrots"), ("san", "zzz")]:
+        u, v = (BOS if c == "<s>" else lm.id(c) for c in ctx)
+        total = sum(math.exp(lm.logprob(u, v, w)) for w in range(lm.V) if w != BOS)
+        assert total == pytest.approx(1.0, abs=1e-9), ctx
+
+
+def test_chunked_counting_equals_one_pass(tmp_path):
+    from aksharallm.asr.ngram import TrigramLM
+    p = tmp_path / "lm.txt"
+    p.write_text("\n".join(CORPUS) + "\n")
+    a = TrigramLM.build(p, vocab_size=1000, chunk_words=3, progress=None)
+    b = TrigramLM.build(p, vocab_size=1000, chunk_words=10**9, progress=None)
+    assert np.array_equal(a.tri_keys, b.tri_keys) and np.array_equal(a.tri_counts, b.tri_counts)
+
+
+def test_continuation_counts_are_what_kneser_ney_is_for(tmp_path):
+    """"francisco" occurs as often as "cat" here, but only ever after "san": its unigram
+    (continuation) estimate must be far smaller — the reason KN beats raw frequency."""
+    lm = _lm(tmp_path, CORPUS + ["san francisco"] * 3)
+    assert lm.uni_cont[lm.id("francisco")] == 1
+    assert lm.uni_cont[lm.id("cat")] >= 2
+
+
+def test_a_saved_lm_scores_identically(tmp_path):
+    from aksharallm.asr.ngram import TrigramLM
+    lm = _lm(tmp_path, CORPUS)
+    lm.save(tmp_path / "x.npz")
+    again = TrigramLM.load(tmp_path / "x.npz")
+    s = "the cat ate turnips and carrots"
+    assert again.sentence_logprob(s.split()) == lm.sentence_logprob(s.split())
+
+
+def _frames(text: str, noise_letter: dict | None = None) -> np.ndarray:
+    """Log-probs that spell `text` one letter per frame with a blank between, optionally with
+    a competing letter at given positions — a hand-built encoder output."""
+    rows = []
+    for i, ch in enumerate(text):
+        r = np.full(vocab.VOCAB_SIZE, -20.0)
+        r[vocab.STOI[ch]] = math.log(0.6 if noise_letter and i in noise_letter else 0.98)
+        if noise_letter and i in noise_letter:
+            r[vocab.STOI[noise_letter[i]]] = math.log(0.38)
+        rows.append(r)
+        b = np.full(vocab.VOCAB_SIZE, -20.0)
+        b[vocab.BLANK] = 0.0
+        rows.append(b)
+    return np.stack(rows)
+
+
+def test_beam_search_without_an_lm_reads_what_the_frames_say():
+    from aksharallm.asr.decode import BeamDecoder
+    assert BeamDecoder(beam=8, beta=0.0).decode(_frames("the cat sat")) == "the cat sat"
+    # a doubled letter needs its blank, and gets it from the frames
+    assert BeamDecoder(beam=8, beta=0.0).decode(_frames("all")) == "all"
+
+
+def test_the_lm_turns_a_phonetic_spelling_into_the_word(tmp_path):
+    """The real error, built by hand: the frames prefer 'k' for the 'c' of carrots."""
+    from aksharallm.asr.decode import BeamDecoder
+    lm = _lm(tmp_path, CORPUS)
+    lp = _frames("turnips and carrots", noise_letter={12: "k"})   # 'c' 0.6 vs 'k' 0.38...
+    lp[24][vocab.STOI["c"]], lp[24][vocab.STOI["k"]] = math.log(0.38), math.log(0.6)  # ...flipped
+    assert BeamDecoder(beam=8, beta=0.0).decode(lp) == "turnips and karrots"
+    assert BeamDecoder(lm=lm, alpha=1.0, beta=0.5, beam=16).decode(lp) == "turnips and carrots"
+
+
+def test_a_dictionary_word_wins_and_its_prefix_bonus_is_refunded_when_unused(tmp_path):
+    """Day-two problem 4. 'shaun' is not in the LM, and its 'h' is heard weakly (the blank is
+    likelier at that frame), so without help the LM writes a word it knows. In the dictionary,
+    'shaun'. And a word that merely *starts* like a dictionary word keeps no bonus."""
+    from aksharallm.asr.decode import BeamDecoder, _State
+    # "met" must be a known word: two unknown words side by side are cheaper fused into one
+    # ("metsaun", one <unk> penalty instead of two), which is what beta exists to resist.
+    lm = _lm(tmp_path, CORPUS + ["i met him", "we met them"])
+    lp = _frames("i met shaun")
+    h = 2 * "i met shaun".index("h")
+    lp[h][vocab.STOI["h"]], lp[h][vocab.BLANK] = math.log(0.4), math.log(0.58)
+    plain = BeamDecoder(lm=lm, alpha=0.8, beta=0.5, beam=16)
+    biased = BeamDecoder(lm=lm, alpha=0.8, beta=0.5, beam=16, dictionary={"Shaun"})
+    # Without the dictionary the LM does what day-two problem 4 describes: the name becomes
+    # the nearest word it knows ("san", from "san francisco").
+    assert plain.decode(lp) == "i met san"
+    assert biased.decode(lp) == "i met shaun"
+    # Two ways to get a prefix bonus and not deserve it: wander off mid-word ("shat"), or END
+    # on a dictionary prefix that is not itself a dictionary word ("sha"). Both leave nothing.
+    for spelt in ("shat ", "sha "):
+        st, st_plain = _State(), _State()
+        for ch in spelt:
+            st, st_plain = biased._extend(st, ch), plain._extend(st_plain, ch)
+        assert st.extra == pytest.approx(st_plain.extra), spelt
+
+
+def test_the_early_unk_penalty_is_charged_exactly_once(tmp_path):
+    """Charged when the letters leave the vocabulary, not again when the word ends — and
+    handed back if the word turns out to be in the dictionary."""
+    from aksharallm.asr.decode import BeamDecoder, _State
+    lm = _lm(tmp_path, CORPUS)
+    early = BeamDecoder(lm=lm, alpha=1.0, beta=0.0, unk_penalty=-5.0, prefix_check=True)
+    late = BeamDecoder(lm=lm, alpha=1.0, beta=0.0, unk_penalty=-5.0, prefix_check=False)
+    for dec in (early, late):
+        st = _State()
+        for ch in "karrots ":
+            st = dec._extend(st, ch)
+        dec.total = st.extra
+    assert early.total == pytest.approx(late.total)
+    # A dictionary word owes no <unk> penalty: charging early and refunding must land exactly
+    # where never charging lands.
+    totals = []
+    for check in (True, False):
+        d = BeamDecoder(lm=lm, alpha=1.0, beta=0.0, unk_penalty=-5.0, dictionary={"karrots"},
+                        prefix_check=check)
+        st = _State()
+        for ch in "karrots ":
+            st = d._extend(st, ch)
+        totals.append(st.extra)
+    assert totals[0] == pytest.approx(totals[1])
+    assert totals[0] > early.total
+
+
+def test_a_dictionary_word_is_never_charged_while_it_is_being_spelt(tmp_path):
+    """Charged-then-refunded is right on paper and fatal in a beam: the charged prefix falls
+    out before the word ends. So no partial of a dictionary word may ever cost <unk>."""
+    from aksharallm.asr.decode import BeamDecoder, _State
+    lm = _lm(tmp_path, CORPUS)
+    d = BeamDecoder(lm=lm, alpha=1.0, beta=0.0, unk_penalty=-20.0, dictionary={"ambrosch"})
+    st, worst = _State(), 0.0
+    for ch in "ambrosch":
+        st = d._extend(st, ch)
+        worst = min(worst, st.extra)
+    assert worst >= 0.0

@@ -5,6 +5,9 @@
     python -m aksharallm.asr eval  asr-libri100 --corpus data/asr/test-clean
     python -m aksharallm.asr silence asr-libri100              # day-two problem 1
     python -m aksharallm.asr transcribe asr-libri100 me.wav
+    python -m aksharallm.asr lm build                          # word trigram LM (piece 5)
+    python -m aksharallm.asr tune asr-libri100                 # alpha/beta on dev-clean only
+    python -m aksharallm.asr eval asr-libri100 --decoder beam --lm data/asr/lm/trigram.npz
 
 A checkpoint argument is a path to a `.pt`, or a run name (`asr-libri100` means
 `checkpoints/asr-libri100/ckpt_best.pt`).
@@ -61,7 +64,34 @@ def cmd_pack(args) -> int:
     return 0
 
 
+def _decoder(args, lm, dictionary=()):
+    from .decode import BeamDecoder
+    return BeamDecoder(lm=lm, alpha=args.alpha, beta=args.beta, beam=args.beam,
+                       unk_penalty=args.unk_penalty, dictionary=set(dictionary))
+
+
+def _decode(lps, kind: str, dec=None, workers: int = 8) -> list[str]:
+    from .ctc import greedy_decode
+    from .decode import decode_many
+    from . import vocab
+    if kind == "greedy":
+        return [" ".join(vocab.decode(greedy_decode(torch.from_numpy(x)[None],
+                                                    torch.tensor([len(x)]))[0]).split())
+                for x in lps]
+    return decode_many(dec, lps, workers)
+
+
+def _load_lm(path):
+    from .ngram import TrigramLM
+    if not path:
+        return None
+    lm = TrigramLM.load(path)
+    print(f"lm           {path}: {lm.describe()}")
+    return lm
+
+
 def cmd_eval(args) -> int:
+    from .measure import log_probs, name_recall
     path = resolve(args.checkpoint)
     device = _device(args.device)
     model, blob = load_recognizer(path, device)
@@ -70,23 +100,39 @@ def cmd_eval(args) -> int:
     corpus = Utterances(args.corpus, split=args.split, val_clips=args.val_clips or 0,
                         max_seconds=args.max_seconds,
                         feasible=feasibility(model.cfg, model.cfg.sample_rate), limit=args.limit)
+    lm = _load_lm(args.lm) if args.decoder == "beam" else None
+    dictionary = set()
+    if args.dict:
+        dictionary = {w.strip().lower() for w in Path(args.dict).read_text().split() if w.strip()}
     t0 = time.time()
-    hyps = []
-    for i in range(0, len(corpus), args.batch):
-        chunk = corpus.utts[i : i + args.batch]
-        hyps += transcribe(model, [corpus.wave(u) for u in chunk], device, batch=args.batch)
-    dt = time.time() - t0
+    lps = log_probs(model, [corpus.wave(u) for u in corpus.utts], device, batch=args.batch)
+    t_enc = time.time() - t0
+    dec = _decoder(args, lm, dictionary) if args.decoder == "beam" else None
+    t0 = time.time()
+    hyps = _decode(lps, args.decoder, dec, args.workers)
+    t_dec = time.time() - t0
+    dt = t_enc + t_dec
     s = score([(u.speaker, u.text, h) for u, h in zip(corpus.utts, hyps, strict=True)])
     sil = silence_check(model, device)
     pm = wer_interval(s["wer"], s["words"])
+    how = "greedy, no language model" if args.decoder == "greedy" else (
+        f"beam {args.beam}" + (f", LM a={args.alpha} b={args.beta} unk={args.unk_penalty}" if lm else ", no LM")
+        + (f", dictionary of {len(dictionary)}" if dictionary else ""))
     print(f"checkpoint   {path}  (step {blob.get('step')})")
     print(f"corpus       {args.corpus}: {s['utts']:,} utterances, {s['words']:,} words, "
           f"{corpus.seconds / 3600:.2f} h" + (f"  (dropped {dict(corpus.dropped)})" if corpus.dropped else ""))
-    print(f"WER          {s['wer'] * 100:.2f}%  ± {pm * 100:.2f}   (greedy, no language model)")
+    print(f"WER          {s['wer'] * 100:.2f}%  ± {pm * 100:.2f}   ({how})")
     print(f"CER          {s['cer'] * 100:.2f}%")
-    print(f"speed        {corpus.seconds / max(dt, 1e-9):.0f}x real time on {device}")
+    print(f"speed        {corpus.seconds / max(dt, 1e-9):.0f}x real time on {device} "
+          f"(encoder {t_enc:.1f}s, decoder {t_dec:.1f}s)")
     print(f"silence      {sil['chars']} characters written on {sil['clips']} clips with no speech"
           + ("  <- should be 0" if sil["chars"] else ""))
+    names = None
+    if lm is not None:
+        targets = {w for u in corpus.utts for w in u.text.split() if w not in lm.index}
+        names = name_recall([u.text for u in corpus.utts], hyps, targets)
+        print(f"names        {names['recalled']}/{names['said']} words the LM has never seen came out "
+              f"right ({names['recall']:.0%}); {names['false_alarms']} written where not said")
     if len(s["speakers"]) > 1:
         rates = sorted(v["wer"] for v in s["speakers"].values())
         print(f"speakers     {len(rates)}: best {rates[0] * 100:.1f}%  median "
@@ -100,16 +146,82 @@ def cmd_eval(args) -> int:
         RESULTS.mkdir(parents=True, exist_ok=True)
         run = path.parent.name
         tag = Path(args.corpus).name + ("-val" if args.split == "val" else "")
-        out = RESULTS / f"{run}-step{blob.get('step')}-{tag}.json"
+        dtag = "" if args.decoder == "greedy" else ("-beam-lm" if lm else "-beam") + ("-dict" if dictionary else "")
+        out = RESULTS / f"{run}-step{blob.get('step')}-{tag}{dtag}.json"
         out.write_text(json.dumps({
             "kind": "asr_eval", "checkpoint": str(path), "run": run, "step": blob.get("step"),
             "corpus": str(args.corpus), "split": args.split, "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-            "decoder": "greedy", "seconds": corpus.seconds, "dropped": dict(corpus.dropped),
+            "decoder": args.decoder, "decoder_desc": how, "lm": args.lm if lm else None,
+            "alpha": args.alpha if lm else None, "beta": args.beta if lm else None,
+            "unk_penalty": args.unk_penalty if lm else None, "beam": args.beam if dec else None,
+            "dictionary_size": len(dictionary), "names": names,
+            "seconds": corpus.seconds, "dropped": dict(corpus.dropped),
             "wer": s["wer"], "wer_pm": pm, "cer": s["cer"], "words": s["words"], "utts": s["utts"],
             "speakers": s["speakers"], "worst_speakers": s["worst_speakers"], "silence": sil,
             "examples": [{"ref": u.text, "hyp": h} for u, h in list(zip(corpus.utts, hyps, strict=True))[:20]],
         }, indent=1))
         print(f"written      {out}")
+    return 0
+
+
+def cmd_lm_build(args) -> int:
+    from .ngram import TrigramLM, verbatim_overlap
+    lm = TrigramLM.build(args.corpus, vocab_size=args.vocab_size, max_words=args.max_words,
+                         every=args.every)
+    out = lm.save(args.out)
+    print(f"built        {lm.describe()}  in {lm.meta['seconds']:.0f}s")
+    print(f"saved        {out}")
+    for c in args.check:
+        u = Utterances(c, max_seconds=1e9)
+        ppl = lm.perplexity([x.text for x in u.utts])
+        lm.meta.setdefault("perplexity", {})[Path(c).name] = ppl
+        print(f"perplexity   {Path(c).name}: {ppl['perplexity']:.1f}  (OOV {ppl['oov_rate']:.2%} of "
+              f"{ppl['words']:,} words)")
+        if args.overlap:
+            ov = verbatim_overlap(args.corpus, [x.text for x in u.utts], args.max_words)
+            lm.meta.setdefault("overlap", {})[Path(c).name] = ov
+            print(f"overlap      {ov['found']}/{ov['checked']} of {Path(c).name}'s sentences (5+ words) "
+                  f"appear verbatim in the LM text ({ov['rate']:.2%})")
+    lm.save(args.out)
+    return 0
+
+
+def cmd_tune(args) -> int:
+    """Grid over alpha, beta and the <unk> penalty on a VALIDATION corpus. The encoder runs
+    once; each grid point is only a beam search."""
+    from .measure import log_probs
+    if "test" in Path(args.corpus).name:
+        raise SystemExit("tune on dev, never on test: the test number has to be one the weights "
+                         "were not chosen on")
+    path = resolve(args.checkpoint)
+    device = _device(args.device)
+    model, blob = load_recognizer(path, device)
+    lm = _load_lm(args.lm)
+    corpus = Utterances(args.corpus, max_seconds=40.0, limit=args.limit,
+                        feasible=feasibility(model.cfg, model.cfg.sample_rate))
+    lps = log_probs(model, [corpus.wave(u) for u in corpus.utts], device)
+    refs = [(u.speaker, u.text) for u in corpus.utts]
+    base = score([(sp, r, h) for (sp, r), h in zip(refs, _decode(lps, "greedy"), strict=True)])["wer"]
+    print(f"greedy       {base * 100:.2f}% on {len(refs)} utterances of {args.corpus}")
+    rows = []
+    from .decode import BeamDecoder
+    for a in args.alphas:
+        for b in args.betas:
+            for k in args.unk_penalties:
+                dec = BeamDecoder(lm=lm, alpha=a, beta=b, beam=args.beam, unk_penalty=k)
+                wer = score([(sp, r, h) for (sp, r), h in
+                             zip(refs, _decode(lps, "beam", dec, args.workers), strict=True)])["wer"]
+                rows.append({"alpha": a, "beta": b, "unk_penalty": k, "wer": wer})
+                print(f"  alpha {a:<4} beta {b:<4} unk {k:<5}  WER {wer * 100:.2f}%")
+    best = min(rows, key=lambda r: r["wer"])
+    print(f"best         alpha {best['alpha']} beta {best['beta']} unk {best['unk_penalty']}: "
+          f"{best['wer'] * 100:.2f}%  (greedy {base * 100:.2f}%)")
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    out = RESULTS / f"tune-{path.parent.name}-step{blob.get('step')}-{Path(args.corpus).name}.json"
+    out.write_text(json.dumps({"kind": "asr_tune", "checkpoint": str(path), "lm": args.lm,
+                               "corpus": args.corpus, "utts": len(refs), "beam": args.beam,
+                               "greedy_wer": base, "grid": rows, "best": best}, indent=1))
+    print(f"written      {out}")
     return 0
 
 
@@ -168,7 +280,45 @@ def main(argv=None) -> int:
     s.add_argument("--show", type=int, default=3, help="print this many ref/hyp pairs")
     s.add_argument("--device", default=None)
     s.add_argument("--no-write", action="store_true", help="do not write logs/asr/*.json")
+    s.add_argument("--decoder", choices=["greedy", "beam"], default="greedy")
+    s.add_argument("--lm", default=None, help="a word LM from `asr lm build` (beam only)")
+    s.add_argument("--alpha", type=float, default=0.5, help="LM weight (tune on dev)")
+    s.add_argument("--beta", type=float, default=1.0, help="per-word bonus (tune on dev)")
+    s.add_argument("--unk-penalty", type=float, default=-6.0)
+    s.add_argument("--beam", type=int, default=16)
+    s.add_argument("--dict", default=None, help="a personal dictionary: one word per line")
+    s.add_argument("--workers", type=int, default=8)
     s.set_defaults(fn=cmd_eval)
+
+    s = sub.add_parser("lm", help="build the word language model the beam search uses")
+    lsub = s.add_subparsers(dest="lm_cmd", required=True)
+    b = lsub.add_parser("build", help="count a trigram Kneser-Ney LM from a text corpus")
+    b.add_argument("--corpus", default="data/asr/lm/librispeech-lm-norm.txt.gz")
+    b.add_argument("--out", default="data/asr/lm/trigram.npz")
+    b.add_argument("--vocab-size", type=int, default=200_000)
+    b.add_argument("--every", type=int, default=1,
+                   help="keep one line in N, evenly across the file. Use this to subsample: "
+                        "the LibriSpeech LM text is sorted alphabetically")
+    b.add_argument("--max-words", type=int, default=None,
+                   help="stop after N words -- a PREFIX, so biased on a sorted corpus")
+    b.add_argument("--check", nargs="*", default=["data/asr/dev-clean"],
+                   help="packed corpora to report perplexity on")
+    b.add_argument("--overlap", action="store_true",
+                   help="also count check sentences found verbatim in the LM text (another pass)")
+    b.set_defaults(fn=cmd_lm_build)
+
+    s = sub.add_parser("tune", help="choose alpha / beta / unk penalty on a dev corpus")
+    s.add_argument("checkpoint")
+    s.add_argument("--lm", default="data/asr/lm/trigram.npz")
+    s.add_argument("--corpus", default="data/asr/dev-clean")
+    s.add_argument("--limit", type=int, default=800)
+    s.add_argument("--alphas", type=float, nargs="+", default=[0.3, 0.5, 0.7, 1.0])
+    s.add_argument("--betas", type=float, nargs="+", default=[0.0, 1.0, 2.0])
+    s.add_argument("--unk-penalties", type=float, nargs="+", default=[-4.0, -8.0])
+    s.add_argument("--beam", type=int, default=16)
+    s.add_argument("--workers", type=int, default=12)
+    s.add_argument("--device", default=None)
+    s.set_defaults(fn=cmd_tune)
 
     s = sub.add_parser("silence", help="what it writes on audio with no speech (should be nothing)")
     s.add_argument("checkpoint")
