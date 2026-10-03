@@ -216,7 +216,9 @@ scripts/audio.sh asr-libri100</pre>
       <p class="panel-note">
         Every other number on this page is audiobooks read by strangers. Read these thirty
         sentences once each and your voice becomes a corpus like any other — scored with the same
-        WER, beside test-clean. A bad take (a cough, a door) can simply be recorded again.
+        WER, beside test-clean. <b>One sentence per recording</b>: press, read just the sentence
+        shown, press again — it moves to the next by itself, and a take that runs much longer
+        than its sentence is refused. A bad take (a cough, a door) can simply be recorded again.
         Recordings stay on this machine, in <code>data/asr/my-voice/</code>.
       </p>
       <p id="mv-progress" class="panel-note"></p>
@@ -227,11 +229,13 @@ scripts/audio.sh asr-libri100</pre>
           <button id="mv-rec" class="primary" type="button">● Record this sentence</button>
           <button id="mv-prev" type="button">← Previous</button>
           <button id="mv-next" type="button">Next →</button>
+          <button id="mv-del" type="button">Delete this take</button>
           <span id="mv-status" class="dim"></span>
         </div>
       </div>
       <div class="row">
         <button id="mv-score" type="button">Score my voice</button>
+        <button id="mv-clear" type="button">Delete all my recordings…</button>
         <span id="mv-score-note" class="dim"></span>
       </div>
       <pre class="au-cmd">python -m aksharallm.asr myvoice record     # the same, from a terminal</pre>

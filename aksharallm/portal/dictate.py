@@ -223,6 +223,14 @@ class Dictation:
         st["results"] = mine[:5]
         return st
 
+    def myvoice_delete(self, prompt_id: str | None) -> dict:
+        from ..asr import myvoice
+        try:
+            myvoice.remove(prompt_id or None, self.root / myvoice.CORPUS)
+        except ValueError as e:
+            raise DictationError(str(e)) from e
+        return self.myvoice()
+
     def myvoice_save(self, prompt_id: str, pcm_b64: str, sample_rate: int) -> dict:
         from ..asr import myvoice
         x = self._pcm(pcm_b64, sample_rate, 30.0)

@@ -548,7 +548,7 @@ updating the code, `scripts/portal.sh --restart`).
 | `dictate clean` | Dictate → *Try the cleanup without speaking* |
 | `asr fetch` / `pack` (test-other, train-clean-360) | Run it from here → Speech data |
 | `asr noise fetch`, `asr robust` | How noise hurts it → **Download the noise** / **Run the noise test** |
-| `asr myvoice record` | Your voice, as a test set → **Record this sentence**; **Score my voice** runs `asr eval` on it |
+| `asr myvoice record` / `clear` | Your voice, as a test set → **Record this sentence** (one sentence per take); **Delete this take** / **Delete all my recordings…**; **Score my voice** runs `asr eval` on it |
 | `dictate stream-eval` | How noise hurts it → The live preview, measured → **Measure it** |
 | `scripts/audio.sh asr-libri460` | Dashboard: pick **asr-libri460**, Start |
 | `sudo apt install xdotool xclip` | not runnable — shown beside each missing tool |
@@ -633,7 +633,15 @@ ordinary packed corpus, `data/asr/my-voice/`, speaker `me`. So `asr eval`, `asr 
 The prompts are versioned (`PROMPTS_VERSION`) for the same reason a benchmark's prompt format
 is: a WER on different sentences is a different test. They are written in the recogniser's
 alphabet (numbers as words), because the reference must be what a perfect transcript says. A
-second take of a sentence *replaces* the first. Record them in the portal (*Your voice, as a
+second take of a sentence *replaces* the first.
+
+**One sentence per recording, and the code enforces it.** The first real session read six or
+seven sentences into each take until the 30 s limit stopped it — the natural thing to do, and
+fatal to the measurement: each take was stored against *one* sentence's reference, so every
+other sentence in it would have scored as inserted words and made the recogniser look terrible
+on that voice. A take longer than `4 s + words / 1.3` (a slow reader plus pauses; ~12 s for a
+ten-word sentence) is now refused with the reason, the recorder stops itself at that limit, and
+takes can be deleted one at a time or all at once (portal buttons, `asr myvoice clear [--id]`). Record them in the portal (*Your voice, as a
 test set*) or with `python -m aksharallm.asr myvoice record`; recordings stay in `data/`, which
 is never committed.
 

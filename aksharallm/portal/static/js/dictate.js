@@ -71,7 +71,9 @@ const KINDS = {
          status: (t, k) => status(t, k), limit: () => dc.maxSeconds,
          send: (all, rate) => send(all, rate, 'your voice') },
   myvoice: { btn: '#mv-rec', idle: '● Record this sentence', live: '■ Recording — press when done',
-             status: (t, k) => mvStatus(t, k), limit: () => 30,
+             // The sentence's own limit, plus a little, so an over-long take stops itself
+             // and is refused by the server with the reason, rather than running to 30 s.
+             status: (t, k) => mvStatus(t, k), limit: () => (mv.prompts[mv.i]?.max_seconds || 12) + 1,
              send: (all, rate) => saveMyVoice(all, rate) },
   dictate: { btn: '#dc-go', idle: '● Start dictating', live: '■ Listening — press to finish',
              status: (t, k) => goStatus(t, k), limit: () => dc.maxDictate,
@@ -358,6 +360,8 @@ function renderMyVoice(st, keepIndex = false) {
     $('#mv-id').textContent = `${mv.i + 1} of ${mv.prompts.length}${p.recorded ? ` · recorded (${p.seconds} s) — record again to replace it` : ''}`;
     $('#mv-text').textContent = p.text;
   }
+  $('#mv-del').disabled = !(p && p.recorded);
+  $('#mv-clear').disabled = !st.recorded;
   $('#mv-prev').disabled = mv.i === 0;
   $('#mv-next').disabled = mv.i >= mv.prompts.length - 1;
   $('#mv-score').disabled = !st.recorded;
@@ -744,6 +748,15 @@ registerTab('dictate', {
       await loadPersonal();
     };
     $('#mv-rec').onclick = () => (dc.rec ? stopRecording() : startRecording('myvoice'));
+    $('#mv-del').onclick = async () => {
+      const p = mv.prompts[mv.i];
+      if (!p) return;
+      try { renderMyVoice(await post('/api/dictate/myvoice-delete', { prompt: p.id }), true); mvStatus('deleted'); } catch (e) { mvStatus(e.message, 'warn'); }
+    };
+    $('#mv-clear').onclick = async () => {
+      if (!window.confirm('Delete every recording of your voice? This cannot be undone.')) return;
+      try { renderMyVoice(await post('/api/dictate/myvoice-delete', { all: true })); mvStatus('all deleted'); } catch (e) { mvStatus(e.message, 'warn'); }
+    };
     $('#mv-prev').onclick = () => { mv.i = Math.max(0, mv.i - 1); loadMyVoice(true); };
     $('#mv-next').onclick = () => { mv.i = Math.min(mv.prompts.length - 1, mv.i + 1); loadMyVoice(true); };
     $('#dc-daemon-start').onclick = () => desktop('start');

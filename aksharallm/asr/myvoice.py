@@ -102,7 +102,7 @@ def status(corpus: str | Path = CORPUS) -> dict:
     have = {n.rsplit(".", 1)[0] for n in clips}
     ps = prompts()
     return {"corpus": str(corpus), "version": PROMPTS_VERSION,
-            "prompts": [{**p, "recorded": p["id"] in have,
+            "prompts": [{**p, "recorded": p["id"] in have, "max_seconds": round(max_seconds(p["id"]), 1),
                          "seconds": round(len(clips.get(p["id"] + ".wav", [])) / 16_000, 1)}
                         for p in ps],
             "recorded": len(have & {p["id"] for p in ps}), "total": len(ps),
@@ -111,7 +111,6 @@ def status(corpus: str | Path = CORPUS) -> dict:
 
 def save(prompt_id: str, x: np.ndarray, sr: int, corpus: str | Path = CORPUS) -> dict:
     """Store one reading of one prompt (replacing an earlier take) and rewrite the corpus."""
-    from ..audio.dataset import Manifest
     from ..audio.io import resample
     by_id = {p["id"]: p["text"] for p in prompts()}
     if prompt_id not in by_id:
@@ -120,14 +119,53 @@ def save(prompt_id: str, x: np.ndarray, sr: int, corpus: str | Path = CORPUS) ->
     if sr != 16_000:
         x = resample(x, int(sr), 16_000).astype(np.float32)
     secs = len(x) / 16_000
-    if not 0.5 <= secs <= 30:
-        raise ValueError(f"{secs:.1f} s — read the sentence once, between 0.5 and 30 seconds")
+    words = len(by_id[prompt_id].split())
+    if secs < 0.5:
+        raise ValueError(f"{secs:.1f} s — that is too short to be the sentence")
+    if secs > max_seconds(prompt_id):
+        # The first real session read six sentences into each 30 s take; every one was stored
+        # against ONE reference, which would have scored the extra sentences as insertions
+        # and made a good recogniser look terrible on this voice. Refused, not stored.
+        raise ValueError(f"{secs:.0f} s for a {words}-word sentence — that sounds like more than "
+                         "one. Read just this sentence, then stop; it moves to the next by itself")
     corpus = Path(corpus)
     corpus.mkdir(parents=True, exist_ok=True)
     clips, texts = _load(corpus)
     name = prompt_id + ".wav"
     clips[name] = (np.clip(x, -1, 1) * 32767).astype("<i2")
     texts[name] = by_id[prompt_id].upper()       # LibriSpeech's case, which Utterances normalises
+    return _write(corpus, clips, texts)
+
+
+def max_seconds(prompt_id: str) -> float:
+    """The longest take accepted for a prompt: generous slow reading (~1.3 words/s, people
+    speak at 2-3) plus 4 s for the gaps before and after. A 10-word sentence allows ~11.7 s."""
+    words = len(dict((p["id"], p["text"]) for p in prompts())[prompt_id].split())
+    return 4.0 + words / 1.3
+
+
+def remove(prompt_id: str | None = None, corpus: str | Path = CORPUS) -> dict:
+    """Delete one take, or every take (`prompt_id=None`)."""
+    import shutil
+    corpus = Path(corpus)
+    if prompt_id is None:
+        if corpus.is_dir():
+            shutil.rmtree(corpus)
+        return status(corpus)
+    clips, texts = _load(corpus)
+    name = prompt_id + ".wav"
+    if name not in clips:
+        raise ValueError(f"{prompt_id} has no recording")
+    del clips[name]
+    texts.pop(name, None)
+    if not clips:
+        shutil.rmtree(corpus)
+        return status(corpus)
+    return _write(corpus, clips, texts)
+
+
+def _write(corpus: Path, clips: dict, texts: dict) -> dict:
+    from ..audio.dataset import Manifest
     names = sorted(clips)
     offsets, total = [0], 0
     with open(corpus / "audio.bin.tmp", "wb") as f:

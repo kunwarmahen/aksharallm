@@ -566,3 +566,25 @@ def test_a_recogniser_never_borrows_another_ones_tuned_weights(tmp_path):
     assert best_tuning(tmp_path, "data/asr/lm/trigram.npz", "small-ear")["alpha"] == 0.8
     assert best_tuning(tmp_path, "data/asr/lm/trigram.npz", "big-ear")["alpha"] == 0.5
     assert best_tuning(tmp_path, "data/asr/lm/trigram.npz", "never-tuned") is None
+
+
+def test_a_take_with_several_sentences_in_it_is_refused(tmp_path):
+    """The first real session read six sentences into each 30 s take. Stored against one
+    reference, the other five would have scored as insertions."""
+    from aksharallm.asr import myvoice
+    long_take = np.zeros(16_000 * 30, np.float32) + 0.01
+    with pytest.raises(ValueError, match="more than"):
+        myvoice.save("me-v1-006", long_take, 16_000, tmp_path)
+    assert myvoice.status(tmp_path)["recorded"] == 0
+    assert myvoice.max_seconds("me-v1-006") < 15
+
+
+def test_takes_can_be_deleted_one_at_a_time_or_all(tmp_path):
+    from aksharallm.asr import myvoice
+    x = (0.1 * np.sin(np.arange(16000 * 2) / 5.0)).astype(np.float32)
+    for pid in ("me-v1-000", "me-v1-001"):
+        myvoice.save(pid, x, 16_000, tmp_path)
+    assert myvoice.remove("me-v1-000", tmp_path)["recorded"] == 1
+    with pytest.raises(ValueError):
+        myvoice.remove("me-v1-000", tmp_path)
+    assert myvoice.remove(None, tmp_path)["recorded"] == 0 and not tmp_path.exists()
