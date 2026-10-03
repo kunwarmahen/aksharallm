@@ -648,6 +648,41 @@ step budget sized to it (120,000 steps, ~29 passes, against asr-libri100's ~66 p
 schedule shape, so the difference between the two checkpoints is what 4.6× more speech buys,
 measured on test-clean, test-other, the noise table and your voice.
 
+**Measured (2026-10-03).** 120,000 steps, 2 h 56 min of training on the 3090 (0.148 s/step,
+2,650 audio-seconds per second — faster per step than the estimate). The beam was re-tuned on
+dev-clean for this model, and the optimum moved: **α 0.8 → 0.5, β 2.0 → 1.0** — a better ear
+needs less of the language model's opinion. Then each test set was scored once:
+
+| | asr-libri100 (100 h) | **asr-libri460 (460 h)** |
+|---|---|---|
+| dev-clean, greedy (best during training) | 14.4% | **8.9%** |
+| test-clean, greedy | 12.77% | **8.35%** |
+| test-clean, beam + LM | 7.88% | **5.25%** |
+| test-clean, + dictionary | 7.68% | **4.95%** |
+| test-clean, worst speaker (beam) | 15.5% | **11.0%** |
+| test-other, greedy | 32.46% | **23.37%** |
+| test-other, beam + LM | 24.63% | **16.86%** |
+| test-other, worst speaker (beam) | 53.7% | **41.2%** |
+| real noise, mean at 0 dB | 27.0% | **21.4%** |
+| café at 0 dB | 64.1% | **56.4%** |
+| unseen words, with dictionary | 50% | **71%** |
+| corrections replay, 1st → 2nd → 6th time | 8 → 54 → 60% | **0 → 69 → 100%** |
+| live preview, settled words re-spelt | 3.7% | **1.85%** |
+| characters on silence · words invented by cleanup | 0 · 0 | 0 · 0 |
+
+Every row improved, and one of them settles an argument this chapter made earlier: the
+corrections curve plateaued near 60% *because a dictionary can only favour a word whose
+letters the ear roughly heard*. A better ear moved it to ~90% with no change to the dictionary
+code. test-other is still three times test-clean: 460 h of *clean* speech helps everywhere and
+does not close that gap — noisy training audio is the lever for that.
+
+**A bug the second tuned model exposed.** Tuned weights were looked up as "the best dev
+result for this LM", without asking which recogniser had been tuned. Harmless with one tuned
+model; with two, the 100 h model would have decoded with the 460 h model's weights. The
+lookup (`dictate/pipeline.py` `best_tuning`) now requires the run, and an untuned run says
+"untuned" instead of borrowing. `configs/portal.yaml`'s `dictate.recognizer` is now
+`asr-libri460`.
+
 Getting the data costs disk, so the order matters: the archive is 23 GB, extracted FLAC another
 23 GB, and the packed corpus ~42 GB (16-bit, like train-clean-100's 11 GB for 100 h). Delete the
 archive once extracted and the FLAC once packed, and the peak is ~64 GB and the end state

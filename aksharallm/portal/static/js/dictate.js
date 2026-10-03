@@ -585,11 +585,12 @@ async function load() {
   if (!res.lm) $('#dc-decoder').value = 'greedy';
   $('#dc-lm-note').textContent = !res.lm
     ? 'beam + word LM is off: build the LM first — python -m aksharallm.asr lm build'
-    : (res.tuned
-      ? `beam uses alpha ${res.tuned.alpha}, beta ${res.tuned.beta}, unk ${res.tuned.unk_penalty} — `
-        + `chosen on dev-clean (${res.tuned.file}), where it took WER from `
-        + `${pct(res.tuned.greedy_wer)} to ${pct(res.tuned.wer)}`
-      : 'beam uses untuned defaults — run python -m aksharallm.asr tune <run> to choose them on dev-clean');
+    : ((t) => (t
+      ? `beam uses alpha ${t.alpha}, beta ${t.beta}, unk ${t.unk_penalty} — `
+        + `chosen for ${t.run} on dev-clean (${t.file}), where it took WER from `
+        + `${pct(t.greedy_wer)} to ${pct(t.wer)}`
+      : `beam uses untuned defaults for this recogniser — tune it: python -m aksharallm.asr tune <run>`))(
+      (res.tuned || {})[(dc.ckpt || '').split('/').slice(-2, -1)[0]]);
   $('#dc-silence').disabled = !cks.length;
   renderResults(res.results || []);
   renderChecks(res);
@@ -713,7 +714,8 @@ function wireJobs() {
 
 registerTab('dictate', {
   async open() {
-    $('#dc-ckpt').onchange = (e) => { dc.ckpt = e.target.value; };
+    // The tuned weights shown depend on which recogniser is picked: redraw on change.
+    $('#dc-ckpt').onchange = (e) => { dc.ckpt = e.target.value; load(); };
     const btn = $('#dc-rec');
     // Hold-to-talk with the mouse, a finger, or the space bar.
     btn.onpointerdown = (e) => { e.preventDefault(); startRecording('lab'); };

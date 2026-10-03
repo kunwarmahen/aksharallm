@@ -158,11 +158,14 @@ class Dictation:
                         "step": step, "val_wer": wer, "silence_chars": silence})
         return out
 
-    def tuned(self) -> dict | None:
-        """The weights the best `asr tune` chose on dev-clean, or None. The beam option uses
-        these rather than defaults: alpha and beta are a property of a model + LM pair."""
+    def tuned(self, run: str | None) -> dict | None:
+        """The weights the best `asr tune` of THIS run chose on dev-clean, or None. Alpha and
+        beta are a property of a model + LM pair, so a run never borrows another's."""
         from ..dictate.pipeline import best_tuning
-        return best_tuning(self.root, LM_PATH)
+        return best_tuning(self.root, LM_PATH, run)
+
+    def tuned_by_run(self) -> dict:
+        return {r: t for r in {c["run"] for c in self.checkpoints()} if (t := self.tuned(r))}
 
     def _latest(self, kind: str, pattern: str) -> dict | None:
         best = None
@@ -241,7 +244,7 @@ class Dictation:
                 "device": device, "device_reason": why, "max_seconds": MAX_SECONDS,
                 "max_dictate_seconds": MAX_DICTATE_SECONDS,
                 "lm": str(LM_PATH) if (self.root / LM_PATH).is_file() else None,
-                "tuned": self.tuned(), "daytwo": self.daytwo(), "punct": self.punct_eval(),
+                "tuned": self.tuned_by_run(), "daytwo": self.daytwo(), "punct": self.punct_eval(),
                 "robust": self.robust(), "noise": self.noise_info(), "stream": self.stream_info(),
                 "pipeline": self.pipeline_info()}
 
@@ -510,7 +513,7 @@ class Dictation:
             if not words:
                 # Nothing typed: the personal dictionary the corrections built.
                 words = sorted(self.dictator().personal.dictionary())[:MAX_DICT_WORDS]
-            t = self.tuned() or {}
+            t = self.tuned(Path(checkpoint).parent.name) or {}
             dec = BeamDecoder(lm=self._language_model(), alpha=t.get("alpha", 0.3),
                               beta=t.get("beta", 1.5), unk_penalty=t.get("unk_penalty", -6.0),
                               beam=t.get("beam", 16), dictionary=set(words))
@@ -741,7 +744,7 @@ class AsrJobs:
             limit = str(int(self._num(spec.get("limit", 400), 20, 3000, "limit")))
             argv = ["robust", ckpt, "--corpus", corpus, "--limit", limit, "--device", device]
             if (self.root / LM_PATH).is_file():
-                t = self.d.tuned() or {}
+                t = self.d.tuned(Path(ckpt).parent.name) or {}
                 argv += ["--decoder", "beam", "--alpha", f"{t.get('alpha', 0.8):g}",
                          "--beta", f"{t.get('beta', 2.0):g}",
                          "--unk-penalty", f"{t.get('unk_penalty', -24.0):g}"]
@@ -761,7 +764,7 @@ class AsrJobs:
         if spec.get("decoder") == "beam":
             if not (self.root / LM_PATH).is_file():
                 raise DictationError("no word LM yet — build it first")
-            t = self.d.tuned() or {}
+            t = self.d.tuned(Path(ckpt).parent.name) or {}
             argv += ["--decoder", "beam", "--lm", str(LM_PATH),
                      "--alpha", self._num(spec.get("alpha", t.get("alpha", 0.8)), 0, 5, "alpha"),
                      "--beta", self._num(spec.get("beta", t.get("beta", 2.0)), -5, 20, "beta"),

@@ -550,3 +550,19 @@ def test_portal_jobs_cover_the_noise_test(tmp_path):
         jobs.command({"kind": "robust", "checkpoint": "x"})
     with pytest.raises(DictationError, match="id"):
         d.stream("../x", "", 16000)
+
+
+def test_a_recogniser_never_borrows_another_ones_tuned_weights(tmp_path):
+    """Alpha and beta belong to a model + LM pair. With one tuned model this could not go
+    wrong; with two, the 100 h model silently decoded with the 460 h model's weights."""
+    import json as _json
+    from aksharallm.dictate.pipeline import best_tuning
+    d = tmp_path / "logs/asr"
+    d.mkdir(parents=True)
+    for run, a, wer in (("small-ear", 0.8, 0.075), ("big-ear", 0.5, 0.046)):
+        (d / f"tune-{run}.json").write_text(_json.dumps({
+            "checkpoint": f"checkpoints/{run}/ckpt_best.pt", "lm": "data/asr/lm/trigram.npz",
+            "best": {"alpha": a, "beta": 1.0, "unk_penalty": -24.0, "wer": wer}}))
+    assert best_tuning(tmp_path, "data/asr/lm/trigram.npz", "small-ear")["alpha"] == 0.8
+    assert best_tuning(tmp_path, "data/asr/lm/trigram.npz", "big-ear")["alpha"] == 0.5
+    assert best_tuning(tmp_path, "data/asr/lm/trigram.npz", "never-tuned") is None

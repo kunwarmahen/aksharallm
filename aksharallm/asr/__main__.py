@@ -247,7 +247,7 @@ def cmd_daytwo(args) -> int:
     if lm is None:
         raise SystemExit("daytwo needs the word LM (names and corrections are LM questions): "
                          "python -m aksharallm.asr lm build")
-    t = best_tuning(Path.cwd(), args.lm) or {}
+    t = best_tuning(Path.cwd(), args.lm, path.parent.name) or {}
     tuning = {"alpha": args.alpha if args.alpha is not None else t.get("alpha", 0.8),
               "beta": args.beta if args.beta is not None else t.get("beta", 2.0),
               "unk_penalty": args.unk_penalty if args.unk_penalty is not None else t.get("unk_penalty", -24.0),

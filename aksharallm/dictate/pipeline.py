@@ -91,8 +91,14 @@ class Settings:
         return cls(**raw)
 
 
-def best_tuning(root: str | Path, lm_path: str | Path) -> dict | None:
-    """The lowest dev WER any `asr tune` run found for this LM, or None."""
+def best_tuning(root: str | Path, lm_path: str | Path, run: str | None) -> dict | None:
+    """The lowest dev WER `asr tune` found for THIS recogniser run with this LM, or None.
+
+    `run` is required, not optional: α and β belong to a model + LM pair. The first version
+    matched on the LM alone, which was harmless while one recogniser had been tuned and wrong
+    the day a second was — the 100 h model would have decoded with the 460 h model's weights
+    (a better ear wants a *weaker* LM: α 0.8 → 0.5), and nothing would have said so. A run
+    that was never tuned gets None, and every caller says "untuned" rather than borrowing."""
     best = None
     for p in sorted((Path(root) / "logs/asr").glob("tune-*.json")):
         try:
@@ -101,11 +107,13 @@ def best_tuning(root: str | Path, lm_path: str | Path) -> dict | None:
             continue
         if Path(d.get("lm") or "").name != Path(lm_path).name or not d.get("best"):
             continue
+        if Path(d.get("checkpoint") or "").parent.name != run:
+            continue
         # The best across every tuning run -- not "the newest file", which a narrower
         # follow-up grid would win just by being written last.
         if best is None or d["best"]["wer"] < best["wer"]:
             best = {**d["best"], "beam": d.get("beam", 16), "file": p.name,
-                    "greedy_wer": d.get("greedy_wer")}
+                    "greedy_wer": d.get("greedy_wer"), "run": run}
     return best
 
 
@@ -181,12 +189,19 @@ class Dictator:
                 self._punct = Punctuator.load(p, self.s.device)
         return self._punct
 
+    def run_name(self) -> str:
+        """The recogniser's run (its checkpoint's directory), which is what tuning is keyed on."""
+        try:
+            return resolve_recognizer(self.root, self.s.recognizer).parent.name
+        except FileNotFoundError:
+            return self.s.recognizer
+
     def _known(self, w: str) -> bool:
         lm = self._lm
         return lm is not None and w in lm.index
 
     def describe(self) -> dict:
-        t = best_tuning(self.root, self.s.lm) or {}
+        t = best_tuning(self.root, self.s.lm, self.run_name()) or {}
         p = self.punctuator()
         return {
             "recognizer": self.s.recognizer,
@@ -204,7 +219,7 @@ class Dictator:
         lm = self.lm()
         if lm is None:
             return None
-        t = best_tuning(self.root, self.s.lm) or {}
+        t = best_tuning(self.root, self.s.lm, self.run_name()) or {}
 
         def pick(name, default):
             v = getattr(self.s, name)

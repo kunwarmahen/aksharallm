@@ -278,7 +278,7 @@ cost:
 # desktop shortcut and `python -m aksharallm.dictate` all share. Nothing here affects training.
 dictate:
   # The ear: a run name (its ckpt_best.pt) or a path to a .pt.
-  recognizer: asr-libri100
+  recognizer: asr-libri460     # 460 h: test-clean 5.25% beam (asr-libri100: 7.88%)
   # The punctuation tagger. Until `scripts/experiment.sh punct` has run, cleanup is rules only
   # (capital first, full stop last) and every result says so.
   punctuator: checkpoints/punct/ckpt_best.pt
