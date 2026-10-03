@@ -70,6 +70,7 @@ class Dictation:
         self._cache: dict = {}
         self._lm = None
         self._dictator = None
+        self._live: dict[str, dict] = {}   # live-preview sessions: id -> {raw, rate, lt, used}
         self.jobs = AsrJobs(self)
 
     def device(self) -> tuple[str, str]:
@@ -187,6 +188,47 @@ class Dictation:
                 "names": d.get("names"), "cleanup": d.get("cleanup"),
                 "corrections": {k: v for k, v in (d.get("corrections") or {}).items() if k != "per_word"}}
 
+    def robust(self) -> dict | None:
+        """The latest `asr robust` result: WER per real-noise environment and SNR."""
+        d = self._latest("asr_robust", "robust-*.json")
+        if d is None:
+            return None
+        return {k: d.get(k) for k in ("file", "time", "run", "step", "corpus", "decoder", "utts",
+                                      "clean", "table", "mean_by_snr", "environments", "snrs")}
+
+    def stream_info(self) -> dict | None:
+        """The latest `dictate stream-eval`: how the live preview behaves."""
+        d = self._latest("asr_stream", "stream-*.json")
+        if d is None:
+            return None
+        return {k: d.get(k) for k in ("file", "time", "run", "step", "utts", "tick_s", "need",
+                                      "holdback", "latency_s", "revision_rate", "revised",
+                                      "words_committed_live", "words_final", "tick_ms", "device")}
+
+    def noise_info(self) -> dict:
+        from ..asr.robust import ENVIRONMENTS, NOISE_DIR
+        have = [e for e in ENVIRONMENTS if (self.root / NOISE_DIR / f"{e}.wav").is_file()]
+        return {"have": have, "total": len(ENVIRONMENTS)}
+
+    # ---- your voice as a test set (asr/myvoice.py) -----------------------------------------
+
+    def myvoice(self) -> dict:
+        from ..asr import myvoice
+        st = myvoice.status(self.root / myvoice.CORPUS)
+        st["corpus"] = str(myvoice.CORPUS)
+        mine = [r for r in self.results() if r["corpus"] == myvoice.CORPUS.name]
+        st["results"] = mine[:5]
+        return st
+
+    def myvoice_save(self, prompt_id: str, pcm_b64: str, sample_rate: int) -> dict:
+        from ..asr import myvoice
+        x = self._pcm(pcm_b64, sample_rate, 30.0)
+        try:
+            st = myvoice.save(prompt_id, x, int(sample_rate), self.root / myvoice.CORPUS)
+        except ValueError as e:
+            raise DictationError(str(e)) from e
+        return self.myvoice()
+
     def punct_eval(self) -> dict | None:
         d = self._latest("punct_eval", "punct-*.json")
         if d is None:
@@ -200,6 +242,7 @@ class Dictation:
                 "max_dictate_seconds": MAX_DICTATE_SECONDS,
                 "lm": str(LM_PATH) if (self.root / LM_PATH).is_file() else None,
                 "tuned": self.tuned(), "daytwo": self.daytwo(), "punct": self.punct_eval(),
+                "robust": self.robust(), "noise": self.noise_info(), "stream": self.stream_info(),
                 "pipeline": self.pipeline_info()}
 
     # ---- dictation: the cleaned pipeline, shared with the desktop hotkey ------------------
@@ -256,6 +299,41 @@ class Dictation:
                              int(sample_rate), source="portal")
         except FileNotFoundError as e:
             raise DictationError(str(e)) from e
+
+    def stream(self, session: str, pcm_b64: str, sample_rate: int) -> dict:
+        """The live preview (dictate/stream.py): append this chunk to the session's audio and
+        re-read all of it. The raw audio is kept at the browser's rate and resampled whole each
+        tick — resampling chunks one by one would put a filter edge at every chunk boundary."""
+        from ..audio.io import resample
+        from ..dictate.stream import LiveTranscript
+        if not _re.fullmatch(r"[A-Za-z0-9-]{4,64}", session or ""):
+            raise DictationError("a live session needs an id")
+        try:
+            raw = base64.b64decode(pcm_b64, validate=True)
+        except (ValueError, TypeError) as e:
+            raise DictationError("the audio did not arrive as base64 int16") from e
+        if not 8_000 <= int(sample_rate) <= 192_000:
+            raise DictationError(f"a sample rate of {sample_rate} Hz is not a microphone's")
+        chunk = np.frombuffer(raw[: len(raw) // 2 * 2], dtype="<i2").astype(np.float32) / 32768.0
+        now = time.time()
+        # A few concurrent sessions at most; forget any idle for a minute.
+        for k in [k for k, v in self._live.items() if now - v["used"] > 60]:
+            del self._live[k]
+        ses = self._live.get(session)
+        if ses is None:
+            if len(self._live) >= 4:
+                raise DictationError("too many live previews at once")
+            ses = self._live[session] = {"raw": np.zeros(0, np.float32), "rate": int(sample_rate),
+                                         "lt": LiveTranscript(self.dictator().recognizer(),
+                                                              self.dictator().s.device)}
+        ses["used"] = now
+        ses["raw"] = np.concatenate([ses["raw"], chunk])
+        if len(ses["raw"]) / ses["rate"] > MAX_DICTATE_SECONDS:
+            raise DictationError("past the dictation limit")
+        lt = ses["lt"]
+        x = ses["raw"] if ses["rate"] == 16_000 else resample(ses["raw"], ses["rate"], 16_000)
+        lt.audio = np.asarray(x, dtype=np.float32)
+        return lt.tick()
 
     def correct(self, shown: str, corrected: str, heard: str | None = None) -> dict:
         if not shown.strip() or not corrected.strip():
@@ -488,9 +566,10 @@ class AsrJobs:
     training, so pressing Evaluate cannot be what killed a training run.
     """
 
-    KINDS = ("fetch", "pack", "lm_fetch", "lm", "tune", "eval", "daytwo", "punct_eval")
+    KINDS = ("fetch", "pack", "lm_fetch", "lm", "tune", "eval", "daytwo", "punct_eval",
+             "noise_fetch", "robust", "stream_eval")
     #: Kinds that are `python -m aksharallm.dictate` rather than `... .asr`.
-    DICTATE_KINDS = ("punct_eval",)
+    DICTATE_KINDS = ("punct_eval", "stream_eval")
 
     def __init__(self, dictation: Dictation):
         self.d = dictation
@@ -622,6 +701,8 @@ class AsrJobs:
             return [kind, split], f"{kind} {split}"
         if kind == "lm_fetch":
             return ["lm", "fetch"], "download the LM text (1.5 GB)"
+        if kind == "noise_fetch":
+            return ["noise", "fetch"], "download real noise (DEMAND, 0.65 GB)"
         if kind == "lm":
             if not (self.root / "data/asr/lm/librispeech-lm-norm.txt.gz").is_file():
                 raise DictationError(
@@ -649,6 +730,24 @@ class AsrJobs:
             corpus = self._corpus(str(spec.get("corpus") or "data/asr/test-clean"))
             return (["daytwo", ckpt, "--corpus", corpus, "--device", device],
                     f"day-two checks on {Path(corpus).name}")
+        if kind == "stream_eval":
+            limit = str(int(self._num(spec.get("limit", 200), 20, 3000, "limit")))
+            return (["stream-eval", ckpt, "--corpus", "data/asr/test-clean", "--limit", limit,
+                     "--device", device], "measure the live preview")
+        if kind == "robust":
+            if not self.d.noise_info()["have"]:
+                raise DictationError("no noise recordings yet — download them first")
+            corpus = self._corpus(str(spec.get("corpus") or "data/asr/test-clean"))
+            limit = str(int(self._num(spec.get("limit", 400), 20, 3000, "limit")))
+            argv = ["robust", ckpt, "--corpus", corpus, "--limit", limit, "--device", device]
+            if (self.root / LM_PATH).is_file():
+                t = self.d.tuned() or {}
+                argv += ["--decoder", "beam", "--alpha", f"{t.get('alpha', 0.8):g}",
+                         "--beta", f"{t.get('beta', 2.0):g}",
+                         "--unk-penalty", f"{t.get('unk_penalty', -24.0):g}"]
+            else:
+                argv += ["--decoder", "greedy"]
+            return argv, f"noise test on {Path(corpus).name}"
         if kind == "tune":
             corpus = self._corpus(str(spec.get("corpus") or "data/asr/dev-clean"))
             if "test" in corpus:

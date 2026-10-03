@@ -546,6 +546,11 @@ updating the code, `scripts/portal.sh --restart`).
 | `dictate status` | the On your desktop panel |
 | `dictate file`, `correct`, `dictionary`, `history` | the Dictate panel: file picker, **Teach it**, word chips and Add, Recent dictations |
 | `dictate clean` | Dictate → *Try the cleanup without speaking* |
+| `asr fetch` / `pack` (test-other, train-clean-360) | Run it from here → Speech data |
+| `asr noise fetch`, `asr robust` | How noise hurts it → **Download the noise** / **Run the noise test** |
+| `asr myvoice record` | Your voice, as a test set → **Record this sentence**; **Score my voice** runs `asr eval` on it |
+| `dictate stream-eval` | How noise hurts it → The live preview, measured → **Measure it** |
+| `scripts/audio.sh asr-libri460` | Dashboard: pick **asr-libri460**, Start |
 | `sudo apt install xdotool xclip` | not runnable — shown beside each missing tool |
 
 **The shortcut installer reads back every value it writes, and this is why.** The first
@@ -562,6 +567,143 @@ there: they are read from the best `asr tune` result, because α and β belong t
 pair and a hand-copied number goes stale the day either is retrained. Every dictation is
 appended to `logs/dictate/history.jsonl` — what was heard, what was written and every step in
 between — which is also what the portal's *fix* button corrects against.
+
+---
+
+## Harder tests: noisier speech, real noise, your voice
+
+Every number above is on test-clean: audiobooks, good microphones, quiet rooms. That is the
+most forgiving speech a recogniser will ever hear, so three harder tests sit beside it.
+
+**test-other** is LibriSpeech's own hard half: the speakers the corpus authors' reference
+system did *worst* on, so more accents, worse microphones and noisier rooms. Same model, same
+LM, same weights:
+
+| | test-clean | test-other |
+|---|---|---|
+| greedy | 12.77% | **32.46%** |
+| beam + word LM | 7.88% | **24.63%** |
+| worst speaker (beam) | 15.5% | **53.7%** |
+| characters on silence | 0 | 0 |
+| unseen words recalled (no dictionary) | 5% | 1% |
+
+WER roughly triples. That is the normal gap for a model trained on 100 h of *clean* speech,
+and it is the case for § More speech.
+
+**Real recorded noise** ([`asr/robust.py`](../aksharallm/asr/robust.py),
+`asr noise fetch` + `asr robust`). Six places from **DEMAND** (Thiemann, Ito & Vincent 2013,
+CC BY 4.0; one microphone channel of each, 0.65 GB) — sounds the recogniser never heard in
+training, which only ever saw the synthetic families in `asr/noise.py`. Each test-clean
+utterance is mixed with a random stretch of each, at an exact **signal-to-noise ratio**: 20 dB
+is a quiet room, 10 dB a busy café, 0 dB noise as loud as the voice. Speech power is measured
+over the *voiced* frames only, because averaging LibriSpeech's pauses in would call a clip
+quieter than it is and drown it in more noise than the label says. The noise segment is seeded
+per utterance, so two checkpoints hear identical mixtures.
+
+```mermaid
+flowchart LR
+    S["test-clean sentence"] --> M["mix at 20 / 10 / 5 / 0 dB"]
+    N["real noise<br/>kitchen · café · street<br/>car · office · living room"] --> M
+    M --> R["recogniser + beam + LM"]
+    R --> W["WER per place × SNR"]
+```
+
+Measured on the first 400 test-clean utterances, beam + LM (clean: 5.7% on these 400):
+
+| place | 20 dB | 10 dB | 5 dB | 0 dB |
+|---|---|---|---|---|
+| café | 6.6% | 15.1% | 33.6% | **64.1%** |
+| street | 5.9% | 8.7% | 15.3% | 33.6% |
+| living room | 6.4% | 10.3% | 16.8% | 32.8% |
+| kitchen | 6.6% | 8.8% | 11.4% | 16.9% |
+| office | 5.8% | 6.1% | 6.9% | 8.7% |
+| car | 5.8% | 5.8% | 5.8% | **5.9%** |
+| mean | 6.2% | 9.1% | 15.0% | 27.0% |
+
+Two findings. **Other people talking is the worst noise there is**: café babble is made of the
+same sounds the model is listening for. And **SNR alone does not predict damage**: the car is
+as loud as the voice at 0 dB and costs nothing, because its energy is a rumble below the
+frequencies speech uses. "How loud is the noise" is the wrong question; "where is it" is the
+right one.
+
+**Your own voice** ([`asr/myvoice.py`](../aksharallm/asr/myvoice.py)). Thirty fixed sentences
+written for dictation — emails, plans, names, questions — each read once and stored as an
+ordinary packed corpus, `data/asr/my-voice/`, speaker `me`. So `asr eval`, `asr daytwo` and
+`asr robust` all work on it unchanged and its WER sits in the same table as test-clean's.
+The prompts are versioned (`PROMPTS_VERSION`) for the same reason a benchmark's prompt format
+is: a WER on different sentences is a different test. They are written in the recogniser's
+alphabet (numbers as words), because the reference must be what a perfect transcript says. A
+second take of a sentence *replaces* the first. Record them in the portal (*Your voice, as a
+test set*) or with `python -m aksharallm.asr myvoice record`; recordings stay in `data/`, which
+is never committed.
+
+---
+
+## More speech: train-clean-360
+
+`configs/asr-libri460.yaml` is `asr-libri100.yaml` with **one change: the data** —
+train-clean-100 + train-clean-360, 460 h and 1,172 speakers instead of 100 h and 251 — plus a
+step budget sized to it (120,000 steps, ~29 passes, against asr-libri100's ~66 passes over its
+100 h; ~9–10 h on the 3090 over several evenings). Same model, same augmentation, same
+schedule shape, so the difference between the two checkpoints is what 4.6× more speech buys,
+measured on test-clean, test-other, the noise table and your voice.
+
+Getting the data costs disk, so the order matters: the archive is 23 GB, extracted FLAC another
+23 GB, and the packed corpus ~42 GB (16-bit, like train-clean-100's 11 GB for 100 h). Delete the
+archive once extracted and the FLAC once packed, and the peak is ~64 GB and the end state
++42 GB.
+
+---
+
+## Streaming: text while you talk
+
+Dictation without a preview feels broken — twenty seconds of talking into silence. There are
+two ways to show text early: a **streaming encoder** (attention limited to chunks,
+convolutions that never look ahead, a bounded cost per 40 ms — a different, retrained model),
+or **re-read the whole buffer every tick** with the model you have. This repo does the second
+([`dictate/stream.py`](../aksharallm/dictate/stream.py)) because the measurement says it is
+affordable: the encoder reads 5 s of audio in 36 ms on the CPU, 30 s in 154 ms and 60 s in
+357 ms, so twice a second costs a fraction of real time for any sentence a person dictates.
+
+The problem it then has to solve is **flicker**: each re-reading can change words the last one
+showed. The rule is *local agreement* (Whisper-streaming's LocalAgreement-2): a word is
+**committed** once two consecutive readings agree on it and everything before it, and the
+newest word is never committed — the audio may end in the middle of it. Committed words are
+shown solid and never retracted while you speak; the rest is shown grey. When you finish, the
+full pipeline (beam, your dictionary, cleanup) runs once and replaces the preview.
+
+```mermaid
+flowchart LR
+    A["audio so far"] -->|"every 0.5 s"| E["re-read all of it<br/>(encoder + greedy)"]
+    E --> L{"two readings<br/>agree?"}
+    L -->|"yes, minus the<br/>newest word"| C["committed: solid,<br/>never retracted"]
+    L --> T["the rest: grey"]
+    C --> F["you finish: the full pipeline<br/>replaces the preview"]
+```
+
+Measured (`dictate stream-eval`), 200 test-clean utterances, a tick every 0.5 s. A word's
+spoken end is read from the final reading's CTC alignment (40 ms resolution):
+
+| rule | settles after (median / p90) | settled, then re-spelt by the final reading |
+|---|---|---|
+| **2 readings agree, hold back 1 word** (default) | **0.85 s** / 1.56 s | **3.7%** |
+| 3 readings agree | 1.34 s / 2.18 s | 3.1% |
+| hold back 2 / 3 words | 0.95 / 1.20 s | 3.8% |
+| + 0.8 s guard at the audio's edge | 1.10 s | 3.6% |
+
+A re-reading costs **18 ms** on the card and the cost grows with length (above). **The first
+version of this table was wrong, and how is the lesson**: revisions were counted *by position*,
+so one word inserted early made every later word look revised (5.3%); aligned properly it is
+3.7%. And the guard was added on a hunch that the revisions were words cut off at the edge of
+the audio — it barely moved them. Reading the cases showed why: "qushioned" → "cushioned",
+"ardor" → "ardour". The encoder is bidirectional, so *later* audio legitimately re-spells
+*earlier* words, and waiting longer buys little. So the default is the fastest row, and the
+final pass replaces the preview anyway.
+
+Where it shows: the portal's Dictate panel (solid + grey text as you talk), and the desktop
+daemon's "Listening…" notification, which updates with the words so far. **The preview is
+never typed into your app** — the final text differs from it by design, and typed text would
+have to be deleted and retyped.
 
 ---
 
@@ -601,6 +743,17 @@ sudo apt install xdotool xclip                       # typing and the clipboard
 .venv/bin/python -m aksharallm.dictate install-shortcut   # <Super><Alt>d runs `toggle`
 .venv/bin/python -m aksharallm.dictate file me.wav        # the same pipeline on a file
 .venv/bin/python -m aksharallm.dictate correct --shown "I met Sean." --corrected "I met Shaun."
+
+# harder tests, more data, streaming
+.venv/bin/python -m aksharallm.asr fetch test-other && .venv/bin/python -m aksharallm.asr pack test-other
+.venv/bin/python -m aksharallm.asr eval asr-libri100 --corpus data/asr/test-other --decoder beam \
+    --lm data/asr/lm/trigram.npz --alpha 0.8 --beta 2.0 --unk-penalty -24
+.venv/bin/python -m aksharallm.asr noise fetch             # DEMAND, 0.65 GB, CC BY 4.0
+.venv/bin/python -m aksharallm.asr robust asr-libri100     # WER by place x SNR
+.venv/bin/python -m aksharallm.asr myvoice record          # read 30 sentences; then eval --corpus data/asr/my-voice
+.venv/bin/python -m aksharallm.asr fetch train-clean-360 && .venv/bin/python -m aksharallm.asr pack train-clean-360
+scripts/audio.sh asr-libri460                              # 460 h, ~9-10 h on the card
+.venv/bin/python -m aksharallm.dictate stream-eval asr-libri100   # the live preview, measured
 ```
 
 In the browser: the portal's **Dictation** tab. It leads with **Dictate** — press, talk,
@@ -648,11 +801,15 @@ Dashboard's Start, like every other run. ([`portal/dictate.py`](../aksharallm/po
 * **Self-corrections mid-sentence** ("at five, no wait, six"). `scratch that` deletes the
   whole current sentence; guessing *which phrase* a speaker meant to replace is a model's job,
   and an unmeasured guess would put words in your mouth.
-* **Streaming** (chunked attention), **real-noise testing** (MUSAN), and an **accented-English
-  test set** — LibriSpeech is read audiobooks, the most forgiving speech there is.
-* **More audio.** The first real run (test-clean 12.77% greedy, 7.68% beam) trained on 100 h;
-  train-clean-360 is the biggest lever on hearing itself.
-  It started 2026-10-02, after the pre-norm fix. Two launcher bugs surfaced on the way and are fixed: every *resume* crashed
+* **A streaming encoder** (chunked attention, causal convolutions): built when re-reading
+  everything stops being affordable — hour-long audio, a phone CPU. § Streaming says why not
+  yet.
+* **Noise in training.** The noise table is a test; training on real noise (MUSAN, or
+  DEMAND's other twelve places, kept apart from the six tested here) is the fix it points at.
+* **An accented-English test set** with consent-cleared speakers. test-other's worst speaker
+  at 53.7% is the nearest thing measured so far.
+* The first real run (test-clean 12.77% greedy, 7.68% beam) trained on 100 h;
+  it started 2026-10-02, after the pre-norm fix. Two launcher bugs surfaced on the way and are fixed: every *resume* crashed
   on start (the augment generator's saved state came back on the GPU — a CPU-only resume test
   could not see it; there is a GPU one now), and the launcher declared success after 5 s while
   the crash came ~30 s in, behind an empty log (stdout was buffered). A full-size step
@@ -691,6 +848,10 @@ Read [doc 21](21-audio.md) first for the front end this reuses.
 | 20 | [`aksharallm/dictate/__main__.py`](../aksharallm/dictate/__main__.py) | the CLI: `status`, `daemon`, `toggle`, `file`, `correct`, `punct-eval` |
 | 21 | [`asr/daytwo.py`](../aksharallm/asr/daytwo.py) | `correction_replay` — check 5 as a curve, with its false insertions |
 | 22 | [`configs/punct.yaml`](../configs/punct.yaml) | the tagger: `tag_classes`, `causal: false`, prose only |
+| 23 | [`asr/robust.py`](../aksharallm/asr/robust.py) | `speech_power` (voiced frames only), `mix` (exact SNR, clip-safe), the per-utterance seed |
+| 24 | [`asr/myvoice.py`](../aksharallm/asr/myvoice.py) | `PROMPTS` and their version, `save` (a second take replaces the first) |
+| 25 | [`dictate/stream.py`](../aksharallm/dictate/stream.py) | `LocalAgreement.update` (never retract), `simulate` (latency from the CTC alignment, revisions by alignment, not position) |
+| 26 | [`configs/asr-libri460.yaml`](../configs/asr-libri460.yaml) | asr-libri100 with one change: the data |
 
 What pins it: [`tests/test_asr.py`](../tests/test_asr.py) — CTC against `F.ctc_loss` (value,
 gradient, gradcheck, empty and impossible targets), an utterance alone versus padded into a

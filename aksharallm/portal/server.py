@@ -204,7 +204,9 @@ class Handler(BaseHTTPRequestHandler):
             # One route carries audio, and only that one gets the larger limit: a recorded
             # sentence is megabytes where every other request here is a few hundred bytes.
             data = self._body(DICTATE_MAX_BODY if parts in (["api", "dictate", "transcribe"],
-                                                            ["api", "dictate", "dictate"])
+                                                            ["api", "dictate", "dictate"],
+                                                            ["api", "dictate", "myvoice"],
+                                                            ["api", "dictate", "stream"])
                               else MAX_BODY)
             if parts == ["api", "explain"]:
                 return self._explain(data)
@@ -436,6 +438,14 @@ class Handler(BaseHTTPRequestHandler):
                     if parts[2] == "dictate":
                         return self._json(self.dictation.dictate(
                             str(data.get("pcm") or ""), int(data.get("sample_rate") or 0)))
+                    if parts[2] == "stream":
+                        return self._json(self.dictation.stream(
+                            str(data.get("session") or ""), str(data.get("pcm") or ""),
+                            int(data.get("sample_rate") or 0)))
+                    if parts[2] == "myvoice":
+                        return self._json(self.dictation.myvoice_save(
+                            str(data.get("prompt") or ""), str(data.get("pcm") or ""),
+                            int(data.get("sample_rate") or 0)))
                     if parts[2] == "clean":
                         return self._json(self.dictation.clean(str(data.get("text") or "")))
                     if parts[2] == "correct":
@@ -574,6 +584,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.dictation.overview())
         if parts == ["dictate", "jobs"]:
             return self._json(self.dictation.jobs.status())
+        if parts == ["dictate", "myvoice"]:
+            return self._json(self.dictation.myvoice())
         if parts == ["dictate", "personal"]:
             return self._json(self.dictation.personal())
         if parts == ["dictate", "desktop"]:

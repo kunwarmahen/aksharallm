@@ -52,6 +52,7 @@ scripts/audio.sh asr-libri100</pre>
       </div>
       <p id="dc-pipe" class="panel-note dim"></p>
       <p id="dc-go-status" class="panel-note"></p>
+      <p id="dc-live" class="dc-text dc-live-text" hidden aria-live="polite"></p>
       <div id="dc-result" class="dc-out" hidden>
         <textarea id="dc-final" class="dc-final" rows="4" spellcheck="true"
                   aria-label="The dictated text — edit it to correct a mistake"></textarea>
@@ -208,6 +209,56 @@ scripts/audio.sh asr-libri100</pre>
       </div>
       <div id="dc-curve" class="dc-curve" hidden></div>
       <div id="dc-silence-out" class="dc-silence" hidden></div>
+    </div>
+
+    <div class="panel">
+      <h3>Your voice, as a test set</h3>
+      <p class="panel-note">
+        Every other number on this page is audiobooks read by strangers. Read these thirty
+        sentences once each and your voice becomes a corpus like any other — scored with the same
+        WER, beside test-clean. A bad take (a cough, a door) can simply be recorded again.
+        Recordings stay on this machine, in <code>data/asr/my-voice/</code>.
+      </p>
+      <p id="mv-progress" class="panel-note"></p>
+      <div id="mv-card" class="dc-out">
+        <p class="dim" id="mv-id"></p>
+        <p id="mv-text" class="dc-text"></p>
+        <div class="row">
+          <button id="mv-rec" class="primary" type="button">● Record this sentence</button>
+          <button id="mv-prev" type="button">← Previous</button>
+          <button id="mv-next" type="button">Next →</button>
+          <span id="mv-status" class="dim"></span>
+        </div>
+      </div>
+      <div class="row">
+        <button id="mv-score" type="button">Score my voice</button>
+        <span id="mv-score-note" class="dim"></span>
+      </div>
+      <pre class="au-cmd">python -m aksharallm.asr myvoice record     # the same, from a terminal</pre>
+    </div>
+
+    <div class="panel">
+      <h3>How noise hurts it</h3>
+      <p class="panel-note">
+        The same test-clean sentences with <b>real recorded noise</b> mixed in (DEMAND: a kitchen,
+        a café, a street, a car… — sounds the recogniser never heard in training), at a fixed
+        loudness relative to the voice. <b>20 dB</b> is a quiet room, <b>10 dB</b> a busy café,
+        <b>0 dB</b> noise as loud as you. Other people talking is the hardest; a car's low rumble
+        barely matters, because speech does not use those frequencies.
+      </p>
+      <div class="scroll-x"><table class="grid" id="dc-robust"></table></div>
+      <div class="row">
+        <button id="dc-noise-fetch" type="button">Download the noise (0.65 GB)</button>
+        <button id="dc-robust-run" type="button">Run the noise test</button>
+        <span id="dc-robust-note" class="dim"></span>
+      </div>
+      <h4>The live preview, measured</h4>
+      <p class="panel-note">While you talk, everything so far is re-read twice a second, and a
+        word is shown solid once two readings agree on it. How long after you say a word it
+        settles, how often a settled word is spelt differently by the final pass, and what one
+        re-reading costs:</p>
+      <p id="dc-stream" class="panel-note"></p>
+      <div class="row"><button id="dc-stream-run" type="button">Measure it</button></div>
     </div>
 
     <div class="panel">

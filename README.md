@@ -135,6 +135,7 @@ aksharallm/
 │   ├── audiolm-synth.yaml  a language model over codec tokens
 │   ├── asr-synth.yaml    the speech recogniser on synthetic speech — no download, minutes
 │   ├── asr-libri100.yaml   the recogniser on 100 h of LibriSpeech
+│   ├── asr-libri460.yaml   the same, on 460 h (train-clean-100 + 360)
 │   └── punct.yaml        the dictation punctuation tagger (a third pretraining objective)
 ├── aksharallm/
 │   ├── config.py         dataclass config loading + CLI overrides
@@ -172,13 +173,16 @@ aksharallm/
 │   │   ├── ngram.py          a Kneser-Ney word trigram LM, counted with numpy
 │   │   ├── decode.py         CTC prefix beam search + the LM + a personal dictionary
 │   │   ├── measure.py        corpus WER per speaker, name recall, and the silence check
-│   │   └── daytwo.py         every day-two check in one pass, incl. the correction replay
+│   │   ├── daytwo.py         every day-two check in one pass, incl. the correction replay
+│   │   ├── robust.py         real recorded noise (DEMAND) mixed at an exact SNR
+│   │   └── myvoice.py        your own voice as a test set: 30 fixed sentences
 │   ├── dictate/          dictation on top of the ear — see docs/23
 │   │   ├── punct.py          text -> (words, 12 labels) and back; render never changes a word
 │   │   ├── tagger.py         the punctuation tagger: a third pretraining objective
 │   │   ├── cleanup.py        fillers, new line / new paragraph / scratch that, punctuation
 │   │   ├── personal.py       corrections -> dictionary, spellings, replacement rules
 │   │   ├── pipeline.py       audio in, finished text out — one path for every surface
+│   │   ├── stream.py         the live preview: re-read, commit what two readings agree on
 │   │   └── daemon.py         the desktop: a socket daemon, parecord, xdotool, a GNOME shortcut
 │   ├── vision/           a second modality that needs no codec — see docs/22
 │   │   ├── image.py          a shapes corpus whose captions are known exactly

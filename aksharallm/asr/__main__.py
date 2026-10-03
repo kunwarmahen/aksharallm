@@ -10,6 +10,9 @@
     python -m aksharallm.asr tune asr-libri100                 # alpha/beta on dev-clean only
     python -m aksharallm.asr eval asr-libri100 --decoder beam --lm data/asr/lm/trigram.npz
     python -m aksharallm.asr daytwo asr-libri100               # the five day-two checks at once
+    python -m aksharallm.asr noise fetch                       # real noise: DEMAND, 6 places
+    python -m aksharallm.asr robust asr-libri100               # WER in a kitchen, cafe, car…
+    python -m aksharallm.asr myvoice record                    # read 30 sentences: YOUR test set
 
 A checkpoint argument is a path to a `.pt`, or a run name (`asr-libri100` means
 `checkpoints/asr-libri100/ckpt_best.pt`).
@@ -290,6 +293,91 @@ def cmd_daytwo(args) -> int:
     return 0
 
 
+def cmd_noise_fetch(args) -> int:
+    from .robust import fetch_demand
+    fetch_demand(args.dest)
+    return 0
+
+
+def cmd_robust(args) -> int:
+    """WER under real recorded noise at fixed SNRs (asr/robust.py)."""
+    from .robust import load_noise
+    from .robust import robustness
+    path = resolve(args.checkpoint)
+    device = _device(args.device)
+    model, blob = load_recognizer(path, device)
+    noise = load_noise(args.noise)
+    if not noise:
+        raise SystemExit(f"no noise recordings in {args.noise} — python -m aksharallm.asr noise fetch")
+    corpus = Utterances(args.corpus, max_seconds=40.0, limit=args.limit,
+                        feasible=feasibility(model.cfg, model.cfg.sample_rate))
+    dec = None
+    if args.decoder == "beam":
+        dec = _decoder(args, _load_lm(args.lm))
+    t0 = time.time()
+    r = robustness(model, device, corpus, noise, args.snrs, dec, args.workers)
+    print(f"checkpoint   {path}  (step {blob.get('step')}), {r['utts']} utterances of {args.corpus}, "
+          f"{args.decoder}")
+    head = "".join(f"{s:>8}" for s in r["mean_by_snr"])
+    print(f"{'SNR (dB)':16s}{head}      clean {r['clean'] * 100:.1f}%")
+    for env, row in r["table"].items():
+        print(f"  {r['environments'][env]:14s}" + "".join(f"{v * 100:7.1f}%" for v in row.values()))
+    print(f"  {'mean':14s}" + "".join(f"{v * 100:7.1f}%" for v in r["mean_by_snr"].values()))
+    print(f"took         {time.time() - t0:.0f}s")
+    if not args.no_write:
+        RESULTS.mkdir(parents=True, exist_ok=True)
+        out = RESULTS / (f"robust-{path.parent.name}-step{blob.get('step')}-{Path(args.corpus).name}"
+                         f"-{args.decoder}.json")
+        out.write_text(json.dumps({"kind": "asr_robust", "checkpoint": str(path),
+                                   "run": path.parent.name, "step": blob.get("step"),
+                                   "corpus": str(args.corpus), "decoder": args.decoder,
+                                   "time": time.strftime("%Y-%m-%d %H:%M:%S"), **r}, indent=1))
+        print(f"written      {out}")
+    return 0
+
+
+def cmd_myvoice(args) -> int:
+    """Record the fixed prompts in your own voice (asr/myvoice.py)."""
+    from . import myvoice
+    st = myvoice.status(args.corpus)
+    if args.action == "status":
+        print(f"{st['recorded']}/{st['total']} sentences recorded ({st['seconds']} s) in {st['corpus']}")
+        for p in st["prompts"]:
+            print(f"  {'✓' if p['recorded'] else ' '} {p['id']}  {p['text']}")
+        if st["recorded"]:
+            print(f"score it:  python -m aksharallm.asr eval <run> --corpus {st['corpus']}")
+        return 0
+    import shutil
+    import signal
+    import subprocess
+    import tempfile
+    if not shutil.which("parecord"):
+        raise SystemExit("parecord not found (sudo apt install pulseaudio-utils) — or record in "
+                         "the portal's Dictation tab")
+    todo = [p for p in st["prompts"] if args.all or not p["recorded"]]
+    print(f"{len(todo)} sentences to read. Enter starts a recording, Enter stops it; "
+          "s skips, q quits.\n")
+    for p in todo:
+        print(f"[{p['id']}]  {p['text']}")
+        if input("  Enter to start> ").strip().lower() in ("q", "s"):
+            continue
+        with tempfile.NamedTemporaryFile(suffix=".raw") as tmp:
+            proc = subprocess.Popen(["parecord", "--raw", "--rate=16000", "--channels=1",
+                                     "--format=s16le"], stdout=open(tmp.name, "wb"),
+                                    stderr=subprocess.DEVNULL)
+            input("  ● recording — Enter to stop> ")
+            proc.send_signal(signal.SIGINT)
+            proc.wait(timeout=3)
+            raw = Path(tmp.name).read_bytes()
+        x = np.frombuffer(raw[: len(raw) // 2 * 2], dtype="<i2").astype(np.float32) / 32768.0
+        try:
+            st = myvoice.save(p["id"], x, 16_000, args.corpus)
+            print(f"  saved ({len(x) / 16000:.1f} s) — {st['recorded']}/{st['total']} done\n")
+        except ValueError as e:
+            print(f"  not saved: {e}\n")
+    return 0
+
+
 def cmd_silence(args) -> int:
     model, _ = load_recognizer(resolve(args.checkpoint), _device(args.device))
     r = silence_check(model, _device(args.device))
@@ -406,6 +494,35 @@ def main(argv=None) -> int:
     s.add_argument("--device", default=None)
     s.add_argument("--no-write", action="store_true")
     s.set_defaults(fn=cmd_daytwo)
+
+    s = sub.add_parser("noise", help="real recorded noise for the robustness test")
+    nsub = s.add_subparsers(dest="noise_cmd", required=True)
+    f = nsub.add_parser("fetch", help="download DEMAND (6 environments, ~0.65 GB, CC BY 4.0)")
+    f.add_argument("--dest", default="data/asr/noise/demand")
+    f.set_defaults(fn=cmd_noise_fetch)
+
+    s = sub.add_parser("robust", help="WER under real noise: kitchen, cafe, street, car… at 20/10/5/0 dB")
+    s.add_argument("checkpoint")
+    s.add_argument("--corpus", default="data/asr/test-clean")
+    s.add_argument("--noise", default="data/asr/noise/demand")
+    s.add_argument("--snrs", type=float, nargs="+", default=[20.0, 10.0, 5.0, 0.0])
+    s.add_argument("--limit", type=int, default=400, help="first N utterances (same N every run)")
+    s.add_argument("--decoder", choices=["greedy", "beam"], default="beam")
+    s.add_argument("--lm", default="data/asr/lm/trigram.npz")
+    s.add_argument("--alpha", type=float, default=0.8)
+    s.add_argument("--beta", type=float, default=2.0)
+    s.add_argument("--unk-penalty", type=float, default=-24.0)
+    s.add_argument("--beam", type=int, default=16)
+    s.add_argument("--workers", type=int, default=8)
+    s.add_argument("--device", default=None)
+    s.add_argument("--no-write", action="store_true")
+    s.set_defaults(fn=cmd_robust)
+
+    s = sub.add_parser("myvoice", help="your own voice as a test set: read 30 fixed sentences")
+    s.add_argument("action", nargs="?", choices=["status", "record"], default="status")
+    s.add_argument("--corpus", default="data/asr/my-voice")
+    s.add_argument("--all", action="store_true", help="re-record sentences already recorded")
+    s.set_defaults(fn=cmd_myvoice)
 
     s = sub.add_parser("silence", help="what it writes on audio with no speech (should be nothing)")
     s.add_argument("checkpoint")

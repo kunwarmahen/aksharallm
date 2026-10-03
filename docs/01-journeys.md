@@ -513,7 +513,9 @@ your corrections, and a keyboard shortcut that types the finished text into what
 are in. In order: train the tagger (about an hour on the card), run the day-two suite, then
 start the daemon and install the shortcut. You know it worked when `asr daytwo` prints `0
 words invented` and a rising curve on check 5, and when pressing the shortcut, talking and
-pressing it again types a punctuated sentence where your cursor is. (Typing into other apps needs
+pressing it again types a punctuated sentence where your cursor is (the words appear in the
+notification while you talk). Then make it harder: test-other, real noise and your own voice
+say how far from audiobook speech it still works, and the 460-hour run is the fix they point at. (Typing into other apps needs
 `sudo apt install xdotool xclip` once, and the daemon started after each reboot —
 [chapter 23 § Using it, step by step](23-speech-recognition.md).)
 
@@ -531,6 +533,9 @@ scripts/experiment.sh punct                        # the punctuation tagger (~1 
 python -m aksharallm.asr daytwo asr-libri100       # every day-two check in one pass
 python -m aksharallm.dictate daemon --bg           # load the models once, then...
 python -m aksharallm.dictate install-shortcut      # ...<Super><Alt>d dictates into any app
+python -m aksharallm.asr robust asr-libri100       # WER in a kitchen, cafe, street, car…
+python -m aksharallm.asr myvoice record            # your own voice as a test set
+scripts/audio.sh asr-libri460                      # 4.6x the speech, once train-clean-360 is packed
 python -m aksharallm.diffusion tiny-diffusion-smoke infill \
     --prefix "Once upon a time" --suffix "and they all went home."
 ```

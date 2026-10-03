@@ -75,3 +75,6 @@
   align-items: center; font-size: 0.8rem; text-align: center; gap: 0.15rem;
 }
 .dc-bar-fill { width: 70%; background: var(--accent, var(--good)); border-radius: 4px 4px 0 0; }
+
+/* The live preview: settled words solid, the still-changing tail grey. */
+.dc-live-text { min-height: 1.5em; border-left: 3px solid var(--border); padding-left: 0.6rem; }

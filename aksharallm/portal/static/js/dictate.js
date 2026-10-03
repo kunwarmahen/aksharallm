@@ -70,6 +70,9 @@ const KINDS = {
   lab: { btn: '#dc-rec', idle: '● Hold to talk', live: '■ Listening — release to send',
          status: (t, k) => status(t, k), limit: () => dc.maxSeconds,
          send: (all, rate) => send(all, rate, 'your voice') },
+  myvoice: { btn: '#mv-rec', idle: '● Record this sentence', live: '■ Recording — press when done',
+             status: (t, k) => mvStatus(t, k), limit: () => 30,
+             send: (all, rate) => saveMyVoice(all, rate) },
   dictate: { btn: '#dc-go', idle: '● Start dictating', live: '■ Listening — press to finish',
              status: (t, k) => goStatus(t, k), limit: () => dc.maxDictate,
              send: (all, rate) => sendDictation(all, rate, 'your voice') },
@@ -102,6 +105,7 @@ async function startRecording(kind = 'lab') {
   proc.connect(ctx.destination);
   const t0 = performance.now();
   dc.rec = { ctx, stream, proc, chunks, t0, kind };
+  if (kind === 'dictate') startLive(dc.rec);
   $(K.btn).classList.add('dc-live');
   $(K.btn).textContent = K.live;
   K.status('listening…');
@@ -114,6 +118,7 @@ async function stopRecording() {
   const K = KINDS[r.kind];
   dc.rec = null;
   clearTimeout(r.timer);
+  clearInterval(r.live);
   r.proc.disconnect();
   r.stream.getTracks().forEach((t) => t.stop());
   const rate = r.ctx.sampleRate;
@@ -157,6 +162,36 @@ async function fromFile(file) {
   }
 }
 
+/* ---- the live preview (dictate/stream.py) --------------------------------------------
+ * While you talk, the audio so far is re-read twice a second; words two readings agree on
+ * are shown solid and never change until you finish, the rest grey. Only NEW samples are
+ * sent each tick; the server keeps the session's audio. The final text still comes from the
+ * full pipeline when you press again. */
+function startLive(r) {
+  r.session = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  r.sent = 0;
+  r.inflight = false;
+  $('#dc-live').hidden = false;
+  $('#dc-live').innerHTML = '<span class="dim">…</span>';
+  r.live = setInterval(async () => {
+    if (r.inflight || r.sent >= r.chunks.length) return;
+    r.inflight = true;
+    const fresh = r.chunks.slice(r.sent);
+    r.sent = r.chunks.length;
+    const n = fresh.reduce((a, c) => a + c.length, 0);
+    const buf = new Float32Array(n);
+    let at = 0;
+    for (const c of fresh) { buf.set(c, at); at += c.length; }
+    try {
+      const res = await post('/api/dictate/stream', { session: r.session, pcm: toPcm16(buf), sample_rate: r.ctx.sampleRate });
+      if (dc.rec === r) {
+        $('#dc-live').innerHTML = `${escHtml(res.stable)} <span class="dim">${escHtml(res.tentative)}</span>`;
+      }
+    } catch { /* a missed preview tick is not worth a message; the final pass is what counts */ }
+    r.inflight = false;
+  }, 600);
+}
+
 /* ---- dictation: the cleaned pipeline, the same one the desktop hotkey runs ------------- */
 
 function goStatus(text, kind = '') {
@@ -174,6 +209,7 @@ const STEP_WORDS = {
 
 function showResult(r) {
   dc.last = r;
+  $('#dc-live').hidden = true;
   $('#dc-result').hidden = false;
   $('#dc-final').value = r.text || '';
   $('#dc-final').placeholder = r.text ? '' : (r.note || 'nothing heard');
@@ -297,6 +333,94 @@ async function loadPersonal() {
   } catch (e) {
     $('#dc-learned-sum').textContent = e.message;
   }
+}
+
+/* ---- your voice as a test set ------------------------------------------------------- */
+
+const mv = { prompts: [], i: 0 };
+
+function mvStatus(text, kind = '') {
+  const el = $('#mv-status');
+  el.textContent = text;
+  el.className = kind === 'warn' ? 'bad' : 'dim';
+}
+
+function renderMyVoice(st, keepIndex = false) {
+  mv.prompts = st.prompts;
+  if (!keepIndex) {
+    const first = st.prompts.findIndex((p) => !p.recorded);
+    mv.i = first < 0 ? 0 : first;
+  }
+  $('#mv-progress').innerHTML = `<b>${st.recorded}/${st.total}</b> sentences recorded`
+    + ` (${st.seconds} s)` + (st.recorded === st.total ? ' — all done; score it below' : '');
+  const p = mv.prompts[mv.i];
+  if (p) {
+    $('#mv-id').textContent = `${mv.i + 1} of ${mv.prompts.length}${p.recorded ? ` · recorded (${p.seconds} s) — record again to replace it` : ''}`;
+    $('#mv-text').textContent = p.text;
+  }
+  $('#mv-prev').disabled = mv.i === 0;
+  $('#mv-next').disabled = mv.i >= mv.prompts.length - 1;
+  $('#mv-score').disabled = !st.recorded;
+  const r = (st.results || [])[0];
+  $('#mv-score-note').textContent = r
+    ? `your voice: WER ${pct(r.wer)} (${escHtml(r.decoder || 'greedy')}, ${r.utts} sentences, ${r.time})`
+    : (st.recorded ? `${st.recorded} sentences ready to score` : 'record a few sentences first');
+}
+
+async function loadMyVoice(keepIndex = false) {
+  try { renderMyVoice(await api('/api/dictate/myvoice'), keepIndex); } catch (e) { mvStatus(e.message, 'warn'); }
+}
+
+async function saveMyVoice(samples, rate) {
+  const p = mv.prompts[mv.i];
+  if (!p) return;
+  mvStatus('saving…');
+  try {
+    const st = await post('/api/dictate/myvoice', { prompt: p.id, pcm: toPcm16(samples), sample_rate: rate });
+    mvStatus(`saved ${(samples.length / rate).toFixed(1)} s`);
+    if (mv.i < st.prompts.length - 1) mv.i += 1;
+    renderMyVoice(st, true);
+  } catch (e) {
+    mvStatus(e.message, 'warn');
+  }
+}
+
+/* ---- how noise hurts it --------------------------------------------------------------- */
+
+function renderStream(st) {
+  $('#dc-stream-run').disabled = !dc.ckpt;
+  $('#dc-stream').innerHTML = st
+    ? `a word settles <b>${st.latency_s.median.toFixed(2)} s</b> after it is spoken (median; 90% within `
+      + `${st.latency_s.p90.toFixed(2)} s) · <b>${(st.revision_rate * 100).toFixed(1)}%</b> of settled words are `
+      + `re-spelt by the final pass · <b>${Math.round(st.tick_ms.mean)} ms</b> per re-reading on the ${escHtml(st.device)} `
+      + `<span class="dim">(${st.utts} sentences, ${st.run} step ${fmt.int(st.step)}, ${st.time})</span>`
+    : '<span class="dim">not measured yet</span>';
+}
+
+function renderRobust(res) {
+  const r = res.robust;
+  const n = res.noise || { have: [], total: 6 };
+  $('#dc-noise-fetch').disabled = n.have.length === n.total;
+  $('#dc-noise-fetch').textContent = n.have.length === n.total ? 'Noise downloaded ✓' : 'Download the noise (0.65 GB)';
+  $('#dc-robust-run').disabled = !n.have.length || !dc.ckpt;
+  if (!r) {
+    $('#dc-robust').innerHTML = '<tbody><tr><td class="dim">no noise test yet</td></tr></tbody>';
+    $('#dc-robust-note').textContent = '';
+    return;
+  }
+  // The result's own order (quiet room first). Object.keys would sort these numeric keys
+  // ascending and flip the table relative to the terminal's.
+  const snrs = (r.snrs || []).map((x) => String(x)).filter((k) => k in r.mean_by_snr);
+  const cell = (v) => {
+    // Shade by how much worse than clean: the eye should go straight to the bad corner.
+    const rel = Math.min(1, Math.max(0, (v - r.clean) / 0.5));
+    return `<td style="background: color-mix(in srgb, var(--critical) ${Math.round(rel * 45)}%, transparent)">${pct(v)}</td>`;
+  };
+  $('#dc-robust').innerHTML = `<thead><tr><th>place</th>${snrs.map((s) => `<th>${s} dB</th>`).join('')}</tr></thead><tbody>`
+    + Object.entries(r.table).map(([env, row]) => `<tr><td>${escHtml(r.environments[env] || env)}</td>`
+      + snrs.map((s) => cell(row[s])).join('') + '</tr>').join('')
+    + `<tr><td><b>mean</b></td>${snrs.map((s) => cell(r.mean_by_snr[s])).join('')}</tr></tbody>`;
+  $('#dc-robust-note').textContent = `clean ${pct(r.clean)} · ${r.run} step ${fmt.int(r.step)}, ${r.utts} sentences of ${r.corpus.split('/').pop()}, ${r.decoder} · ${r.time}`;
 }
 
 /* ---- the desktop: daemon, shortcut, tools ------------------------------------------- */
@@ -469,6 +593,8 @@ async function load() {
   $('#dc-silence').disabled = !cks.length;
   renderResults(res.results || []);
   renderChecks(res);
+  renderRobust(res);
+  renderStream(res.stream);
   renderRuns(res.runs || []);
   dc.maxDictate = res.max_dictate_seconds || 120;
   const pi = res.pipeline || {};
@@ -525,7 +651,7 @@ function renderJobs(j) {
     $('#dc-job-log').textContent = (j.log || []).join('\n');
     $('#dc-job-stop').hidden = !j.running;
   }
-  for (const id of ['#dc-fetch', '#dc-pack', '#dc-lmfetch', '#dc-lm', '#dc-tune', '#dc-eval', '#dc-daytwo', '#dc-punct-eval']) {
+  for (const id of ['#dc-fetch', '#dc-pack', '#dc-lmfetch', '#dc-lm', '#dc-tune', '#dc-eval', '#dc-daytwo', '#dc-punct-eval', '#dc-noise-fetch', '#dc-robust-run', '#mv-score', '#dc-stream-run']) {
     if (j.running) $(id).disabled = true;
   }
   if (!j.running) {
@@ -544,7 +670,7 @@ async function pollJobs(again = true) {
     dc.jobRunning = j.running;
     renderJobs(j);
     // A job that just finished may have written a result; refresh the tables once.
-    if (wasRunning && !j.running) await load();
+    if (wasRunning && !j.running) { await load(); await loadMyVoice(true); }
     if (again) jobTimer = setTimeout(pollJobs, j.running ? 2000 : 10000);
   } catch (e) {
     status(`jobs: ${e.message}`, 'warn');
@@ -575,6 +701,10 @@ function wireJobs() {
   });
   $('#dc-daytwo').onclick = () => startJob({ kind: 'daytwo', checkpoint: dc.ckpt, corpus: 'data/asr/test-clean' });
   $('#dc-punct-eval').onclick = () => startJob({ kind: 'punct_eval', passages: 300 });
+  $('#dc-noise-fetch').onclick = () => startJob({ kind: 'noise_fetch' });
+  $('#dc-stream-run').onclick = () => startJob({ kind: 'stream_eval', checkpoint: dc.ckpt, limit: 200 });
+  $('#dc-robust-run').onclick = () => startJob({ kind: 'robust', checkpoint: dc.ckpt, corpus: 'data/asr/test-clean', limit: 400 });
+  $('#mv-score').onclick = () => startJob({ kind: 'eval', checkpoint: dc.ckpt, corpus: 'data/asr/my-voice', decoder: 'beam', personal: true });
   $('#dc-job-stop').onclick = async () => {
     try { await post('/api/dictate/stop', {}); } catch (e) { status(e.message, 'warn'); }
     await pollJobs();
@@ -611,13 +741,16 @@ registerTab('dictate', {
       try { await post('/api/dictate/personal', { action: 'add', word: w }); $('#dc-add-word').value = ''; } catch (e) { goStatus(e.message, 'warn'); }
       await loadPersonal();
     };
+    $('#mv-rec').onclick = () => (dc.rec ? stopRecording() : startRecording('myvoice'));
+    $('#mv-prev').onclick = () => { mv.i = Math.max(0, mv.i - 1); loadMyVoice(true); };
+    $('#mv-next').onclick = () => { mv.i = Math.min(mv.prompts.length - 1, mv.i + 1); loadMyVoice(true); };
     $('#dc-daemon-start').onclick = () => desktop('start');
     $('#dc-daemon-stop').onclick = () => desktop('stop');
     $('#dc-sc-install').onclick = () => desktop('install');
     $('#dc-sc-remove').onclick = () => desktop('uninstall');
     wireJobs();
     await load();
-    await Promise.all([loadPersonal(), loadDesktop()]);
+    await Promise.all([loadPersonal(), loadDesktop(), loadMyVoice()]);
     await pollJobs();
   },
   /* Stop a recording the moment the tab is left, so the microphone is never held open, and

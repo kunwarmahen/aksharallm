@@ -9,6 +9,7 @@
     python -m aksharallm.dictate correct --shown "I met Sean." --corrected "I met Shaun."
     python -m aksharallm.dictate dictionary add GitHub
     python -m aksharallm.dictate punct-eval checkpoints/punct/ckpt_best.pt
+    python -m aksharallm.dictate stream-eval asr-libri100   # the live preview, measured
 
 The punctuation tagger trains like any other run: `scripts/experiment.sh punct`.
 
@@ -211,6 +212,40 @@ def cmd_punct_eval(args) -> int:
     return 0
 
 
+def cmd_stream_eval(args) -> int:
+    """How the live preview behaves: commit latency, revisions, tick cost (dictate/stream.py)."""
+    import torch
+    from ..asr.__main__ import resolve
+    from ..asr.data import Utterances
+    from ..asr.train import feasibility, load_recognizer
+    from .stream import evaluate
+    device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
+    path = resolve(args.checkpoint)
+    model, blob = load_recognizer(path, device)
+    corpus = Utterances(args.corpus, max_seconds=40.0, limit=args.limit,
+                        feasible=feasibility(model.cfg, model.cfg.sample_rate))
+    t0 = time.time()
+    r = evaluate(model, device, corpus, args.tick)
+    L = r["latency_s"]
+    print(f"checkpoint   {path} (step {blob.get('step')}) on {r['utts']} utterances of {args.corpus}, "
+          f"a tick every {args.tick:g} s, {device}")
+    print(f"latency      a word is committed {L['median']:.2f} s after it is spoken (median; "
+          f"mean {L['mean']:.2f}, p90 {L['p90']:.2f}) — {r['words_committed_live']:,} of "
+          f"{r['words_final']:,} words committed while still talking")
+    print(f"revisions    {r['revised']} committed words differed from the final reading "
+          f"({r['revision_rate']:.2%})")
+    print(f"cost         {r['tick_ms']['mean']:.0f} ms per tick (p90 {r['tick_ms']['p90']:.0f})")
+    print(f"took         {time.time() - t0:.0f}s")
+    if not args.no_write:
+        out = Path("logs/asr") / f"stream-{path.parent.name}-step{blob.get('step')}-{Path(args.corpus).name}.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({"kind": "asr_stream", "checkpoint": str(path), "run": path.parent.name,
+                                   "step": blob.get("step"), "corpus": str(args.corpus), "device": device,
+                                   "time": time.strftime("%Y-%m-%d %H:%M:%S"), **r}, indent=1))
+        print(f"written      {out}")
+    return 0
+
+
 def main(argv=None) -> int:
     global ROOT
     ap = argparse.ArgumentParser(prog="python -m aksharallm.dictate",
@@ -271,6 +306,15 @@ def main(argv=None) -> int:
     s.add_argument("--device", default=None)
     s.add_argument("--no-write", action="store_true")
     s.set_defaults(fn=cmd_punct_eval)
+
+    s = sub.add_parser("stream-eval", help="measure the live preview: latency, revisions, cost")
+    s.add_argument("checkpoint", help="a recogniser run name or .pt")
+    s.add_argument("--corpus", default="data/asr/test-clean")
+    s.add_argument("--limit", type=int, default=200)
+    s.add_argument("--tick", type=float, default=0.5, help="seconds between re-readings")
+    s.add_argument("--device", default=None)
+    s.add_argument("--no-write", action="store_true")
+    s.set_defaults(fn=cmd_stream_eval)
 
     args = ap.parse_args(argv)
     if args.root:

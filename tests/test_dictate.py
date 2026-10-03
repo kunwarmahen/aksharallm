@@ -420,3 +420,133 @@ def test_the_portal_cleans_typed_words_with_the_same_pipeline(tmp_path):
     assert r["punctuator"] == "rules" and r["steps"][0] == {"step": "fillers", "removed": "um"}
     with pytest.raises(DictationError):
         d.clean("x" * 20_001)
+
+
+# ---------------------------------------------------------------------------------------
+# harder tests: real noise at a known SNR, and your own voice as a corpus
+# ---------------------------------------------------------------------------------------
+
+
+def test_noise_is_mixed_at_exactly_the_snr_asked_for():
+    from aksharallm.asr.robust import mix, speech_power
+    rng = np.random.default_rng(0)
+    speech = (0.1 * np.sin(np.arange(32000) / 7.0)).astype(np.float32)
+    speech[:8000] = 0.0                      # a pause: must not count as quiet speech
+    noise = rng.standard_normal(100_000).astype(np.float32)
+    for snr in (20.0, 5.0, 0.0):
+        y = mix(speech, noise, snr, np.random.default_rng(1))
+        got = 10 * math.log10(speech_power(speech) / np.mean((y - speech) ** 2))
+        assert got == pytest.approx(snr, abs=0.05)
+
+
+def test_speech_loudness_ignores_the_pauses():
+    """LibriSpeech clips carry silences; averaging them in would call a clip quieter than it is
+    and drown it in more noise than the SNR label says."""
+    from aksharallm.asr.robust import speech_power
+    voiced = (0.1 * np.sin(np.arange(16000) / 7.0)).astype(np.float32)
+    padded = np.concatenate([np.zeros(16000, np.float32), voiced, np.zeros(16000, np.float32)])
+    assert speech_power(padded) == pytest.approx(speech_power(voiced), rel=0.02)
+
+
+def test_the_same_utterance_hears_the_same_noise_every_run():
+    """Two checkpoints compared on one mixture, not on two different draws."""
+    from aksharallm.asr.robust import mix
+    s = np.ones(1000, np.float32) * 0.1
+    n = np.random.default_rng(3).standard_normal(50_000).astype(np.float32)
+    a = mix(s, n, 10.0, np.random.default_rng([0, 2, 5]))
+    b = mix(s, n, 10.0, np.random.default_rng([0, 2, 5]))
+    assert np.array_equal(a, b)
+
+
+def test_a_mixture_that_would_clip_is_scaled_without_changing_its_snr():
+    from aksharallm.asr.robust import mix, speech_power
+    s = np.full(4000, 0.9, np.float32)
+    # Alternating +-1: any even-length stretch sums to exactly zero, so the common scale the
+    # mixer applied can be read back exactly from the mean.
+    n = np.tile(np.array([1.0, -1.0], np.float32), 4000)
+    y = mix(s, n, 0.0, np.random.default_rng(0))
+    assert np.abs(y).max() <= 0.99 + 1e-6
+    k = y.mean() / s.mean()
+    assert 10 * math.log10(speech_power(s * k) / np.mean((y - s * k) ** 2)) == pytest.approx(0.0, abs=0.1)
+
+
+def test_your_voice_prompts_are_in_the_recognisers_alphabet():
+    """The reference must be what a perfect transcript says: no digits, no symbols."""
+    from aksharallm.asr import myvoice, vocab
+    for p in myvoice.prompts():
+        assert vocab.normalise(p["text"]) == p["text"]
+
+
+def test_a_second_take_replaces_the_first_and_the_corpus_reads_back(tmp_path):
+    from aksharallm.asr import myvoice
+    from aksharallm.asr.data import Utterances
+    x = (0.1 * np.sin(np.arange(16000 * 2) / 5.0)).astype(np.float32)
+    myvoice.save("me-v1-000", x, 16_000, tmp_path)
+    myvoice.save("me-v1-001", x[:20000], 16_000, tmp_path)
+    st = myvoice.save("me-v1-000", x[:24000], 16_000, tmp_path)
+    assert st["recorded"] == 2
+    u = Utterances(tmp_path, max_seconds=40)
+    assert len(u.utts) == 2 and {x.speaker for x in u.utts} == {"me"}
+    assert u.utts[0].n == 24000 and u.utts[0].text == myvoice.PROMPTS[0]
+    with pytest.raises(ValueError):
+        myvoice.save("../../etc", x, 16_000, tmp_path)
+    with pytest.raises(ValueError):
+        myvoice.save("me-v1-002", x[:4000], 16_000, tmp_path)   # 0.25 s is not a reading
+
+
+# ---------------------------------------------------------------------------------------
+# streaming: the live preview
+# ---------------------------------------------------------------------------------------
+
+
+def test_word_ends_come_from_the_last_frame_of_each_word():
+    from aksharallm.dictate.stream import words_with_ends
+    # "i" spans two frames: the word ends at the SECOND (a held letter is still the letter).
+    ids = ["b", "h", "i", "i", "b", " ", "b", "y", "o", "b", "u", "b"]
+    lp = np.full((len(ids), vocab.VOCAB_SIZE), -20.0)
+    for t, c in enumerate(ids):
+        lp[t, vocab.BLANK if c == "b" else vocab.STOI[c]] = 0.0
+    got = words_with_ends(lp, 0.04)
+    assert [w for w, _ in got] == ["hi", "you"]
+    assert got[0][1] == pytest.approx(0.16) and got[1][1] == pytest.approx(0.44)
+
+
+def test_committed_words_are_never_retracted_and_the_newest_never_committed():
+    from aksharallm.dictate.stream import LocalAgreement
+    a = LocalAgreement()
+    assert a.update(["the", "ca"]) == ([], ["the", "ca"])          # one reading: nothing agreed
+    assert a.update(["the", "cat", "sa"]) == (["the"], ["cat", "sa"])
+    assert a.update(["the", "cat", "sat", "on"])[0] == ["the", "cat"]
+    # A later reading disagrees with a committed word: the committed text stands.
+    stable, _ = a.update(["a", "cat", "sat", "on", "the"])
+    assert stable == ["the", "cat"]
+    stable, _ = a.update(["a", "cat", "sat", "on", "the", "mat"])
+    assert stable == ["the", "cat"]
+
+
+def test_the_newest_word_waits_even_when_two_readings_agree_completely():
+    """The audio may end in the middle of it."""
+    from aksharallm.dictate.stream import LocalAgreement
+    a = LocalAgreement()
+    a.update(["meet", "at", "fi"])
+    assert a.update(["meet", "at", "fi"])[0] == ["meet", "at"]
+
+
+def test_three_readings_must_agree_when_asked():
+    from aksharallm.dictate.stream import LocalAgreement
+    a = LocalAgreement(need=3)
+    a.update(["one", "two", "x"])
+    assert a.update(["one", "two", "three"])[0] == []
+    assert a.update(["one", "two", "three", "four"])[0] == ["one", "two"]   # all three agree on these
+
+
+def test_portal_jobs_cover_the_noise_test(tmp_path):
+    from aksharallm.portal.dictate import AsrJobs, Dictation, DictationError
+    d = Dictation(tmp_path, device_for=lambda: ("cpu", "test"))
+    jobs = AsrJobs(d)
+    assert {"noise_fetch", "robust"} <= set(jobs.KINDS)
+    assert jobs.command({"kind": "noise_fetch"})[0] == ["noise", "fetch"]
+    with pytest.raises(DictationError):
+        jobs.command({"kind": "robust", "checkpoint": "x"})
+    with pytest.raises(DictationError, match="id"):
+        d.stream("../x", "", 16000)

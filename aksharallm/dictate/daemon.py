@@ -148,6 +148,7 @@ class Daemon:
         self.state = "loading"
         self.last: dict | None = None
         self._timer: threading.Timer | None = None
+        self._preview: threading.Thread | None = None
 
     def load(self) -> None:
         t0 = time.time()
@@ -171,8 +172,32 @@ class Daemon:
             self._timer = threading.Timer(self.s.max_seconds, self._timeout)
             self._timer.daemon = True
             self._timer.start()
+            self._preview = threading.Thread(target=self._live, daemon=True)
+            self._preview.start()
         notify("Listening…", "press the shortcut again to finish")
         return {"ok": True, "state": "recording"}
+
+    def _live(self) -> None:
+        """The live preview (dictate/stream.py) in the notification, while recording.
+
+        Shown in the notification and NOT typed: typed text would have to be deleted and
+        retyped when the final pass (beam, dictionary, cleanup) differs from the preview —
+        and it does, by design. Reads parecord's file as it grows."""
+        from .stream import LiveTranscript
+        lt = LiveTranscript(self.dictator.recognizer(), self.s.device)
+        shown = ""
+        while self.state == "recording":
+            time.sleep(0.7)
+            try:
+                raw = self.rec.path.read_bytes()
+            except OSError:
+                continue
+            lt.audio = np.frombuffer(raw[: len(raw) // 2 * 2], dtype="<i2").astype(np.float32) / 32768.0
+            r = lt.tick()
+            text = (r["stable"] + (" " + r["tentative"] if r["tentative"] else "")).strip()
+            if text and text != shown and self.state == "recording":
+                notify("Listening…", text[-200:])
+                shown = text
 
     def _timeout(self) -> None:
         if self.state == "recording":
