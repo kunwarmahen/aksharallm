@@ -641,7 +641,28 @@ fatal to the measurement: each take was stored against *one* sentence's referenc
 other sentence in it would have scored as inserted words and made the recogniser look terrible
 on that voice. A take longer than `4 s + words / 1.3` (a slow reader plus pauses; ~12 s for a
 ten-word sentence) is now refused with the reason, the recorder stops itself at that limit, and
-takes can be deleted one at a time or all at once (portal buttons, `asr myvoice clear [--id]`). Record them in the portal (*Your voice, as a
+takes can be deleted one at a time or all at once (portal buttons, `asr myvoice clear [--id]`).
+
+**Measured (2026-10-03), the author's voice, 30 sentences, 306 words, a Blue USB microphone
+through the browser:**
+
+| recogniser | test-clean | **the author's voice** |
+|---|---|---|
+| asr-libri460, beam + LM | 5.25% | **47.1%** |
+| Whisper small (local `faster-whisper-server`; a baseline row, never a component) | 1.1% | **2.3%** |
+
+The two obvious explanations were tested and **both were wrong**, which is why they are
+written down. *Too quiet* (−41 dBFS against test-clean's −26.5): normalised to −25 dBFS it
+scores 46.1%. *A muffled microphone* (58% of the energy below 300 Hz against 30%): the shares
+looked damning, but with the level accounted for the 1–4 kHz bands match test-clean's shape
+(×0.9–1.2) — the difference is only excess bass — and re-balancing the spectrum scored 50.0%.
+Speaking rate is 3.16 words/s against 2.68: not much faster, and slowing the audio made it
+worse. **The Whisper row is the decisive one**: the same recordings are near-perfect for a
+model that heard ~680,000 hours of varied speech. The audio is fine; ours heard 460 hours of
+1,172 people reading audiobooks, and this voice, accent and everyday speaking style are not in
+them. This is day-two problem 2 measured on the person the tool is for, and it is the honest
+headline of the whole phase: **more LibriSpeech will not fix it; speech that sounds like the
+user will.** Record them in the portal (*Your voice, as a
 test set*) or with `python -m aksharallm.asr myvoice record`; recordings stay in `data/`, which
 is never committed.
 
