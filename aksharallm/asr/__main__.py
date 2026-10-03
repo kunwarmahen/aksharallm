@@ -339,21 +339,25 @@ def cmd_robust(args) -> int:
 def cmd_myvoice(args) -> int:
     """Record the fixed prompts in your own voice (asr/myvoice.py)."""
     from . import myvoice
-    st = myvoice.status(args.corpus)
+    corpus = args.corpus or str(myvoice.SETS[args.set])
+    args.corpus = corpus
+    st = myvoice.status(corpus, args.set)
     if args.action == "clear":
         if args.id:
-            st = myvoice.remove(args.id, args.corpus)
+            st = myvoice.remove(args.id, args.corpus, args.set)
             print(f"deleted {args.id}; {st['recorded']}/{st['total']} still recorded")
         else:
-            myvoice.remove(None, args.corpus)
+            myvoice.remove(None, args.corpus, args.set)
             print(f"deleted every recording in {args.corpus}")
         return 0
     if args.action == "status":
         print(f"{st['recorded']}/{st['total']} sentences recorded ({st['seconds']} s) in {st['corpus']}")
         for p in st["prompts"]:
             print(f"  {'✓' if p['recorded'] else ' '} {p['id']}  {p['text']}")
-        if st["recorded"]:
+        if st["recorded"] and args.set == "test":
             print(f"score it:  python -m aksharallm.asr eval <run> --corpus {st['corpus']}")
+        elif st["recorded"]:
+            print("train on it:  scripts/audio.sh asr-me   (configs/asr-me.yaml)")
         return 0
     import shutil
     import signal
@@ -530,7 +534,9 @@ def main(argv=None) -> int:
     s.add_argument("action", nargs="?", choices=["status", "record", "clear"], default="status",
                    help="record: ONE sentence per recording; clear: delete takes (all, or --id)")
     s.add_argument("--id", default=None, help="with clear: just this prompt, e.g. me-v1-006")
-    s.add_argument("--corpus", default="data/asr/my-voice")
+    s.add_argument("--set", choices=["test", "train"], default="test",
+                   help="test: the 30 scored sentences; train: the 293 that teach it your voice")
+    s.add_argument("--corpus", default=None, help="default: data/asr/my-voice[-train]")
     s.add_argument("--all", action="store_true", help="re-record sentences already recorded")
     s.set_defaults(fn=cmd_myvoice)
 

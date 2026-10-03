@@ -77,12 +77,41 @@ PROMPTS = [
 ]
 
 
-def prompts() -> list[dict]:
+#: The TRAINING set: sentences read so the recogniser can learn this voice (configs/asr-me.yaml).
+#: Kept apart from the 30 test prompts above, by text and by corpus — scoring a model on
+#: sentences it was adapted on would measure memory, not hearing.
+TRAIN_CORPUS = Path("data/asr/my-voice-train")
+TRAIN_VERSION = 1
+SETS = {"test": CORPUS, "train": TRAIN_CORPUS}
+
+
+def _train_lines() -> list[str]:
+    path = Path(__file__).with_name("myvoice_train.txt")
+    return [l.strip() for l in path.read_text().splitlines() if l.strip() and not l.startswith("#")]
+
+
+def prompts(kind: str = "test") -> list[dict]:
+    """The prompt list for a set. Ids carry the set and version: `me-v1-007` (test),
+    `me-t1-007` (train); both start `me-` so per-speaker reports file them under one voice."""
+    if kind == "test":
+        lines, prefix = PROMPTS, f"me-v{PROMPTS_VERSION}"
+    elif kind == "train":
+        lines, prefix = _train_lines(), f"me-t{TRAIN_VERSION}"
+    else:
+        raise ValueError(f"unknown prompt set {kind!r}")
     out = []
-    for i, p in enumerate(PROMPTS):
-        assert vocab.normalise(p) == p, f"prompt {i} is not in the recogniser's alphabet: {p!r}"
-        out.append({"id": f"me-v{PROMPTS_VERSION}-{i:03d}", "text": p})
+    for i, p in enumerate(lines):
+        assert vocab.normalise(p) == p, f"{kind} prompt {i} is not in the recogniser's alphabet: {p!r}"
+        out.append({"id": f"{prefix}-{i:03d}", "text": p})
     return out
+
+
+def _all_prompts() -> dict[str, str]:
+    return {p["id"]: p["text"] for k in SETS for p in prompts(k)}
+
+
+def kind_of(prompt_id: str) -> str:
+    return "train" if prompt_id.startswith("me-t") else "test"
 
 
 def _load(corpus: Path) -> tuple[dict[str, np.ndarray], dict[str, str]]:
@@ -97,11 +126,12 @@ def _load(corpus: Path) -> tuple[dict[str, np.ndarray], dict[str, str]]:
     return clips, texts
 
 
-def status(corpus: str | Path = CORPUS) -> dict:
+def status(corpus: str | Path = CORPUS, kind: str = "test") -> dict:
     clips, texts = _load(Path(corpus))
     have = {n.rsplit(".", 1)[0] for n in clips}
-    ps = prompts()
-    return {"corpus": str(corpus), "version": PROMPTS_VERSION,
+    ps = prompts(kind)
+    return {"corpus": str(corpus), "kind": kind,
+            "version": PROMPTS_VERSION if kind == "test" else TRAIN_VERSION,
             "prompts": [{**p, "recorded": p["id"] in have, "max_seconds": round(max_seconds(p["id"]), 1),
                          "seconds": round(len(clips.get(p["id"] + ".wav", [])) / 16_000, 1)}
                         for p in ps],
@@ -112,7 +142,7 @@ def status(corpus: str | Path = CORPUS) -> dict:
 def save(prompt_id: str, x: np.ndarray, sr: int, corpus: str | Path = CORPUS) -> dict:
     """Store one reading of one prompt (replacing an earlier take) and rewrite the corpus."""
     from ..audio.io import resample
-    by_id = {p["id"]: p["text"] for p in prompts()}
+    by_id = _all_prompts()
     if prompt_id not in by_id:
         raise ValueError(f"unknown prompt {prompt_id!r}")
     x = np.asarray(x, dtype=np.float32)
@@ -129,29 +159,34 @@ def save(prompt_id: str, x: np.ndarray, sr: int, corpus: str | Path = CORPUS) ->
         raise ValueError(f"{secs:.0f} s for a {words}-word sentence — that sounds like more than "
                          "one. Read just this sentence, then stop; it moves to the next by itself")
     corpus = Path(corpus)
+    other = [n for n in _load(corpus)[0] if kind_of(n) != kind_of(prompt_id)]
+    if other:
+        raise ValueError(f"{corpus} holds {kind_of(other[0])} recordings; {prompt_id} is a "
+                         f"{kind_of(prompt_id)} prompt — the two sets are never mixed")
     corpus.mkdir(parents=True, exist_ok=True)
     clips, texts = _load(corpus)
     name = prompt_id + ".wav"
     clips[name] = (np.clip(x, -1, 1) * 32767).astype("<i2")
     texts[name] = by_id[prompt_id].upper()       # LibriSpeech's case, which Utterances normalises
-    return _write(corpus, clips, texts)
+    return _write(corpus, clips, texts, kind_of(prompt_id))
 
 
 def max_seconds(prompt_id: str) -> float:
     """The longest take accepted for a prompt: generous slow reading (~1.3 words/s, people
     speak at 2-3) plus 4 s for the gaps before and after. A 10-word sentence allows ~11.7 s."""
-    words = len(dict((p["id"], p["text"]) for p in prompts())[prompt_id].split())
+    words = len(_all_prompts()[prompt_id].split())
     return 4.0 + words / 1.3
 
 
-def remove(prompt_id: str | None = None, corpus: str | Path = CORPUS) -> dict:
-    """Delete one take, or every take (`prompt_id=None`)."""
+def remove(prompt_id: str | None = None, corpus: str | Path = CORPUS, kind: str = "test") -> dict:
+    """Delete one take, or every take of the corpus (`prompt_id=None`)."""
     import shutil
     corpus = Path(corpus)
     if prompt_id is None:
         if corpus.is_dir():
             shutil.rmtree(corpus)
-        return status(corpus)
+        return status(corpus, kind)
+    kind = kind_of(prompt_id)
     clips, texts = _load(corpus)
     name = prompt_id + ".wav"
     if name not in clips:
@@ -160,11 +195,11 @@ def remove(prompt_id: str | None = None, corpus: str | Path = CORPUS) -> dict:
     texts.pop(name, None)
     if not clips:
         shutil.rmtree(corpus)
-        return status(corpus)
-    return _write(corpus, clips, texts)
+        return status(corpus, kind)
+    return _write(corpus, clips, texts, kind)
 
 
-def _write(corpus: Path, clips: dict, texts: dict) -> dict:
+def _write(corpus: Path, clips: dict, texts: dict, kind: str = "test") -> dict:
     from ..audio.dataset import Manifest
     names = sorted(clips)
     offsets, total = [0], 0
@@ -180,4 +215,4 @@ def _write(corpus: Path, clips: dict, texts: dict) -> dict:
              seconds=total / 16_000, built=time.strftime("%Y-%m-%d %H:%M:%S"),
              source_dir="recorded: python -m aksharallm.asr myvoice").save(corpus / "manifest.json")
     (corpus / "transcripts.json").write_text(json.dumps({n: texts[n] for n in names}, indent=0))
-    return status(corpus)
+    return status(corpus, kind)

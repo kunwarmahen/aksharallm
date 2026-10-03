@@ -1,0 +1,72 @@
+# Teach the recogniser ONE voice: asr-libri460, adapted on recordings of the person using it.
+#
+# Why: on the author's own voice asr-libri460 scores 47.1% WER where Whisper scores 2.3% on the
+# same audio (docs/23 § Harder tests). Not loudness, the microphone or speed — the voice is
+# simply not among LibriSpeech's 1,172 audiobook readers. The fix is speech that sounds like
+# the user, and the cheapest version of that is the user.
+#
+#   1. Read the TRAINING sentences (293 of them; the more the better, 150+ to start):
+#        the Dictation tab -> "Your voice" -> set: training      or
+#        python -m aksharallm.asr myvoice record --set train
+#   2. scripts/audio.sh asr-me                     (the Dashboard's Start; ~10-20 min)
+#   3. Score it on the 30 TEST sentences, which it never trains on:
+#        python -m aksharallm.asr eval asr-me --corpus data/asr/my-voice --decoder beam ...
+#      and on test-clean, to see what it forgot.
+#
+# Three decisions:
+# * Half of every step is LibriSpeech (`weights`). Twenty minutes of one voice alone, at this
+#   learning rate, would teach the model that everyone sounds like you and forget the rest.
+# * The best checkpoint is chosen on the LAST 30 TRAINING recordings, held out (`val: null`
+#   holds out `val_clips` of the first corpus) — never on the 30 test sentences, or the test
+#   number would be the one the checkpoint was picked on.
+# * A low, short schedule from the trained weights (`init`), not a new model.
+name: asr-me
+
+asr:
+  d_model: 256
+  n_layers: 12
+  n_heads: 4
+  ff_mult: 4
+  conv_kernel: 31
+  subsample_channels: 256
+  dropout: 0.1
+  normalise: global        # see asr/model.py `normalise` for why not per-utterance
+
+
+data:
+  train: [data/asr/my-voice-train, data/asr/train-clean-100]
+  weights: [0.5, 0.5]
+  val: null                # hold out the last val_clips of my-voice-train
+  val_clips: 30
+  eval_utts: 30
+  min_seconds: 0.5
+  max_seconds: 17.0
+  max_batch_seconds: 160.0
+  no_speech_ratio: 0.05
+
+augment:
+  enabled: true
+  gain_db: [-18.0, 6.0]
+  freq_masks: 2
+  freq_width: 27
+  time_masks: 5
+  time_ratio: 0.05
+
+optim:
+  lr: 1.0e-4               # a tenth of the base run's peak: adapt, do not relearn
+  min_lr_ratio: 0.1
+  warmup_steps: 100
+  weight_decay: 1.0e-3
+  beta1: 0.9
+  beta2: 0.98
+  grad_clip: 5.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/asr-me
+  init: checkpoints/asr-libri460/ckpt_best.pt
+  max_steps: 1500
+  eval_every: 100
+  ckpt_every: 100
+  log_every: 20
+  ctc_impl: torch

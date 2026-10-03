@@ -81,6 +81,8 @@ LAUNCHERS: dict[str, dict] = {
     "asr-synth": {"script": "scripts/audio.sh", "args": ["asr-synth"]},
     "asr-libri100": {"script": "scripts/audio.sh", "args": ["asr-libri100"]},
     "asr-libri460": {"script": "scripts/audio.sh", "args": ["asr-libri460"]},
+    # asr-libri460 adapted to the user's own recorded voice (docs/23 § Your voice).
+    "asr-me": {"script": "scripts/audio.sh", "args": ["asr-me"]},
     # The dictation punctuation tagger: the pretraining loop with a third objective, at
     # Phase-1 scale, so the experiment launcher. docs/23 § cleanup.
     "punct": {"script": "scripts/experiment.sh", "args": ["punct"]},

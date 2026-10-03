@@ -123,13 +123,13 @@ activations do not fit in 24 GB. `scripts/stage.sh` now passes `BS=8 ACCUM=8` (t
 
 ```bash
 python -m aksharallm.data.prepare_sft smoltalk \
-    --tokenizer data/fineweb/tokenizer.json \
+    --tokenizer data/blend/tokenizer.json \
     --out-dir data/sft --seq-len 1024
 
 python -m aksharallm.train.sft \
     --base checkpoints/small/ckpt_best.pt \
     --data-dir data/sft \
-    --tokenizer data/fineweb/tokenizer.json \
+    --tokenizer data/blend/tokenizer.json \
     --out-dir checkpoints/small-sft \
     --epochs 2 --lr 1e-5
 
@@ -287,13 +287,13 @@ early.
 
 ```bash
 python -m aksharallm.data.prepare_dpo ultrafeedback \
-    --tokenizer data/fineweb/tokenizer.json \
+    --tokenizer data/blend/tokenizer.json \
     --out-dir data/dpo --seq-len 1024
 
 python -m aksharallm.train.dpo \
     --sft checkpoints/small-sft/sft_best.pt \
     --data-dir data/dpo \
-    --tokenizer data/fineweb/tokenizer.json \
+    --tokenizer data/blend/tokenizer.json \
     --out-dir checkpoints/small-dpo \
     --beta 0.1 --lr 5e-7
 

@@ -588,3 +588,38 @@ def test_takes_can_be_deleted_one_at_a_time_or_all(tmp_path):
     with pytest.raises(ValueError):
         myvoice.remove("me-v1-000", tmp_path)
     assert myvoice.remove(None, tmp_path)["recorded"] == 0 and not tmp_path.exists()
+
+
+# ---------------------------------------------------------------------------------------
+# adapting to one voice
+# ---------------------------------------------------------------------------------------
+
+
+def test_the_training_sentences_never_include_a_test_sentence():
+    """Adapting on a test sentence and then scoring it would measure memory, not hearing."""
+    from aksharallm.asr import myvoice
+    test = {p["text"] for p in myvoice.prompts("test")}
+    train = myvoice.prompts("train")
+    assert len(train) >= 250 and not (test & {p["text"] for p in train})
+    assert all(p["id"].startswith("me-t") for p in train)
+
+
+def test_a_training_take_cannot_land_in_the_test_corpus(tmp_path):
+    from aksharallm.asr import myvoice
+    x = (0.1 * np.sin(np.arange(16000 * 2) / 5.0)).astype(np.float32)
+    myvoice.save("me-v1-000", x, 16_000, tmp_path)
+    with pytest.raises(ValueError, match="never mixed"):
+        myvoice.save("me-t1-000", x, 16_000, tmp_path)
+
+
+def test_corpus_weights_override_hours():
+    """Twenty minutes of one voice beside 100 h would be 0.3% of batches by hours."""
+    from aksharallm.asr.train import Mixture
+
+    class _S:
+        def __init__(self, secs):
+            self.utts = type("U", (), {"seconds": secs})()
+    assert Mixture([_S(1200), _S(360_000)], 0).p[0] == pytest.approx(1200 / 361_200)
+    assert Mixture([_S(1200), _S(360_000)], 0, [0.5, 0.5]).p[0] == pytest.approx(0.5)
+    with pytest.raises(ValueError):
+        Mixture([_S(1), _S(2)], 0, [1.0])

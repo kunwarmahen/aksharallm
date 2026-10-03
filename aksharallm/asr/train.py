@@ -76,9 +76,15 @@ def feasibility(cfg: AsrModelConfig, sample_rate: int):
 class Mixture:
     """Several corpora, sampled in proportion to their hours."""
 
-    def __init__(self, samplers: list[BatchSampler], seed: int):
+    def __init__(self, samplers: list[BatchSampler], seed: int, weights: list[float] | None = None):
         self.samplers = samplers
-        w = np.array([s.utts.seconds for s in samplers], dtype=np.float64)
+        if weights is not None:
+            if len(weights) != len(samplers) or min(weights) <= 0:
+                raise ValueError(f"data.weights needs one positive weight per training corpus "
+                                 f"({len(samplers)}), got {weights}")
+            w = np.array(weights, dtype=np.float64)
+        else:
+            w = np.array([s.utts.seconds for s in samplers], dtype=np.float64)
         self.p = w / w.sum()
         self.rng = np.random.default_rng(seed)
 
@@ -229,7 +235,7 @@ def main(argv=None) -> int:
 
     samplers = [BatchSampler(u, cfg.data.max_batch_seconds, seed=cfg.train.seed + i)
                 for i, u in enumerate(trains)]
-    mix = Mixture(samplers, cfg.train.seed)
+    mix = Mixture(samplers, cfg.train.seed, cfg.data.weights)
 
     model = Recognizer(cfg.asr).to(device)
     decay = [q for q in model.parameters() if q.dim() >= 2]
@@ -268,6 +274,24 @@ def main(argv=None) -> int:
         start_step = int(blob.get("step", -1)) + 1
         best = float(blob.get("best_val", float("inf")))
         print(f"resumed {resume} at step {start_step}, best val WER {best:.4f}")
+    elif cfg.train.init:
+        # Adaptation: another run's weights AND its feature statistics (they are buffers in
+        # the state dict), so the features this model sees are scaled exactly as the base was
+        # trained on. Re-measuring them on the new corpus would move every input under weights
+        # that never saw the new scaling.
+        blob = torch.load(cfg.train.init, map_location=device, weights_only=False)
+        if blob.get("stage") != "asr":
+            raise SystemExit(f"train.init {cfg.train.init} is not a recogniser checkpoint")
+        # Shape mismatches fail in load_state_dict. These two do not -- they change what the
+        # same tensors mean -- so they are checked by name. Dropout may differ on purpose.
+        base = {**{"block_norm": True}, **dict(blob["asr"])}
+        for k in ("normalise", "block_norm", "n_mels", "sample_rate"):
+            if k in base and getattr(cfg.asr, k, base[k]) != base[k]:
+                raise SystemExit(f"train.init: asr.{k} is {getattr(cfg.asr, k)!r} here but "
+                                 f"{base[k]!r} in {cfg.train.init}")
+        model.load_state_dict(blob["model"])
+        print(f"init       weights from {cfg.train.init} (step {blob.get('step')}); "
+              "fresh optimizer, step 0")
     elif cfg.asr.normalise == "global":
         # Measured once, on up to 200 training utterances spread across the corpus, and then
         # part of the checkpoint. A resumed run must NOT re-measure: the weights were trained
@@ -291,7 +315,8 @@ def main(argv=None) -> int:
     print(f"ctc        {cfg.train.ctc_impl}    augment {'on' if aug else 'off'}    "
           f"normalise {cfg.asr.normalise}    no-speech rows {cfg.data.no_speech_ratio:.0%}    "
           f"device {device}")
-    print("expect     empty transcripts at first: an untrained CTC model predicts the blank everywhere")
+    if not (resume or cfg.train.init):
+        print("expect     empty transcripts at first: an untrained CTC model predicts the blank everywhere")
 
     claim_pid_file(out_dir)
     stop_file = out_dir / "STOP"

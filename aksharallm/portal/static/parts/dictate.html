@@ -221,6 +221,13 @@ scripts/audio.sh asr-libri100</pre>
         than its sentence is refused. A bad take (a cough, a door) can simply be recorded again.
         Recordings stay on this machine, in <code>data/asr/my-voice/</code>.
       </p>
+      <div class="row" role="radiogroup" aria-label="which sentences">
+        <label class="field"><span><input type="radio" name="mv-set" value="test" checked>
+          <b>Test</b> — the 30 sentences you are scored on</span></label>
+        <label class="field"><span><input type="radio" name="mv-set" value="train">
+          <b>Training</b> — 293 more that teach it your voice</span></label>
+      </div>
+      <p id="mv-set-note" class="panel-note dim"></p>
       <p id="mv-progress" class="panel-note"></p>
       <div id="mv-card" class="dc-out">
         <p class="dim" id="mv-id"></p>
@@ -235,10 +242,12 @@ scripts/audio.sh asr-libri100</pre>
       </div>
       <div class="row">
         <button id="mv-score" type="button">Score my voice</button>
-        <button id="mv-clear" type="button">Delete all my recordings…</button>
+        <button id="mv-clear" type="button">Delete all in this set…</button>
         <span id="mv-score-note" class="dim"></span>
       </div>
-      <pre class="au-cmd">python -m aksharallm.asr myvoice record     # the same, from a terminal</pre>
+      <div id="mv-scores" class="scroll-x"></div>
+      <pre class="au-cmd">python -m aksharallm.asr myvoice record [--set train]   # the same, from a terminal
+scripts/audio.sh asr-me                                   # adapt to your voice (Dashboard: asr-me)</pre>
     </div>
 
     <div class="panel">

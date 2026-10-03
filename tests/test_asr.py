@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import math
 import struct
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -569,3 +570,36 @@ def test_a_portal_job_is_judged_by_the_clis_exit_code(tmp_path, monkeypatch, arg
             break
         _t.sleep(0.1)
     assert st["current"]["state"] == state
+
+
+def test_init_starts_from_another_runs_weights_and_keeps_its_feature_stats(tmp_path):
+    """Adaptation (configs/asr-me.yaml): a fresh run whose weights AND feature statistics are
+    the base's. Re-measuring the stats on the new corpus would rescale every input under
+    weights that never saw that scaling."""
+    from aksharallm.asr.train import load_recognizer, main
+    (tmp_path / "c").mkdir()
+    (tmp_path / "d").mkdir()
+    d = _corpus(tmp_path / "c", ["aa ee"] * 30, [1.0] * 30)
+    d2 = _corpus(tmp_path / "d", ["ee aa"] * 30, [1.0] * 30)
+    # A much quieter second corpus: re-measured stats would differ, which is the point.
+    a = np.fromfile(Path(d2) / "audio.bin", dtype="<i2")
+    (a // 20).astype("<i2").tofile(Path(d2) / "audio.bin")
+
+    def run(name, corpus, extra=""):
+        cfg = tmp_path / f"{name}.yaml"
+        cfg.write_text(f"""
+name: {name}
+asr: {json.dumps(TINY)}
+data: {{train: [{corpus}], val_clips: 4, eval_utts: 4, max_batch_seconds: 8.0}}
+optim: {{lr: 1.0e-3, warmup_steps: 2}}
+train: {{out_dir: {tmp_path / name}, max_steps: 3, eval_every: 3, ckpt_every: 3, log_every: 1{extra}}}
+""")
+        assert main([str(cfg), "--device", "cpu"]) == 0
+        return load_recognizer(tmp_path / name / "ckpt_last.pt")[0]
+
+    base = run("base", d)
+    adapted = run("adapted", d2, f", init: {tmp_path / 'base' / 'ckpt_last.pt'}, max_steps: 1")
+    assert torch.equal(adapted.feat_mean, base.feat_mean)
+    assert torch.equal(adapted.feat_std, base.feat_std)
+    log = [json.loads(x) for x in (tmp_path / "adapted" / "train_log.jsonl").read_text().splitlines()]
+    assert [r for r in log if r.get("event") == "session_start"][0]["start_step"] == 0

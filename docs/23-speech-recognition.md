@@ -551,6 +551,8 @@ updating the code, `scripts/portal.sh --restart`).
 | `asr myvoice record` / `clear` | Your voice, as a test set → **Record this sentence** (one sentence per take); **Delete this take** / **Delete all my recordings…**; **Score my voice** runs `asr eval` on it |
 | `dictate stream-eval` | How noise hurts it → The live preview, measured → **Measure it** |
 | `scripts/audio.sh asr-libri460` | Dashboard: pick **asr-libri460**, Start |
+| `asr myvoice record --set train` | Your voice → **Training** → Record this sentence |
+| `scripts/audio.sh asr-me` | Dashboard: pick **asr-me**, Start |
 | `sudo apt install xdotool xclip` | not runnable — shown beside each missing tool |
 
 **The shortcut installer reads back every value it writes, and this is why.** The first
@@ -665,6 +667,37 @@ headline of the whole phase: **more LibriSpeech will not fix it; speech that sou
 user will.** Record them in the portal (*Your voice, as a
 test set*) or with `python -m aksharallm.asr myvoice record`; recordings stay in `data/`, which
 is never committed.
+
+### Teaching it your voice
+
+The table above says the fix is speech that sounds like the user. The cheapest source of that
+is the user: read more sentences aloud and adapt the recogniser to them
+([`configs/asr-me.yaml`](../configs/asr-me.yaml)).
+
+```mermaid
+flowchart LR
+    B["asr-libri460<br/>(trained weights)"] -->|"train.init"| A["asr-me: a short, low-LR run"]
+    T["your TRAINING reading<br/>293 sentences, data/asr/my-voice-train"] -->|"50% of every step"| A
+    L["LibriSpeech train-clean-100"] -->|"50% of every step"| A
+    A --> V["best checkpoint chosen on the<br/>last 30 TRAINING takes, held out"]
+    V --> S["scored on the 30 TEST sentences<br/>(never trained on) + test-clean"]
+```
+
+* **Two sets, never mixed.** The 30 test sentences are only ever scored. A second set of 293
+  is for training (`asr/myvoice_train.txt`, versioned: 60 written for dictation, then
+  FineWeb-Edu sentences of 7–13 words using only the 15,000 commonest words). A test asserts no
+  sentence is in both, and a take cannot be saved into the other set's corpus.
+* **Half of every step is LibriSpeech** (`data.weights`, new). In proportion to hours, twenty
+  minutes of one voice beside 100 h would be 0.3% of the batches and teach nothing; alone, at
+  any useful learning rate, it would teach that everyone sounds like you.
+* **It starts from the trained model** (`train.init`, new): its weights *and* its feature
+  statistics, a fresh optimizer and step 0 — not a resume. Re-measuring the statistics on the
+  new audio would rescale every input under weights that never saw that scaling; a test
+  quietens the second corpus by 26 dB and asserts the statistics did not move.
+* **The best checkpoint is chosen on held-out training takes** (the last 30 recorded), never on
+  the test sentences — otherwise the test number would be the one the checkpoint was picked on.
+* **Two numbers afterwards, always together**: WER on your 30 test sentences (did it learn
+  you?) and on test-clean (what did it forget?).
 
 ---
 
@@ -815,6 +848,8 @@ sudo apt install xdotool xclip                       # typing and the clipboard
 .venv/bin/python -m aksharallm.asr noise fetch             # DEMAND, 0.65 GB, CC BY 4.0
 .venv/bin/python -m aksharallm.asr robust asr-libri100     # WER by place x SNR
 .venv/bin/python -m aksharallm.asr myvoice record          # read 30 sentences; then eval --corpus data/asr/my-voice
+.venv/bin/python -m aksharallm.asr myvoice record --set train   # 293 more, to teach it your voice
+scripts/audio.sh asr-me                                    # adapt asr-libri460 to them (~10-20 min)
 .venv/bin/python -m aksharallm.asr fetch train-clean-360 && .venv/bin/python -m aksharallm.asr pack train-clean-360
 scripts/audio.sh asr-libri460                              # 460 h, ~9-10 h on the card
 .venv/bin/python -m aksharallm.dictate stream-eval asr-libri100   # the live preview, measured
@@ -916,6 +951,7 @@ Read [doc 21](21-audio.md) first for the front end this reuses.
 | 24 | [`asr/myvoice.py`](../aksharallm/asr/myvoice.py) | `PROMPTS` and their version, `save` (a second take replaces the first) |
 | 25 | [`dictate/stream.py`](../aksharallm/dictate/stream.py) | `LocalAgreement.update` (never retract), `simulate` (latency from the CTC alignment, revisions by alignment, not position) |
 | 26 | [`configs/asr-libri460.yaml`](../configs/asr-libri460.yaml) | asr-libri100 with one change: the data |
+| 27 | [`configs/asr-me.yaml`](../configs/asr-me.yaml) | adaptation to one voice: `train.init`, `data.weights`, validation held out of the training takes |
 
 What pins it: [`tests/test_asr.py`](../tests/test_asr.py) — CTC against `F.ctc_loss` (value,
 gradient, gradcheck, empty and impossible targets), an utterance alone versus padded into a

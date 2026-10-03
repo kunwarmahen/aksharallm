@@ -535,8 +535,10 @@ python -m aksharallm.dictate daemon --bg           # load the models once, then.
 python -m aksharallm.dictate install-shortcut      # ...<Super><Alt>d dictates into any app
 python -m aksharallm.asr robust asr-libri100       # WER in a kitchen, cafe, street, car…
 python -m aksharallm.asr myvoice record            # your own voice as a test set
+python -m aksharallm.asr myvoice record --set train  # ...and 293 more sentences, then:
+scripts/audio.sh asr-me                            # adapt the recogniser to your voice
 scripts/audio.sh asr-libri460                      # 4.6x the speech, once train-clean-360 is packed
-python -m aksharallm.diffusion tiny-diffusion-smoke infill \
+python -m aksharallm.diffusion tiny-diffusion infill \
     --prefix "Once upon a time" --suffix "and they all went home."
 ```
 

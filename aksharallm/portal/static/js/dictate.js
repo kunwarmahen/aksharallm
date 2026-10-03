@@ -339,7 +339,7 @@ async function loadPersonal() {
 
 /* ---- your voice as a test set ------------------------------------------------------- */
 
-const mv = { prompts: [], i: 0 };
+const mv = { prompts: [], i: 0, set: 'test' };
 
 function mvStatus(text, kind = '') {
   const el = $('#mv-status');
@@ -353,8 +353,22 @@ function renderMyVoice(st, keepIndex = false) {
     const first = st.prompts.findIndex((p) => !p.recorded);
     mv.i = first < 0 ? 0 : first;
   }
+  const test = mv.set === 'test';
+  $('#mv-set-note').innerHTML = test
+    ? 'Scored, and never trained on — so the number means what it says.'
+    : 'Read these and the recogniser can learn your voice: <code>scripts/audio.sh asr-me</code> (the '
+      + 'Dashboard\'s <b>asr-me</b>) adapts it in ~10-20 minutes. 150+ is a good start; all 293 is better. '
+      + 'The last 30 you record are held out to choose the best checkpoint.';
   $('#mv-progress').innerHTML = `<b>${st.recorded}/${st.total}</b> sentences recorded`
-    + ` (${st.seconds} s)` + (st.recorded === st.total ? ' — all done; score it below' : '');
+    + ` (${Math.round(st.seconds / 60 * 10) / 10} min)`
+    + (st.recorded === st.total ? (test ? ' — all done; score it below' : ' — all done; train asr-me') : '');
+  const res = st.results || [];
+  $('#mv-scores').innerHTML = res.length
+    ? '<table class="grid"><thead><tr><th>recogniser</th><th>your voice</th><th>decoder</th><th>when</th></tr></thead><tbody>'
+      + res.map((r) => `<tr><td>${escHtml(r.run)} <span class="dim">step ${fmt.int(r.step)}</span></td><td><b>${pct(r.wer)}</b></td>`
+        + `<td class="dim">${escHtml(r.decoder || 'greedy')}${r.dictionary_size ? ' + dictionary' : ''}</td><td class="dim">${escHtml(r.time || '')}</td></tr>`).join('')
+      + '</tbody></table>'
+    : '';
   const p = mv.prompts[mv.i];
   if (p) {
     $('#mv-id').textContent = `${mv.i + 1} of ${mv.prompts.length}${p.recorded ? ` · recorded (${p.seconds} s) — record again to replace it` : ''}`;
@@ -364,15 +378,16 @@ function renderMyVoice(st, keepIndex = false) {
   $('#mv-clear').disabled = !st.recorded;
   $('#mv-prev').disabled = mv.i === 0;
   $('#mv-next').disabled = mv.i >= mv.prompts.length - 1;
-  $('#mv-score').disabled = !st.recorded;
-  const r = (st.results || [])[0];
-  $('#mv-score-note').textContent = r
-    ? `your voice: WER ${pct(r.wer)} (${escHtml(r.decoder || 'greedy')}, ${r.utts} sentences, ${r.time})`
-    : (st.recorded ? `${st.recorded} sentences ready to score` : 'record a few sentences first');
+  $('#mv-score').disabled = !test || !st.recorded;
+  $('#mv-score').hidden = !test;
+  const r = res[0];
+  $('#mv-score-note').textContent = !test ? ''
+    : (r ? `latest: ${escHtml(r.run)} ${pct(r.wer)} — scores the recogniser picked in the lab below`
+      : (st.recorded ? `${st.recorded} sentences ready to score` : 'record a few sentences first'));
 }
 
 async function loadMyVoice(keepIndex = false) {
-  try { renderMyVoice(await api('/api/dictate/myvoice'), keepIndex); } catch (e) { mvStatus(e.message, 'warn'); }
+  try { renderMyVoice(await api(`/api/dictate/myvoice?set=${mv.set}`), keepIndex); } catch (e) { mvStatus(e.message, 'warn'); }
 }
 
 async function saveMyVoice(samples, rate) {
@@ -630,7 +645,8 @@ function renderJobs(j) {
   $('#dc-pack').disabled = !(cur && cur.downloaded);
   const lm = j.lm;
   $('#dc-lmfetch').disabled = j.lm_text;
-  $('#dc-lmfetch').textContent = j.lm_text ? 'LM text downloaded ✓' : 'Download its text (1.5 GB)';
+  $('#dc-lmfetch').textContent = j.lm_text ? 'LM text downloaded ✓'
+    : (lm ? 'Download its text again (only to rebuild, 1.5 GB)' : 'Download its text (1.5 GB)');
   $('#dc-lm').disabled = !j.lm_text;
   $('#dc-lm-info').textContent = lm
     ? `built ${lm.built}: ${fmt.int(lm.vocab)} words of vocabulary from ${fmt.compact(lm.words)} words of text`
@@ -660,7 +676,9 @@ function renderJobs(j) {
     if (j.running) $(id).disabled = true;
   }
   if (!j.running) {
-    $('#dc-fetch').disabled = !!(cur && cur.downloaded);
+    // Packed is done: the archive and FLAC are deleted after packing to save disk, so
+    // "not downloaded" must not read as "download it again".
+    $('#dc-fetch').disabled = !!(cur && (cur.downloaded || cur.packed));
     $('#dc-tune').disabled = !lm || !dc.ckpt;
     $('#dc-eval').disabled = !dc.ckpt;
     $('#dc-daytwo').disabled = !lm || !dc.ckpt;
@@ -747,6 +765,9 @@ registerTab('dictate', {
       try { await post('/api/dictate/personal', { action: 'add', word: w }); $('#dc-add-word').value = ''; } catch (e) { goStatus(e.message, 'warn'); }
       await loadPersonal();
     };
+    document.querySelectorAll('input[name="mv-set"]').forEach((el) => {
+      el.onchange = () => { mv.set = el.value; loadMyVoice(); };
+    });
     $('#mv-rec').onclick = () => (dc.rec ? stopRecording() : startRecording('myvoice'));
     $('#mv-del').onclick = async () => {
       const p = mv.prompts[mv.i];
@@ -754,8 +775,8 @@ registerTab('dictate', {
       try { renderMyVoice(await post('/api/dictate/myvoice-delete', { prompt: p.id }), true); mvStatus('deleted'); } catch (e) { mvStatus(e.message, 'warn'); }
     };
     $('#mv-clear').onclick = async () => {
-      if (!window.confirm('Delete every recording of your voice? This cannot be undone.')) return;
-      try { renderMyVoice(await post('/api/dictate/myvoice-delete', { all: true })); mvStatus('all deleted'); } catch (e) { mvStatus(e.message, 'warn'); }
+      if (!window.confirm(`Delete every recording in the ${mv.set} set? This cannot be undone.`)) return;
+      try { renderMyVoice(await post('/api/dictate/myvoice-delete', { all: true, set: mv.set })); mvStatus('all deleted'); } catch (e) { mvStatus(e.message, 'warn'); }
     };
     $('#mv-prev').onclick = () => { mv.i = Math.max(0, mv.i - 1); loadMyVoice(true); };
     $('#mv-next').onclick = () => { mv.i = Math.min(mv.prompts.length - 1, mv.i + 1); loadMyVoice(true); };

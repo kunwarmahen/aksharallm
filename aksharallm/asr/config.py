@@ -29,6 +29,10 @@ class AsrDataConfig:
     #: One or more packed corpora (`audio.bin` + `manifest.json` + transcripts). Several are
     #: sampled in proportion to their hours.
     train: list[str] = field(default_factory=lambda: ["data/audio/synth"])
+    #: Each training corpus's share of batches, in the order of `train`. None = in proportion
+    #: to their hours. Needed for adaptation: twenty minutes of one person beside 100 h of
+    #: LibriSpeech would otherwise be 0.3% of the batches and teach nothing.
+    weights: list[float] | None = None
     #: A separate validation corpus (LibriSpeech dev-clean). Unset: hold out the last
     #: `val_clips` utterances of the first training corpus, by clip — never by offset.
     val: str | None = None
@@ -76,6 +80,10 @@ class AsrTrainConfig:
     ctc_impl: str = "torch"
     seed: int = 1337
     resume: str | None = "auto"
+    #: Start from another run's WEIGHTS (its feature statistics included) — not a resume: a
+    #: fresh optimizer, step 0, this run's own schedule. Used to adapt a trained recogniser to
+    #: one voice (configs/asr-me.yaml). Ignored once this run has its own ckpt_last.pt.
+    init: str | None = None
     stop_after: int | None = None
     stop_at: int | None = None
     stop_after_s: float | None = None

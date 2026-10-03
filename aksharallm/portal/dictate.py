@@ -215,30 +215,42 @@ class Dictation:
 
     # ---- your voice as a test set (asr/myvoice.py) -----------------------------------------
 
-    def myvoice(self) -> dict:
+    def myvoice(self, kind: str = "test") -> dict:
+        """One prompt set's progress. `test` = the 30 scored sentences; `train` = the 293 read
+        so `configs/asr-me.yaml` can adapt the recogniser to this voice."""
         from ..asr import myvoice
-        st = myvoice.status(self.root / myvoice.CORPUS)
-        st["corpus"] = str(myvoice.CORPUS)
+        if kind not in myvoice.SETS:
+            raise DictationError(f"unknown prompt set {kind!r}")
+        st = myvoice.status(self.root / myvoice.SETS[kind], kind)
+        st["corpus"] = str(myvoice.SETS[kind])
+        # Every model's score on the TEST set, newest first, so "did the adaptation help" is
+        # one glance: the base and asr-me side by side.
         mine = [r for r in self.results() if r["corpus"] == myvoice.CORPUS.name]
-        st["results"] = mine[:5]
+        st["results"] = mine[:8]
+        st["adapted"] = (self.root / "checkpoints/asr-me/ckpt_best.pt").is_file()
         return st
 
-    def myvoice_delete(self, prompt_id: str | None) -> dict:
+    def myvoice_delete(self, prompt_id: str | None, kind: str = "test") -> dict:
         from ..asr import myvoice
+        if prompt_id:
+            kind = myvoice.kind_of(prompt_id)
+        if kind not in myvoice.SETS:
+            raise DictationError(f"unknown prompt set {kind!r}")
         try:
-            myvoice.remove(prompt_id or None, self.root / myvoice.CORPUS)
+            myvoice.remove(prompt_id or None, self.root / myvoice.SETS[kind], kind)
         except ValueError as e:
             raise DictationError(str(e)) from e
-        return self.myvoice()
+        return self.myvoice(kind)
 
     def myvoice_save(self, prompt_id: str, pcm_b64: str, sample_rate: int) -> dict:
         from ..asr import myvoice
         x = self._pcm(pcm_b64, sample_rate, 30.0)
+        kind = myvoice.kind_of(prompt_id)
         try:
-            st = myvoice.save(prompt_id, x, int(sample_rate), self.root / myvoice.CORPUS)
+            myvoice.save(prompt_id, x, int(sample_rate), self.root / myvoice.SETS[kind])
         except ValueError as e:
             raise DictationError(str(e)) from e
-        return self.myvoice()
+        return self.myvoice(kind)
 
     def punct_eval(self) -> dict | None:
         d = self._latest("punct_eval", "punct-*.json")

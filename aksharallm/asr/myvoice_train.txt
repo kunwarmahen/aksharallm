@@ -1,0 +1,298 @@
+# Sentences to READ ALOUD so the recogniser can learn one person's voice (asr/myvoice.py,
+# set 'train'). Version 1. Never edit a line: add a new version instead, because a recording
+# is stored against its line's text. The first 60 were written for dictation; the rest are
+# FineWeb-Edu sentences of 7-13 words that use only the 15,000 commonest words, normalised to
+# the recogniser's alphabet. None of them is one of the 30 TEST sentences.
+hi team quick update on the project before the weekend
+can you send me the latest version of the spreadsheet
+i will review the draft tonight and send comments tomorrow
+please move my two o'clock meeting to later in the afternoon
+thanks for the quick reply that answers my question
+let me check my calendar and get back to you
+i am running a little behind so start without me
+could we push the deadline by a couple of days
+the client wants a short summary before the call
+please add this to the agenda for monday
+i need to pick up the kids at five today
+remind me to call the bank in the morning
+what time is the dentist appointment next week
+we are out of coffee and dish soap again
+my phone battery is almost dead so text me
+the meeting room on the third floor is booked
+can you share the link to the shared folder
+i forgot to attach the file in my last email
+let us grab lunch on thursday if you are free
+the report looks good but the numbers need checking
+please make sure everyone signs the form by friday
+i think the second option is cheaper in the long run
+the package was left at the front desk this morning
+we should hire someone to help with the backlog
+the server went down for about twenty minutes last night
+i have a few questions about the new process
+could you explain how the budget was calculated
+the weather looks bad so the trip might be cancelled
+my train leaves at half past seven tomorrow
+send me a reminder an hour before the call starts
+the landlord says the heating will be fixed this week
+i would like to order the same thing as last time
+we need more chairs for the meeting on wednesday
+please do not forget to lock the door when you leave
+the kids have a school concert on thursday evening
+can you check whether the invoice was paid
+i will be working from the cafe for a few hours
+the new laptop is much faster than the old one
+it was great to finally meet you in person
+please let me know if anything changes before then
+i am not sure we have enough time to finish
+we can talk about it after lunch if that works
+the slides are ready but the demo still needs work
+the doctor said to rest for a few more days
+i left my keys on the kitchen table again
+we have guests coming over for dinner on sunday
+could you pick up some bread and fruit on your way
+the flight was delayed so i will land after midnight
+i really appreciate you staying late to help
+let us keep this between us for now
+the results came back and they look promising
+i will need a quiet room for the interview
+we should test the new version before we ship it
+the password reset link did not arrive
+my sister is visiting for the long weekend
+please print three copies of the contract
+the car needs new tyres before the winter
+i am happy with the plan so let us go ahead
+can we move this conversation to a call
+good morning everyone and welcome back
+relative surplus value could only be obtained by reducing the price of food
+such were the new commands of civilization
+well that means dried meat really moist cutting board
+gross like something that you actually make
+president making is already a trade in america
+they would say sir you are late
+most of the gentlemen you read of in the papers are full
+a star and liberty bell pattern can be found below
+we try new approaches some work with our children some do not
+what marks it out from the competition is flavour
+you'll find it in our half price warehouse
+from mid november to mid january there is no twilight
+you will need to be watched for several hours after the reaction
+and he has no plans to tinker with how we raise the turkeys
+people like them the way they are
+the summoning charm could not be used on buildings
+can we feed the world and save our forests
+can saving forests help feed the world
+even five years ago this would have seemed a very presumptuous request
+the value of that claim depends on its exchange relation with physical structures
+and this relation can and does vary constantly
+in the short run a weakened currency may increase employment at home
+but this is at best a short run advantage
+what can you learn from them about trade there as well
+in this post the theme for health it jobs is security
+we're happy to be a part of your job search within it health
+please visit our jobs page for current opportunities
+what if the triangle is on the surface of a sphere
+this pattern of six circles contains three unit circles
+have a go at creating these images based on circles
+note materials may be edited for content and length
+for further information please contact the source cited above
+note if no author is given the source is cited instead
+does choice mean freedom and well being
+select the one you feel is best suited for this project
+upon leaving military service he became a test pilot
+he immediately said i love your roads
+you can drive a car very quickly anywhere
+it also means we have mutual responsibilities toward each other
+however they also had lungs that they used to breathe oxygen
+for more information go to the health topics how the heart works article
+they're able to lead normal active lives
+instead we will be projected suddenly into a new energetic era
+the test could have been made better in many ways
+paying back the amount that was deposited is not enough
+they give children a chance to celebrate the season with friends
+katherine knoll is chairman of the healthy kids healthy michigan steering committee
+and no one ever wonders how we know
+she wrote an imaginative story about life on the planet venus
+a value error related to the address
+or if the network has host bits set
+it is broken down and released into the muscle slowly
+they are easy for children or pets to knock over
+but only use it for small fires
+teach them to go outside if a fire occurs in the house
+there are different instruction sheets for them
+his capable military leadership drove them into a civil conflict
+his quick and successful conquests earned him a grand reputation with his lord
+that is it is something which goes on without end
+another place where infinity arises is in limits
+but once again this is not standard mathematics
+are the distances of the planets from the sun arbitrary
+what is the necessary content of education
+some time after completing his studies he left india for china
+the emperor asked what is the highest meaning of the holy truths
+the emperor asked who is facing me
+the questions that formed the basis of this new approach were simple
+well do you think you would appreciate such a sentiment
+the drive was interrupted by the world war
+he rounded up rebellious slaves to start a rebellion
+slavery was finally abolished thus ending the civil war
+who was president during the civil war time period
+facts forming part of the same event or transaction
+facts causing or caused by other facts
+facts relating to motive preparation and conduct
+statements and actions referring to common intention
+facts inconsistent with or affecting probability of other facts
+facts affecting existence of right or custom
+statements by party to a suit agent or interested person
+statements by persons expressly referred to by party to a suit
+confession of accused while in custody of police officer
+information from accused leading to discovery of facts
+larger tests that does full sequence to sequence model training
+seems like a lot of trouble but look what that does
+in short it created a model quality assurance system
+this much should be obvious to anyone
+both take away a call to action
+talk all for the purpose of reconciliation
+other colors include purple and orange their significance is not yet known
+odd number should not be displayed on the console
+i tell you this because i came across these drawings recently
+read assigned chapters in required texts weekly
+excessive hair loss can affect men women and children
+it was not known which complaints were investigated or acted upon
+however in practice the government did not fully promote and protect these rights
+wearing loose soft cotton clothing may help with the discomfort
+and remind your child that weight changes are only temporary
+once treatment ends most kids return to their previous weight
+turns out they can be guessed with relative ease
+we keep living as if they are secure a secret he said
+but if anyone has any suggestions please let me know
+the teeth needing filled would be packed using the brain of a partridge
+there were no qualified surgeons as we know them today
+of course this has good and bad consequences
+such stations need not simply be in hotels
+an accompanying event will involve civil society activities
+yes the machine is totally operator dependent
+conclusion tree will have to wait until next time
+it can be hard to tell the difference between the two problems
+it will also review some ways to tell the difference between them
+weakness can also occur anywhere from shoulder to fingers
+sometimes it is obvious which condition the patient has
+chew your food until it is liquid before swallowing
+it is caused by a number of poorly understood diseases
+if possible have only one adult care for a sick child
+house pets have also frequently been observed to exhibit unusual behavior
+dogs circle many times before sitting down
+when next observed several minutes later the cat was nowhere to be seen
+or get a subscription for someone as a gift
+the chance happening of fortunate or adverse events
+i will be back once again with more fun things to draw
+first click the point in the list so that its point no
+most sufferers cannot sit still and will often pace during an acute attack
+the cluster headache sufferer has pain free intervals between series
+break activities down into steps and alternate them with frequent periods of rest
+hence no external cause exists that could affect it
+however human flourishing is never simply a matter of individual striving
+these cards have been designed to fit onto business cards
+lay the cards out on a table in order
+point to each in turn and have the students say the card
+help them learn to pronounce the names correctly
+turn more over each time until the students can repeat the whole set
+make two sets to make a concentration game
+make the students pronounce each name as they turn them over
+thus new business processes can be constructed by using existing services
+objective the objective is the reason you are doing the experiment
+give the make and model number of the equipment where possible
+method this section includes a description of what you did
+you do not report any results in this section
+data should be reported in a clear and organized way
+results and analysis calculations based on the data are presented in this section
+you need to report all the calculations that you did
+conclusion in this section present your results and discuss your conclusions
+your conclusion should be tied to the objective
+was the objective for the experiment met
+state whether or not you achieved your objective
+all work handed in for a grade must be your own
+but you must go further than this
+avoid situations that could compromise your integrity
+meat in particular has a pretty troubling back story
+at first start out small perhaps just with certain meals
+another good tip is to quit meat by meat
+i score a page at a time which goes much more quickly
+the climate was so different from the countries they came from
+when it rained the sound was deafening
+in the early colonial days glass was almost impossible to get
+people who live in bad air live shorter lives
+if this is an emergency contact emergency services in your area
+what are the complications of doing this
+dollar there could be serious problems around the world
+could this be a sign of things to come
+brake ropes are produced in different colors in order to be distinguished easily
+it is also possible to fly in countries where there are no mountains
+a long running path is necessary for the pilot
+first the leg columns and then chest columns are fastened
+this lets you know the roots have formed
+check out all of our galleries today
+is your school district adopting the common core
+a background in social sciences or education is recommended
+also look at the top of the animals heads
+i believe that god has made me and all creatures
+for now three phrases will be emphasized
+the bible teaches that god the creator keeps himself close to us
+he gives us good and perfect gifts sustaining our life that he created
+god the creator supplies our needs daily
+our creator does a lot for us every single day
+when was the last time you prayed for a sunrise
+are you sure this is where we left them
+it had been broken and not cut
+from its length it must also have been broken close to the canoe
+this critical time frame is commonly known as the golden hour
+i gave a few ideas then see the bottom of that post
+board members are elected for four year terms
+for more information please contact our press department
+the following figure is from the same study
+the following figures show similar data by latitude bands of the earth
+yet not even thus did they cast him over
+and then what do i look for here
+in other words i get this formula
+this is the handy formula that we're trying to get
+we got it very directly for positive whole numbers
+let me so explain the product rule
+and now can you see in the picture where is the product
+the product is this that bigger area
+essentially we can approach the two envelope problem in one of two ways
+not everyone has the same body type
+and we need layers of protection that are truly independent
+but that safety record depends on us
+the last quarter century has witnessed remarkable progress of mankind
+three important events mark the beginning of this period
+which of the following pair will stay at home
+point out the odd man out from following subject place combinations
+which of the following can be the number of trees in the garden
+who is the fourth in the descending order of age
+what is the use of direction flag
+the details of the debate aside it is hard to deny any connection
+such a method has been developed by miller
+the russians read it as an american first strike
+the russian military went to full alert
+the scientists involved had no idea what had happened
+we were then at war with spain
+each of you should have an account on this machine
+these are the three primary light colors
+the amount of color we see depends on how much light there is
+in dim light we see no colors at all only shades of gray
+the first state of the planet declaration was issued at the conference
+it is non approved and would get the orange tag
+the effect you copied remains in its original location
+split the power chord off as a separate object
+split the power chord at every eighth note
+note that locking can involve the position only the data only or both
+you can find out about this new campaign here
+these special places need proper protection now
+you'll find they are attracted to bright lights
+eggs are deposited in one of three ways
+these natural borders make it an agricultural island beyond compare
+this form of teaching is similar to speaking on a specific subject
+demonstrations are given to provide an opportunity in learning through exploration and activity
+students are encouraged to work in groups
+this enables the students to learn by doing
+so tired but unable to fall asleep
+none of these do anyone any favors
+a lack of sleep has been shown to greatly affect mental health

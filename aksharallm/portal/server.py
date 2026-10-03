@@ -446,7 +446,8 @@ class Handler(BaseHTTPRequestHandler):
                         # {"prompt": id} deletes one take; {"all": true} every one. An empty
                         # body deletes nothing: "everything" has to be asked for by name.
                         if data.get("all") is True:
-                            return self._json(self.dictation.myvoice_delete(None))
+                            return self._json(self.dictation.myvoice_delete(
+                                None, str(data.get("set") or "test")))
                         if not data.get("prompt"):
                             return self._json({"error": "say which take, or all: true"}, code=400)
                         return self._json(self.dictation.myvoice_delete(str(data["prompt"])))
@@ -593,7 +594,10 @@ class Handler(BaseHTTPRequestHandler):
         if parts == ["dictate", "jobs"]:
             return self._json(self.dictation.jobs.status())
         if parts == ["dictate", "myvoice"]:
-            return self._json(self.dictation.myvoice())
+            try:
+                return self._json(self.dictation.myvoice(str((query.get("set") or ["test"])[0])))
+            except DictationError as e:
+                return self._json({"error": str(e)}, code=400)
         if parts == ["dictate", "personal"]:
             return self._json(self.dictation.personal())
         if parts == ["dictate", "desktop"]:

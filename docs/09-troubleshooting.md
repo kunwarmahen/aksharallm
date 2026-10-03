@@ -55,7 +55,7 @@ In order of likelihood:
 
 ```python
 import numpy as np
-d = np.memmap('data/fineweb/train.bin', dtype=np.uint16, mode='r')
+d = np.memmap('data/blend/fineweb-edu-10bt.bin', dtype=np.uint16, mode='r')
 print(d.max())     # must be < vocab_size
 ```
 
@@ -252,8 +252,8 @@ hard check that raises if 0 tokens were written.
 **Always verify file sizes before a long run:**
 
 ```bash
-ls -la data/fineweb/
-python -c "print(open('data/fineweb/train.bin','rb').seek(0,2)//2, 'tokens')"
+ls -la data/blend/
+python -c "print(open('data/blend/fineweb-edu-10bt.bin','rb').seek(0,2)//2, 'tokens')"
 ```
 
 ### The prep script hangs at the end
@@ -319,12 +319,12 @@ reader, and the buttons work by writing the same `STOP` file `scripts/stop.sh` w
 python -m pytest tests/ -q
 
 # 2. data is the expected size
-ls -la data/fineweb/
+ls -la data/blend/
 
 # 3. no token id exceeds the vocab
 python -c "
 import numpy as np
-d = np.memmap('data/fineweb/train.bin', dtype=np.uint16, mode='r')
+d = np.memmap('data/blend/fineweb-edu-10bt.bin', dtype=np.uint16, mode='r')
 print('tokens:', len(d), 'max id:', d.max())"
 
 # 4. 50-step smoke test (throwaway dir so it can't pollute the real run's resume:auto)
