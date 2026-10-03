@@ -312,6 +312,66 @@ command line isn't an `aksharallm` trainer.
 Neither stops training. The trainer is detached (`nohup`, its own session), the portal is a
 reader, and the buttons work by writing the same `STOP` file `scripts/stop.sh` writes.
 
+### A button says `no such path: /api/...`
+
+The page is newer than the server. The portal reads its HTML, JavaScript and CSS from disk on
+every load, but its Python — the routes those buttons call — only when it starts. So after a
+code change a page can show a button whose route does not exist yet in the running process.
+Restart it: `scripts/portal.sh --restart` (training is not affected — the portal only reads
+and writes the same files the scripts do). Check: `ps -o lstart= -p $(cat logs/portal.pid)`
+older than the last commit means stale code.
+
+### Testing the portal on a second port changed my real data
+
+A portal started with `--port 8799` is a second process over the **same** repository: its
+API reads and writes the same `data/`, `logs/` and `checkpoints/`. A "does this route work"
+request with a real body (a delete, a job) acts on the real files. Probe destructive routes
+only with a body they refuse, or start the test portal with `--root` pointing at a scratch
+copy.
+
+## Dictation
+
+### The dictation shortcut said "installed" but Custom Shortcuts is empty
+
+With conda's `base` active, `/opt/anaconda3/bin/gsettings` comes first on PATH, and conda's
+copy is built without the dconf backend: every write succeeds and is forgotten when it exits.
+`python -m aksharallm.dictate install-shortcut` now uses `/usr/bin/gsettings` and reads every
+value back, so this prints an error instead of a success. If you still see it, run
+`/usr/bin/gsettings get org.gnome.settings-daemon.plugins.media-keys custom-keybindings`.
+`--binding` needs a value: `--binding '<Ctrl><Alt>space'`.
+
+### The shortcut does nothing, or the text never appears in my app
+
+`python -m aksharallm.dictate status` lists what is missing. The usual three: the daemon is not
+running (start it after every reboot: `python -m aksharallm.dictate daemon --bg`); `xdotool` /
+`xclip` are not installed (`sudo apt install xdotool xclip` — without them the text lands only
+in the notification and the portal's history); or the session is Wayland, where one program
+cannot type into another's window.
+
+### A voice take was refused: "that sounds like more than one"
+
+Record **one sentence per take**: press, read the sentence shown, press again — the panel moves
+to the next by itself. A take longer than `4 s + words / 1.3` is refused, because it is stored
+against one sentence's text and every extra sentence would score as inserted words. Delete bad
+takes with **Delete this take** / **Delete all in this set…** or
+`python -m aksharallm.asr myvoice clear [--set train] [--id me-v1-006]`.
+
+### My own voice scores far worse than test-clean
+
+Diagnose it in this order — each step was needed the first time (docs/23 § Harder tests), and
+the two obvious answers were both wrong:
+
+1. **Is the score real?** The JSON in `logs/asr/*my-voice*.json` names the checkpoint, and its
+   `examples` show reference against hypothesis. Takes should be 2–6 s each.
+2. **Loudness?** Normalise the takes to ~−25 dBFS RMS and re-score. If WER barely moves, it is
+   not volume.
+3. **The microphone?** Compare band energies with test-clean *after* accounting for level, and
+   re-score with the spectrum re-balanced. Bass alone skews the shares without mattering.
+4. **A strong baseline on the same audio.** A local Whisper (`faster-whisper-server`, here on
+   port 11435) scoring the same takes decides it: near-perfect there means the audio is fine and
+   the recogniser's training data does not cover the voice. That is not fixed by more
+   LibriSpeech; it is fixed by speech like yours — `configs/asr-me.yaml`.
+
 ## Sanity checklist before a multi-day run
 
 ```bash

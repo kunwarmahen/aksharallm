@@ -975,6 +975,30 @@ steps short of its budget forever.
 Since 2026-08-01 the final step also gets a log line of its own, the way a bounded stop
 always has, so new runs end their logs where they end.
 
+### Freeing disk space: what can go, and what must stay
+
+A project like this fills a disk with copies. Cleared on 2026-10-03 (54 → 88 GB free), and
+the reasoning is the reusable part:
+
+| safe to delete | size here | why |
+|---|---|---|
+| downloaded archives (`data/asr/librispeech/*.tar.gz`) | 6.7 GB | extracted already |
+| extracted raw audio (`data/asr/librispeech/LibriSpeech/`) | 7.3 GB | packed into `data/asr/<split>/` |
+| the word LM's source text (`data/asr/lm/*.txt.gz`) | 1.5 GB | only needed to *rebuild* `trigram.npz`; `asr lm fetch` re-gets it |
+| a config-only variant checkpoint (`ckpt_best_yarn4x.pt`) | 3.6 GB | same weights as `ckpt_best.pt`; `longctx extend` remakes it in seconds |
+| archived runs from **Start fresh…**, smoke checkpoints | 7 GB | experiments already superseded — delete them with **Delete run…** or `python -m aksharallm.portal.runs delete <run>` |
+| a dataset no config uses (`data/fineweb`, the non-blended fallback) | 8.2 GB | re-made by `data.prepare` if that config is ever run |
+
+| keep | why |
+|---|---|
+| every `*_last.pt` | the resume point — and `phase2.sh` reads a missing `ckpt_last.pt` as "start fresh", so deleting it can quietly restart a finished run from step 0 |
+| packed corpora (`data/asr/<split>/`, `data/blend/`) | what training and evaluation read |
+| `data/audio/ljspeech` | the packed `lj` corpus reads its transcripts from there (`source_dir` in its manifest) |
+| `data/asr/my-voice*`, `logs/dictate/` | your recordings, dictionary and corrections — not reproducible |
+
+The packing commands now leave the archive and raw audio for you to delete, and the Dictation
+tab does not offer to re-download a split that is already packed.
+
 ### Running an experiment again, and throwing one away
 
 A finished run is not a dead end — running an experiment a second time is what you do with an

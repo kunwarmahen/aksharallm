@@ -699,6 +699,21 @@ flowchart LR
 * **Two numbers afterwards, always together**: WER on your 30 test sentences (did it learn
   you?) and on test-clean (what did it forget?).
 
+**Doing it:**
+
+1. Restart the portal if it predates this (`scripts/portal.sh --restart`).
+2. Record the **training** set: Dictation → *Your voice, as a test set* → **Training** →
+   **Record this sentence**, one sentence per take (~15–20 min for all 293; 150 is a start).
+   Terminal: `python -m aksharallm.asr myvoice record --set train`.
+3. Train: the Dashboard's **asr-me** → Start, or `scripts/audio.sh asr-me` (~10–20 min). It
+   stops and resumes like every other run.
+4. Score: pick `asr-me` in the recogniser lab, switch *Your voice* back to **Test**, press
+   **Score my voice** — the table lists every model's score on your voice, so asr-libri460's
+   47.1% sits beside the adapted one. Then score asr-me on test-clean too
+   (`python -m aksharallm.asr eval asr-me --corpus data/asr/test-clean --decoder beam --lm
+   data/asr/lm/trigram.npz`, after `asr tune asr-me`), because an adaptation that learnt you
+   by forgetting everyone else has not helped.
+
 ---
 
 ## More speech: train-clean-360
