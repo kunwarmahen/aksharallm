@@ -404,6 +404,31 @@ async function saveMyVoice(samples, rate) {
   }
 }
 
+/* Keys for recording the voice sets: R starts/stops a take, arrows move between sentences.
+ * Live only while this tab is open (added in open, removed in leave) and never while focus is
+ * in a text field, a select or a contenteditable — R is a letter people type. Space is left
+ * alone on purpose: it scrolls the page, and a focused button already takes it. */
+function voiceKeys(e) {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+  const t = e.target;
+  if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) {
+    // A radio button is an INPUT but not a text field: let the keys through for it.
+    if (!(t.tagName === 'INPUT' && t.type === 'radio')) return;
+  }
+  const k = e.key;
+  if (k === 'r' || k === 'R') {
+    e.preventDefault();
+    if (dc.rec && dc.rec.kind !== 'myvoice') return;   // the Dictate panel is recording
+    $('#mv-rec').click();
+  } else if (k === 'ArrowRight' && !dc.rec) {
+    e.preventDefault();
+    $('#mv-next').click();
+  } else if (k === 'ArrowLeft' && !dc.rec) {
+    e.preventDefault();
+    $('#mv-prev').click();
+  }
+}
+
 /* ---- how noise hurts it --------------------------------------------------------------- */
 
 function renderStream(st) {
@@ -765,6 +790,8 @@ registerTab('dictate', {
       try { await post('/api/dictate/personal', { action: 'add', word: w }); $('#dc-add-word').value = ''; } catch (e) { goStatus(e.message, 'warn'); }
       await loadPersonal();
     };
+    document.removeEventListener('keydown', voiceKeys);   // open() can run twice
+    document.addEventListener('keydown', voiceKeys);
     document.querySelectorAll('input[name="mv-set"]').forEach((el) => {
       el.onchange = () => { mv.set = el.value; loadMyVoice(); };
     });
@@ -791,5 +818,9 @@ registerTab('dictate', {
   },
   /* Stop a recording the moment the tab is left, so the microphone is never held open, and
    * stop polling the job runner — a job keeps running; only this page stops asking. */
-  leave() { if (dc.rec) stopRecording(); clearTimeout(jobTimer); },
+  leave() {
+    if (dc.rec) stopRecording();
+    clearTimeout(jobTimer);
+    document.removeEventListener('keydown', voiceKeys);
+  },
 });

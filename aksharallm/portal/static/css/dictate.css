@@ -78,3 +78,7 @@
 
 /* The live preview: settled words solid, the still-changing tail grey. */
 .dc-live-text { min-height: 1.5em; border-left: 3px solid var(--border); padding-left: 0.6rem; }
+#view-dictate kbd {
+  font: inherit; font-size: 0.85em; padding: 0 0.35em; border: 1px solid var(--border);
+  border-bottom-width: 2px; border-radius: 4px;
+}

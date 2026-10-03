@@ -704,6 +704,9 @@ flowchart LR
 1. Restart the portal if it predates this (`scripts/portal.sh --restart`).
 2. Record the **training** set: Dictation → *Your voice, as a test set* → **Training** →
    **Record this sentence**, one sentence per take (~15–20 min for all 293; 150 is a start).
+   Keys: **R** starts and stops a take, **←** / **→** move between sentences (they do nothing
+   while you are typing in a box); a saved take moves to the next sentence by itself, so the
+   loop is R, read, R.
    Terminal: `python -m aksharallm.asr myvoice record --set train`.
 3. Train: the Dashboard's **asr-me** → Start, or `scripts/audio.sh asr-me` (~10–20 min). It
    stops and resumes like every other run.
