@@ -166,17 +166,28 @@ class SubstringReward:
 class CodeReward:
     """Real reward: run the completion's code against a task's asserts in the sandbox.
 
-    Shaped so a small model gets *some* gradient before it can fully solve anything:
         pass all tests            -> 1.0
-        runs but asserts fail     -> 0.1   (it produced a real function, just wrong)
+        runs but asserts fail     -> `partial` (default 0.0)
         error / timeout / syntax  -> 0.0
         an empty function         -> 0.0   (see `tasks.wrote_a_body`)
+
+    **Partial credit is off by default, and the reason is the group normalisation.** It
+    was 0.1, meant as a small nudge toward "a real function, just wrong". But advantages
+    are `(r - mean) / std` *within a group*, and when passes are rare almost no group
+    contains one — so the only spread left is 0.1 versus 0, and dividing by the std turns
+    that tenth into a full-strength signal. Round 2 on the 300M (2026-10-04) shows exactly
+    that: passes on the training tasks flat at ~4% from step 50 while "ran but wrong" went
+    38% -> 80%, and on held-out tasks correct loops were replaced by one-liners of the
+    right type — `return {num: 0 for num in nums}` — that run, collect the 0.1, and are
+    wrong. Held-out solved peaked at 30% (step 100) and fell back to 20%. A shaping term
+    is only small if nothing rescales it.
     """
 
-    def __init__(self, task, chat: bool = False, enabled: bool = True):
+    def __init__(self, task, chat: bool = False, enabled: bool = True, partial: float = 0.0):
         self.task = task
         self.chat = chat
         self.enabled = enabled
+        self.partial = partial
 
     def __call__(self, prompt: str, completion: str) -> float:
         from ..infer.sandbox import run_task
@@ -186,12 +197,12 @@ class CodeReward:
         r = run_task(self.task, completion, chat=self.chat, enabled=self.enabled)
         if r.ok:
             return 1.0
-        if r.status != "fail":
+        if r.status != "fail" or not self.partial:
             return 0.0
         # "Runs but fails" is only worth paying for if the model wrote something: an empty
         # completion leaves the prompt's docstring-only function, which runs too.
         program = assemble(self.task, completion, chat=self.chat)
-        return 0.1 if wrote_a_body(program, self.task.entry_point) else 0.0
+        return self.partial if wrote_a_body(program, self.task.entry_point) else 0.0
 
 
 # ---- sampling ----------------------------------------------------------------------
@@ -389,7 +400,14 @@ def main():
                     help="completions scored at once (memory only; does not change the step)")
     ap.add_argument("--steps", type=int, default=500)
     ap.add_argument("--max-new-tokens", type=int, default=256)
-    ap.add_argument("--temperature", type=float, default=1.0, help="exploration; keep >=0.7")
+    # 0.8, not 1.0: the 300M SFT model solves ~25% of held-out tasks greedily but only ~4% of
+    # its samples pass at 1.0, which leaves almost every group without a single pass to
+    # learn from. Exploration still needs >= 0.7.
+    ap.add_argument("--temperature", type=float, default=0.8, help="exploration; keep >=0.7")
+    ap.add_argument("--partial-credit", type=float, default=0.0, metavar="R",
+                    help="reward for code that runs but fails its tests (0.1 = rounds 1-2). "
+                         "Off by default: group normalisation turns it into the whole signal "
+                         "whenever passes are rare -- see CodeReward")
     ap.add_argument("--top-k", type=int, default=50)
     ap.add_argument("--top-p", type=float, default=0.95)
     ap.add_argument("--beta", type=float, default=0.04, help="KL leash to the reference")
@@ -445,7 +463,8 @@ def main():
             # `instruction` is a property. This was `task.instruction()`, which raised the
             # moment anyone passed --chat; no run ever had, so nothing had said so.
             text = task.instruction if args.chat else task.prompt
-            return tok.encode(text, bos=True), text, CodeReward(task, chat=args.chat)
+            return tok.encode(text, bos=True), text, CodeReward(task, chat=args.chat,
+                                                              partial=args.partial_credit)
 
         prompts = [as_prompt(t) for t in train_tasks]
         held_out = [as_prompt(t) for t in held_tasks]

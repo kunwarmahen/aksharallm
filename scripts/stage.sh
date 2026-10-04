@@ -22,6 +22,7 @@
 #   MICRO=8                        GRPO completions scored at once (memory only)
 #   GROUP=8  STEPS=500  REWARD=code   GRPO group size, budget and reward
 #   TASKS=data/synth/py-v1 HOLDOUT=20 GRPO tasks (default when present; TASKS=builtin = the 10)
+#   TEMP=0.8 PARTIAL=0             GRPO sampling temperature; reward for runs-but-wrong (0.1 = rounds 1-2)
 #   RESUME=auto|none|<path>        continue a stopped stage (default auto); none starts over
 #   STAGE_RUN=small-code-r2-grpo   a second attempt in its own directory (must end in -<stage>)
 #   CRASH_WINDOW=30                seconds to watch a new trainer before declaring success
@@ -169,6 +170,7 @@ case "$STAGE" in
         CMD=($PY -m aksharallm.train.grpo --init "$SFT_CKPT" --tokenizer "$TOK"
              --out-dir "$RUN_DIR" --reward "${REWARD:-code}" --group-size "${GROUP:-8}"
              --lr "${LR:-1e-6}" --steps "${STEPS:-500}" --micro-batch "${MICRO:-8}"
+             --temperature "${TEMP:-0.8}" --partial-credit "${PARTIAL:-0}"
              --stop-file "$STOP_FILE" --resume "${RESUME:-auto}" "${TASK_ARGS[@]}")
         ;;
 esac

@@ -331,7 +331,7 @@ and it's what we implement in [`train/grpo.py`](../aksharallm/train/grpo.py).
 ```mermaid
 flowchart TD
     P["a prompt<br/>(a coding task)"] --> S["sample a GROUP of<br/>G completions"]
-    S --> R["reward each:<br/>run its code in the sandbox<br/>pass=1 · real-but-wrong=0.1 · error or empty=0"]
+    S --> R["reward each:<br/>run its code in the sandbox<br/>pass=1 · anything else=0"]
     R --> A["advantage = how much better<br/>than the group's mean:<br/>(r − mean) / std"]
     A --> U["push policy UP on above-average,<br/>DOWN on below-average completions"]
     U --> KL["KL leash to a frozen reference<br/>(don't forget English)"]
@@ -439,6 +439,39 @@ So, three changes, all in [`train/grpo.py`](../aksharallm/train/grpo.py):
 
 **What to watch: training reward rising while held-out solved stays flat is memorisation.**
 That is exactly what the first run would have shown, had it had the line.
+
+### Round 2: the held-out line caught a reward hack
+
+The second 300M run (synth tasks, 20 held out, partial credit 0.1, temperature 1.0) is the
+held-out line earning its keep. Held-out solved went **20% → 30%** by step 50 and then slid
+back to **20%** by step 250 while training reward kept rising. Splitting the reward into its
+parts says why:
+
+| steps | passed (train) | ran but wrong (train) | passed (held out) | ran but wrong (held out) |
+|---|---|---|---|---|
+| 0–49 | 2.5% | 38% | 20% | 15% |
+| 100–149 | 4.4% | 61% | 30% | 35% |
+| 250–299 | 4.4% | 80% | 20% | 75% |
+
+Passes flat, "runs" rising. And the held-out code shows what was learned — a correct loop at
+step 100 became, at step 300:
+
+```python
+return {num: 0 for num in nums}     # runs, is a dict, earns the 0.1 — and is wrong
+```
+
+**The mechanism is the group normalisation, not the size of the bonus.** Advantages are
+`(r − mean) / std` within a group. With ~4% of samples passing, almost no group contains a
+pass, so the only spread left is 0.1 versus 0 — and dividing by the std turns that tenth into
+a full-strength signal. A shaping term is only small if nothing rescales it. So:
+
+- **`--partial-credit` defaults to 0** (pass = 1, else 0). `PARTIAL=0.1` reproduces rounds 1–2.
+- **`--temperature` defaults to 0.8**, not 1.0. The SFT model solves ~25% of held-out tasks
+  greedily but only ~4% of its samples pass at 1.0, which is what left the groups pass-less in
+  the first place. Exploration still needs ≥ 0.7. `TEMP=` overrides.
+
+`grpo_best.pt` kept the step-100 checkpoint (30%), so round 2's useful model survived its own
+run — the reason the best is chosen on held-out tasks rather than on training reward.
 
 The reward is pluggable (`RewardFn`). Besides `CodeReward`, there's a toy `SubstringReward`
 ("does the output contain this word?") — useless for a real model, but it let us **prove the

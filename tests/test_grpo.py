@@ -336,7 +336,7 @@ def test_an_empty_function_earns_no_partial_credit():
     from aksharallm.infer.tasks import CODE_TASKS
     from aksharallm.train.grpo import CodeReward
     task = CODE_TASKS[0]                                   # add(a, b)
-    reward = CodeReward(task)
+    reward = CodeReward(task, partial=0.1)
     assert reward(task.prompt, "") == 0.0
     assert reward(task.prompt, "Once upon a time.") == 0.0
     assert reward(task.prompt, "    pass\n") == 0.0
@@ -393,3 +393,14 @@ def test_the_held_out_rows_reach_the_dashboard_and_do_not_pose_as_steps():
     ser = runlog.series(recs)
     assert ser["step"] == [0, 1]                      # the held-out row is not a step
     assert ser["held_step"] == [0] and ser["held_solved"] == [0.25]
+
+
+def test_partial_credit_is_off_unless_asked_for():
+    """With it on, group normalisation made "runs but wrong" the whole training signal and
+    round 2 learned `return {num: 0 for num in nums}`. Off by default; 0.1 reproduces it."""
+    from aksharallm.infer.tasks import CODE_TASKS
+    from aksharallm.train.grpo import CodeReward
+    task = CODE_TASKS[0]
+    assert CodeReward(task)(task.prompt, "    return a - b\n") == 0.0
+    assert CodeReward(task)(task.prompt, "    return a + b\n") == 1.0
+    assert CodeReward(task, partial=0.1)(task.prompt, "    return a - b\n") == 0.1
