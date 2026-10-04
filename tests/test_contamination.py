@@ -372,3 +372,22 @@ def test_a_suite_it_cannot_read_is_refused_not_guessed():
     out = con.clean_score({"score": 0.4, "items": [{"id": "a", "verdict": "ok"}]}, set())
     assert out["clean"] is None
     assert "cannot re-score" in out["note"] and "verdict" in out["note"]
+
+
+def test_a_chat_checkpoint_finds_its_bases_sources_by_val_bin(tmp_path):
+    """SFT/DPO/GRPO checkpoints record the base's `val_bin` and no `train_sources`, so
+    `domains` on them printed one row — the forgetting check split nothing."""
+    from aksharallm.eval import domains as dom
+    (tmp_path / "configs").mkdir()
+    srcs = [{"bin": "data/b/prose.bin", "weight": 0.85}, {"bin": "data/b/py.bin", "weight": 0.15}]
+    import yaml
+    (tmp_path / "configs" / "base.yaml").write_text(yaml.safe_dump(
+        {"model": {}, "data": {"val_bin": "data/b/val.bin", "train_sources": srcs}}))
+    (tmp_path / "configs" / "other.yaml").write_text(yaml.safe_dump(
+        {"model": {}, "data": {"val_bin": "data/c/val.bin", "train_sources": srcs[:1]}}))
+    assert dom.sources_for_val_bin("data/b/val.bin", tmp_path) == srcs
+    assert dom.sources_for_val_bin("data/none/val.bin", tmp_path) is None
+    # two configs claiming the same file with different sources: refuse to guess
+    (tmp_path / "configs" / "clash.yaml").write_text(yaml.safe_dump(
+        {"data": {"val_bin": "data/b/val.bin", "train_sources": srcs[::-1]}}))
+    assert dom.sources_for_val_bin("data/b/val.bin", tmp_path) is None

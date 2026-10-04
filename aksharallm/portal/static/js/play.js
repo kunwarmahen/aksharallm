@@ -98,7 +98,7 @@ function renderPlan(status) {
 function renderModes() {
   let allowed = (play.ckpt && play.ckpt.modes) || ['complete'];
   const ad = (play.data.adapters || []).find((a) => a.rel === play.adapter);
-  if (ad && ['sft', 'dpo', 'code'].includes(ad.stage)) {
+  if (ad && ['sft', 'dpo', 'grpo', 'code'].includes(ad.stage)) {
     allowed = ['complete', 'chat', 'code'];
   }
   for (const btn of $$('#play-modes .ghost')) {

@@ -31,7 +31,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..infer.checkpoints import InferError, repo_root
+from ..infer.checkpoints import CHAT_STAGES, InferError, repo_root
 from ..infer.engine import Engine, InferConfig
 from . import judge as judge_mod
 from . import scoring, sources, suites as suites_mod
@@ -100,7 +100,7 @@ class Harness:
         if "perplexity" in names and not self._val_bin(info):
             notes.append("perplexity: this checkpoint does not record a validation split, "
                          "so it will be skipped. Pass --val-bin to name one.")
-        if "judge" in names:
+        if any(suites_mod.get(n).kind == "judge" for n in names):
             ok, why = judge_mod.available(self._judge_cfg(opts))
             if not ok:
                 notes.append(f"judge: {why}")
@@ -200,7 +200,8 @@ class Harness:
                 device=loaded.device, progress=progress)
 
         if suite.kind == "judge":
-            items = suites_mod.JUDGE_PROMPTS[:limit] if limit else suites_mod.JUDGE_PROMPTS
+            prompts = suites_mod.JUDGE_SETS[name]
+            items = prompts[:limit] if limit else prompts
             answers = []
             for i, item in enumerate(items):
                 answers.append(self._answer(loaded, item.prompt, opts))
@@ -244,14 +245,18 @@ class Harness:
 
         See docs/13-eval.md § "Evaluating a chat model: what changes, and what must not".
         """
-        if loaded.stage in ("sft", "dpo", "chat"):
-            text = self.engine.build_prompt(loaded, "chat", prompt=prompt)
+        if loaded.stage in CHAT_STAGES + ("chat",):
+            # `build_prompt` returns `(ids, stop_id, rendered)`, not text. Until 2026-10-03
+            # this line kept the whole tuple and handed it to the tokenizer, so the judge
+            # crashed on the first chat model it was ever given — after every other suite
+            # in `--suite all` had run, which loses the whole evaluation.
+            text, stop_id, _ = self.engine.build_prompt(loaded, "chat", prompt=prompt)
         else:
-            text = prompt
+            text, stop_id = prompt, None
         got = scoring.generate_until(loaded.model, loaded.tokenizer, text,
                                      stop=["\n\nUser:", "<|im_end|>"],
                                      max_new_tokens=opts.max_new_tokens,
-                                     device=loaded.device)
+                                     device=loaded.device, eos_id=stop_id)
         return got["text"]
 
     def _run_gen(self, name: str, items, loaded, opts: Options, progress) -> dict:

@@ -258,7 +258,7 @@ def test_config_file_then_env_then_defaults(repo, monkeypatch):
 def test_config_survives_a_broken_yaml(repo):
     (repo / "configs" / "portal.yaml").write_text("explain: [this is not: a mapping\n")
     cfg = ExplainConfig.load(repo)
-    assert cfg.model == "gemma4:12b"          # the default, not a crash
+    assert cfg.model == "qwen3.8:27b"         # the default, not a crash
     assert cfg.note and "portal.yaml" in cfg.note
 
 

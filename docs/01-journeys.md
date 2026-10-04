@@ -274,20 +274,27 @@ free. DPO is the one that needs a download first.
 scripts/stage.sh grpo small-code
 ```
 
-No data preparation: the prompts and their hidden tests are built in, and the reward is
-whether the generated function passes them. It is the cheapest stage to *start* and the
-slowest per step, because every step samples eight completions and runs all eight.
+No download: the tasks are the sandbox-verified Python problems in `data/synth/py-v1`
+(made on the Synth tab, [14](14-synthetic-data.md)), 20 of them held out and scored as it
+trains; without that folder it falls back to the ten built-in Playground tasks, which are
+enough to see the reward move and too few to learn from. The reward is whether the generated
+function passes the hidden tests. Cheapest stage to *start*, slowest per step — every step
+samples eight completions and runs all eight.
 
 Useful knobs, all environment variables (`stage.sh` reads them; there are no flags):
 
 ```bash
 STEPS=2000 GROUP=16 scripts/stage.sh grpo small-code    # longer, lower-variance advantage
 LR=5e-7 scripts/stage.sh grpo small-code                # twitchier than DPO — go lower, not higher
+HOLDOUT=30 scripts/stage.sh grpo small-code             # hold out more tasks (default 20)
+TASKS=builtin scripts/stage.sh grpo small-code          # the ten Playground tasks, no holdout
 ```
 
 **How you know it worked.** At step 0, `loss ≈ 0` and `KL = 0` — the policy still *is* the
 reference, so every advantage is zero by construction. That is the sanity check, not a
-problem. Then `reward` and `solved%` should climb while KL stays bounded.
+problem. Then `reward` and `solved%` should climb while KL stays bounded — and the number
+that says it *learned* rather than memorised is the third line, **held-out solved**, which
+`grpo_best.pt` is chosen on ([06 § What it trains on](06-posttraining.md)).
 
 **How you know it did not.** `reward` flat at zero means no completion ever passed, so there
 is nothing to learn from — the task is beyond the model, not the trainer misconfigured. The
@@ -347,6 +354,8 @@ python -m aksharallm.eval domains small-code-sft                     # did Pytho
 python -m aksharallm.eval small-code-sft --suite judge --label sft   # did the manners arrive?
 python -m aksharallm.eval small-code-sft --suite fast --label sft    # did anything break?
 python -m aksharallm.eval calibrate small-code-dpo                   # after aligning, only
+python -m aksharallm.eval small-code-sft --suite judge48 --label sft # 48 prompts, for comparing
+python -m aksharallm.eval versus small-code small-code-sft           # which answers better?
 ```
 
 | what to run | what it answers | what a good result looks like |
@@ -354,7 +363,8 @@ python -m aksharallm.eval calibrate small-code-dpo                   # after ali
 | `eval domains` | catastrophic forgetting | Python loss near the base's **1.2558**. SmolTalk is all prose, so this is the number SFT can quietly destroy |
 | `--suite judge` | did the behaviour change | it should **move** — this is the only suite that asks a chat model *as* a chat model |
 | `--suite fast` | did anything break | ARC-Easy and PIQA near the base's **46.7%** / **65.0%**. Unchanged is the *correct* result |
-| `eval calibrate` | is its confidence still honest | run it after DPO, not after SFT — alignment is where calibration degrades |
+| `eval calibrate` | is its confidence still honest | run it after DPO, not after SFT — alignment is where calibration degrades. On our 300M it was SFT that did it (ECE 0.012 → 0.053) |
+| `eval versus A B` | which of two stages answers better | judged in both orders, a win needs both; read the sign-test `p`. Base vs SFT is the positive control — it should be a rout ([13](13-eval.md)) |
 
 Three things that make this stage easy to read wrong:
 

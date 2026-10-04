@@ -453,3 +453,47 @@ def test_a_real_bpe_merge_across_the_boundary_does_not_shift_the_score(tiny_mode
     # And the naive rule -- encode the joined string, count backwards -- would have taken a
     # different number of tokens, which is the bug this guards.
     assert n_cont != len(joined) - len(tok.encode(context, bos=True)) + 1
+
+
+def test_the_judge_gives_the_card_back_when_it_is_done(monkeypatch):
+    """Ollama keeps an 18 GB judge resident for minutes after its last grade, so the next
+    evaluation in a sequence died with CUDA OOM. `run` must unload it, after grading."""
+    calls = []
+    monkeypatch.setattr(judge, "available", lambda cfg: (True, ""))
+    monkeypatch.setattr(judge, "grade_one", lambda cfg, item, answer, model=None:
+                        calls.append("grade") or judge.Grade(item.id, item.group, item.prompt,
+                                                             answer, 3, ""))
+    monkeypatch.setattr(judge, "release", lambda cfg, model: calls.append(("release", model)))
+    cfg = judge.default_config()
+    from aksharallm.eval import suites
+    items = suites.JUDGE_PROMPTS[:2]
+    judge.run(cfg, items, ["a", "b"], model="m")
+    assert calls == ["grade", "grade", ("release", "m")]
+
+
+@pytest.mark.parametrize("stage", ["sft", "dpo", "grpo"])
+def test_a_chat_model_is_judged_on_its_rendered_chat_turn(monkeypatch, stage):
+    """`_answer` handed `build_prompt`'s `(ids, stop_id, rendered)` tuple to the tokenizer
+    as though it were text. The judge crashed on the first chat model it ever saw — after
+    every other suite of `--suite all` had run, so the whole evaluation was lost."""
+    from types import SimpleNamespace
+    from aksharallm.eval.runner import Harness, Options
+
+    seen = {}
+
+    class Engine:
+        def build_prompt(self, loaded, mode, *, prompt=""):
+            assert mode == "chat"
+            return [1, 2, 3], 99, "<|im_start|>user ..."
+
+    def fake_generate(model, tok, prompt, stop=None, max_new_tokens=256, device="cpu",
+                      eos_id=None):
+        seen.update(prompt=prompt, eos_id=eos_id)
+        return {"text": "an answer"}
+
+    monkeypatch.setattr(scoring, "generate_until", fake_generate)
+    harness = Harness.__new__(Harness)
+    harness.engine = Engine()
+    loaded = SimpleNamespace(stage=stage, model=None, tokenizer=None, device="cpu")
+    assert harness._answer(loaded, "hello", Options()) == "an answer"
+    assert seen == {"prompt": [1, 2, 3], "eos_id": 99}   # the ids, and the turn's end

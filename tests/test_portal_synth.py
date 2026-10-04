@@ -86,11 +86,12 @@ def test_the_default_teacher_is_the_recipes_own(repo, spy_popen):
     """Not the section default: a code model for code and a big model for chat differ by an
     order of magnitude in quality-per-hour, in opposite directions."""
     jobs = SynthJobs(repo)
+    from aksharallm.synth.teacher import DEFAULT_MODELS
     jobs.start({"recipe": "python", "name": "py-d", "n": 1})
-    assert spy_popen["cmd"][spy_popen["cmd"].index("--teacher") + 1] == "qwen2.5:14b"
+    assert spy_popen["cmd"][spy_popen["cmd"].index("--teacher") + 1] == DEFAULT_MODELS["python"]
     jobs.pid_file.unlink()
     jobs.start({"recipe": "chat", "name": "chat-d", "n": 1})
-    assert spy_popen["cmd"][spy_popen["cmd"].index("--teacher") + 1] == "gemma4:31b"
+    assert spy_popen["cmd"][spy_popen["cmd"].index("--teacher") + 1] == DEFAULT_MODELS["chat"]
 
 
 def test_job_runs_detached_so_the_portal_can_restart_under_it(repo, spy_popen):
@@ -188,7 +189,7 @@ def test_status_survives_ollama_being_down(repo, no_ollama):
     st = SynthJobs(repo).status()
     assert st["running"] is False
     assert st["teachers"]["error"]
-    assert st["teachers"]["defaults"]["python"] == "qwen2.5:14b"
+    assert st["teachers"]["defaults"]["python"] == "qwen3.8:27b"
     assert [r["name"] for r in st["recipes"]] == ["python", "chat", "preference"]
 
 

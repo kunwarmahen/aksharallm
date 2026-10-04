@@ -37,21 +37,23 @@ from pathlib import Path
 
 import yaml
 
-from ..portal.explain import ExplainConfig, Ollama
+from ..portal.explain import OLLAMA_MODEL, ExplainConfig, Ollama
 from ..portal.runs import RunError
 
-#: What each recipe wants, when nothing is configured. A code model for code, the biggest
-#: model on the machine for anything a person would read.
+#: What each recipe wants, when nothing is configured. One model for all three since
+#: 2026-10-04 (the project-wide `OLLAMA_MODEL`); kept per recipe so a recipe can still be
+#: pointed elsewhere in `synth.recipes` without touching the others.
 DEFAULT_MODELS = {
-    "python": "qwen2.5:14b",
-    "chat": "gemma4:31b",
-    "preference": "gemma4:31b",
+    "python": OLLAMA_MODEL,
+    "chat": OLLAMA_MODEL,
+    "preference": OLLAMA_MODEL,
 }
 
 #: Roughly what each teacher parks on the card, for the contention warning. Ollama reports
 #: the real number in `ollama ps`; this is only used to say "this will not fit beside a
 #: training run", which does not need to be exact.
-MODEL_VRAM_GB = {"gemma4:31b": 19.0, "gemma4:26b": 17.0, "qwen3.5:27b": 17.0,
+MODEL_VRAM_GB = {"qwen3.8:27b": 17.0, "qwen3.8:latest": 17.0, "qwen3.8-64k:latest": 17.0,
+                 "gemma4:31b": 19.0, "gemma4:26b": 17.0, "qwen3.5:27b": 17.0,
                  "gemma4:12b": 8.0, "gemma4:e4b": 9.6, "qwen2.5:14b": 9.0,
                  "starcoder2:3b": 1.7}
 
@@ -69,7 +71,7 @@ class SynthConfig(ExplainConfig):
 
     def __init__(self, *args, **kw):
         super().__init__(*args, **kw)
-        self.model = "qwen2.5:14b"
+        self.model = OLLAMA_MODEL
         # High, on purpose — see the module docstring.
         self.temperature = 0.9
         self.num_predict = 1200

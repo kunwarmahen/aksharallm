@@ -290,8 +290,11 @@ introduce. Headers and fences are what a model writes naturally.
 `starcoder2:3b` writes a plausible Python function in two seconds and cannot hold a
 conversation; `gemma4:31b` writes good instruction data and takes half a minute a sample.
 Quality-per-hour differs by an order of magnitude *in opposite directions depending on the
-recipe*, so a single global `model:` would be wrong for at least one recipe at all times.
-`configs/portal.yaml` → `synth.recipes.<name>.model`.
+recipe*, so the teacher is configurable per recipe: `configs/portal.yaml` →
+`synth.recipes.<name>.model`. **Since 2026-10-04 all three default to `qwen3.8:27b`** — the
+project-wide `OLLAMA_MODEL` in `portal/explain.py` — because the earlier per-recipe defaults
+(`qwen2.5:14b`, `gemma4:31b`) were no longer installed. The batches measured below were made
+with those older teachers, and their `meta.json` says so.
 
 ---
 
@@ -303,6 +306,7 @@ which model is asked for and `synth.num_gpu`. A Phase-2 run holds ~21 GB of the 
 
 | teacher | VRAM | beside a live run |
 |---|---|---|
+| qwen3.8:27b (default) | ~17 GB | **no** — the run dies |
 | gemma4:31b | ~19 GB | **no** — the run dies |
 | qwen2.5:14b | ~9 GB | no |
 | starcoder2:3b | ~1.7 GB | yes, and it is the reason it is offered |

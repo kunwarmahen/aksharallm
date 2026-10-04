@@ -591,7 +591,7 @@ would bite you if you changed it. Follow-up questions keep the thread; the answe
 as it is generated.
 
 ```bash
-ollama serve && ollama pull gemma4:12b   # once
+ollama serve && ollama pull qwen3.8:27b  # once
 scripts/portal.sh --open                 # then click "Code"
 ```
 

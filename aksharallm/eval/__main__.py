@@ -4,7 +4,7 @@
     python -m aksharallm.eval fetch --all                  # download the benchmarks, once
     python -m aksharallm.eval small-code                   # the default set, on the best ckpt
     python -m aksharallm.eval small-code --suite all --limit 0
-    python -m aksharallm.eval small-code --suite judge --judge-model gemma4:31b
+    python -m aksharallm.eval small-code --suite judge --judge-model qwen3.8:27b
     python -m aksharallm.eval report --suite mmlu          # every score, across steps
 
 The first positional is a checkpoint unless it names a subcommand, so the common case is
@@ -34,7 +34,40 @@ from .sources import EvalError, SOURCES, fetch, load, status
 from .suites import ALL_SUITES, DEFAULT_SUITES, SUITES, build, catalogue, resolve
 
 SUBCOMMANDS = ("run", "fetch", "suites", "report", "contaminate", "domains",
-                "calibrate")
+                "calibrate", "versus")
+
+
+def cmd_versus(args) -> int:
+    """Two evaluated checkpoints, judged head to head on the same prompts."""
+    from ..infer.checkpoints import repo_root
+    from . import judge as judge_mod
+    from . import versus
+
+    root = Path(args.root) if args.root else repo_root()
+    side1 = versus.load_side(args.first, args.suite, root)
+    side2 = versus.load_side(args.second, args.suite, root)
+    cfg = judge_mod.default_config(root)
+    if args.judge_model:
+        cfg.model = args.judge_model
+    print(f"{side1.get('checkpoint')}  vs  {side2.get('checkpoint')}  on {args.suite}, "
+          f"judged by {cfg.model}, each prompt in both orders")
+    res = versus.compare(cfg, side1, side2, args.suite, progress=_ticker("versus"))
+    o = res["overall"]
+    print(f"\n  {'':16} {'wins':>5} {'losses':>7} {'ties':>5}  win rate   p")
+    def line(name, r):
+        wr = "–" if r["win_rate"] is None else f"{r['win_rate']*100:5.0f}%"
+        p = "–" if r["p_value"] is None else f"{r['p_value']:.3f}"
+        print(f"  {name:16} {r['win']:>5} {r['loss']:>7} {r['tie']:>5}  {wr:>8}  {p}")
+    line("overall", o)
+    for g, r in res["groups"].items():
+        line(g, r)
+    print(f"\n  wins/losses are for {res['model1']}. {o['inconsistent']} ties were the judge "
+          f"changing its mind when the order was swapped.")
+    if o["ungraded"]:
+        print(f"  {o['ungraded']} prompts ungraded (the judge gave no usable answer).")
+    print(f"  reading: {versus.reading(res)}")
+    print(f"  written to {versus.write(res, root)}")
+    return 0
 
 
 def cmd_suites(args) -> int:
@@ -308,6 +341,11 @@ def cmd_domains(args) -> int:
         print("error: this checkpoint does not record a val_bin; pass --val-bin")
         return 1
     sources = data_cfg.get("train_sources")
+    if not sources:
+        sources = dom.sources_for_val_bin(val_bin, store.root)
+        if sources:
+            print(f"(this checkpoint records no train_sources; using the config that built "
+                  f"{val_bin})")
     spans = dom.spans_for(val_bin, sources, tok)
 
     seq_len = args.seq_len or ckpt["model_config"].get("max_seq_len", 1024)
@@ -376,7 +414,10 @@ def cmd_calibrate(args) -> int:
         print("error: this checkpoint does not record a val_bin; pass --val-bin")
         return 1
     seq_len = args.seq_len or ckpt["model_config"].get("max_seq_len", 1024)
-    ds = TokenDataset(val_bin, seq_len, args.device)
+    # Seeded, so every checkpoint is scored on the SAME windows. Unseeded (as it was until
+    # 2026-10-03) the windows came from OS entropy: SFT and DPO, whose weights differ by
+    # 1.5e-4, read 44.4% vs 48.6% next-token accuracy, and no ECE was comparable with another.
+    ds = TokenDataset(val_bin, seq_len, args.device, seed=args.seed)
 
     print(f"{args.checkpoint} on {val_bin}, {seq_len}-token windows, on the {args.device}")
     print(f"collecting {args.batches} x {args.batch} batches, "
@@ -387,6 +428,7 @@ def cmd_calibrate(args) -> int:
     res = cal.report(logits, targets)
     res["checkpoint"] = args.checkpoint
     res["val_bin"] = val_bin
+    res["seed"] = args.seed
     res["step"] = ckpt.get("step")
     # The familiar number beside the unfamiliar ones: if this disagrees with the run's own
     # recorded val loss, the calibration numbers are computed on something else.
@@ -497,8 +539,18 @@ def build_parser() -> argparse.ArgumentParser:
     cal_p.add_argument("--positions", type=int, default=20_000,
                        help="positions to keep logits for (memory is the constraint)")
     cal_p.add_argument("--device", default="cpu", choices=("cuda", "cpu"))
+    cal_p.add_argument("--seed", type=int, default=0,
+                       help="which windows are read; keep it fixed to compare checkpoints")
     cal_p.add_argument("--root", default=None)
     cal_p.set_defaults(fn=cmd_calibrate)
+
+    vs_p = sub.add_parser("versus", help="two evaluated checkpoints, judged head to head")
+    vs_p.add_argument("first", help="a checkpoint ref (its newest result is used) or a result .json")
+    vs_p.add_argument("second")
+    vs_p.add_argument("--suite", default="judge48", help="a judge-kind suite both have run")
+    vs_p.add_argument("--judge-model", default=None)
+    vs_p.add_argument("--root", default=None)
+    vs_p.set_defaults(fn=cmd_versus)
 
     return ap
 
@@ -525,7 +577,7 @@ def _ticker(tag: str, every: float = 1.0):
 
 
 #: Commands worth publishing to the portal. The rest finish before it could poll.
-ANNOUNCED = {"run", "contaminate", "domains", "calibrate", "fetch"}
+ANNOUNCED = {"run", "contaminate", "domains", "calibrate", "fetch", "versus"}
 
 
 def _job_meta(args) -> dict:

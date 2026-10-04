@@ -145,6 +145,31 @@ def test_identify_accepts_a_run_a_path_or_an_id(repo):
         store.identify("nosuchrun")
 
 
+@pytest.mark.parametrize("stage", ["sft", "dpo", "grpo"])
+def test_a_bare_stage_run_means_its_best_checkpoint_not_its_last(repo, stage):
+    """`eval small-code-dpo` scored `dpo_last.pt` while promising "best": the lookup only
+    knew `ckpt_best.pt` and fell through to whichever file listed first."""
+    src = repo / "checkpoints" / "demo" / "ckpt_last.pt"
+    run = repo / "checkpoints" / f"demo-{stage}"
+    run.mkdir()
+    payload = torch.load(src, weights_only=False)
+    # `last` is the later step, as in a real run — and the listing sorts by step.
+    torch.save({**payload, "step": 300}, run / f"{stage}_best.pt")
+    torch.save({**payload, "step": 499}, run / f"{stage}_last.pt")
+    assert CheckpointStore(repo).identify(f"demo-{stage}") == f"demo-{stage}/{stage}_best.pt"
+
+
+def test_every_post_training_stage_is_a_chat_stage():
+    """A stage missing here reads as `unknown`, and the judge then hands a chat model raw
+    text instead of a chat turn — scoring it as if it were a base model. GRPO was."""
+    from aksharallm.infer.checkpoints import CHAT_STAGES, STAGE_INFO, stage_for
+    from aksharallm.portal.runs import _STAGE_SUFFIXES
+    for stage in _STAGE_SUFFIXES:
+        assert stage_for(f"{stage}_best.pt") == stage
+        assert stage in CHAT_STAGES
+        assert "chat" in STAGE_INFO[stage]["modes"]
+
+
 # ---------------------------------------------------------------- device policy ---------
 
 def test_auto_moves_to_the_cpu_while_a_run_is_training():

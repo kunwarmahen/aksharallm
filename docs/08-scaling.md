@@ -580,7 +580,7 @@ It needs [Ollama](https://ollama.com) and one model, once:
 
 ```bash
 ollama serve            # or the desktop app
-ollama pull gemma4:12b  # ~7.6 GB
+ollama pull qwen3.8:27b  # ~17 GB — the default for the Code tab, the judge and synth
 ```
 
 Then open the portal and click **Code**. The file browser is rooted where the portal is
@@ -599,7 +599,7 @@ flowchart LR
     end
     S -->|POST /api/explain| P[aksharallm.portal<br/>stdlib http.server]
     P -->|reads| D[(the tree under<br/>the portal's root)]
-    P -->|prompt: primer +<br/>whole file + selection| O[Ollama<br/>gemma4:12b]
+    P -->|prompt: primer +<br/>whole file + selection| O[Ollama<br/>qwen3.8:27b]
     O -.->|NDJSON, token by token| P
     P -.->|server-sent events| A
 ```

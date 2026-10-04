@@ -622,3 +622,19 @@ def test_a_launched_job_is_recognised_whatever_module_it_runs(repo, monkeypatch)
 
     with pytest.raises(RunError, match="already running"):
         jobs.start_audit({"kind": "dedup", "source": "data/blend/corpus.bin"})
+
+
+def test_a_head_to_head_launches_versus_on_two_different_checkpoints(repo, spy_popen):
+    _ckpt(repo, "tiny", "ckpt_best.pt")
+    _ckpt(repo, "tiny", "ckpt_last.pt")
+    EvalJobs(repo).start_audit({"kind": "versus", "first": "tiny/ckpt_best.pt",
+                                "second": "tiny/ckpt_last.pt", "suite": "judge48"})
+    cmd = " ".join(spy_popen["cmd"])
+    assert "aksharallm.eval versus tiny/ckpt_best.pt tiny/ckpt_last.pt --suite judge48" in cmd
+    (repo / "logs" / "eval" / "eval.pid").unlink(missing_ok=True)
+    with pytest.raises(RunError):
+        EvalJobs(repo).start_audit({"kind": "versus", "first": "tiny/ckpt_best.pt",
+                                    "second": "tiny/ckpt_best.pt"})
+    with pytest.raises(RunError):
+        EvalJobs(repo).start_audit({"kind": "versus", "first": "tiny/ckpt_best.pt",
+                                    "second": "tiny/ckpt_last.pt", "suite": "mmlu"})

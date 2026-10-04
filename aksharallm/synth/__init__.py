@@ -10,7 +10,7 @@ The honest name for it
 ----------------------
 "Distilling a 31B into our 300M" is what this is usually called, and for us it would be
 wrong. Classic distillation matches the teacher's *logit distribution*, which requires both
-models to share a vocabulary; every local teacher (gemma4:31b, qwen3.5:27b, qwen2.5:14b,
+models to share a vocabulary; every local teacher (qwen3.8:27b, gemma4:26b, qwen2.5:14b,
 starcoder2:3b) has its own tokenizer and ours is a 32k BPE trained on the blend. Matching
 probability mass across two different tokenizations is a research problem, not a build. So
 what happens here is **sequence-level distillation**: the teacher writes *text*, we tokenize

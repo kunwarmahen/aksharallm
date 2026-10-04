@@ -232,3 +232,14 @@ def test_perplexity_is_the_familiar_cross_check():
     logits = torch.zeros(100, vocab)  # uniform
     targets = torch.randint(0, vocab, (100,))
     assert perplexity(logits, targets) == pytest.approx(vocab, rel=0.01)
+
+
+def test_calibrate_reads_the_same_windows_for_every_checkpoint():
+    """`eval calibrate` built its dataset with no seed, so each checkpoint was scored on
+    different text: SFT and DPO (weights 1.5e-4 apart) read 44.4% vs 48.6% accuracy."""
+    import ast, inspect
+    from aksharallm.eval.__main__ import cmd_calibrate
+    tree = ast.parse(inspect.getsource(cmd_calibrate))
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
+             and getattr(n.func, "id", None) == "TokenDataset"]
+    assert calls and all(any(k.arg == "seed" for k in c.keywords) for c in calls)

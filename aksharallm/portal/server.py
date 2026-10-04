@@ -546,6 +546,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.evals.domains())
         if parts == ["eval", "calibration"]:
             return self._json(self.evals.calibration())
+        if parts == ["eval", "versus"]:
+            return self._json(self.evals.versus())
         if parts == ["eval", "dedup"]:
             return self._json({**self.evals.dedup(), "corpora": self.evals.corpora()})
         if parts == ["eval", "compare"]:

@@ -42,7 +42,7 @@ import re
 import statistics
 from dataclasses import dataclass
 
-from ..portal.explain import ExplainConfig, Ollama
+from ..portal.explain import OLLAMA_MODEL, ExplainConfig, Ollama
 from ..portal.runs import RunError
 from .sources import EvalError
 
@@ -63,7 +63,7 @@ class JudgeConfig(ExplainConfig):
 
 def default_config(root=None) -> JudgeConfig:
     cfg = JudgeConfig(path=None)
-    cfg.model = "qwen3.5:27b"
+    cfg.model = OLLAMA_MODEL
     cfg.temperature = 0.0
     cfg.num_predict = 400
     cfg.num_ctx = 8192
@@ -182,6 +182,27 @@ def grade_one(cfg: JudgeConfig, item, answer: str, model: str | None = None) -> 
                  score=score, reason=reason)
 
 
+def release(cfg: JudgeConfig, model: str) -> bool:
+    """Ask Ollama to unload the judge now rather than when its keep-alive expires.
+
+    A 27B judge holds ~18 GB, and Ollama keeps it resident for minutes after the last
+    grade. Inside one evaluation that is harmless — the judge runs after the answers are
+    generated. Across several it is not: evaluating base, SFT, DPO and GRPO back to back
+    (2026-10-03), every run after the first died with CUDA OOM loading a 300M model beside
+    a judge that had finished its work. Best effort: a failure here never fails the result.
+    """
+    import urllib.request
+    body = json.dumps({"model": model, "keep_alive": 0}).encode()
+    req = urllib.request.Request(f"{cfg.host.rstrip('/')}/api/generate", data=body,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            resp.read()
+        return True
+    except Exception:  # noqa: BLE001 — an unload is a courtesy, never a failure
+        return False
+
+
 def run(cfg: JudgeConfig, items, answers: list[str], model: str | None = None,
         progress=None) -> dict:
     """Grade every answer, and summarise.
@@ -203,6 +224,8 @@ def run(cfg: JudgeConfig, items, answers: list[str], model: str | None = None,
                                 answer=answer, score=None, reason=f"judge failed: {exc}"))
         if progress:
             progress(i + 1, len(items), "judge")
+
+    release(cfg, model or cfg.model)
 
     valid = [g.score for g in grades if g.score is not None]
     by_group: dict[str, list[int]] = {}

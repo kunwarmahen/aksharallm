@@ -9,16 +9,16 @@
 # The model runs on Ollama, on this machine. Start it with `ollama serve` (or the desktop
 # app) and pull a model once:
 #
-#     ollama pull gemma4:12b
+#     ollama pull qwen3.8:27b
 #
 # Anything below can be overridden without editing this file:
 #     AKSHARALLM_OLLAMA_HOST=http://192.168.1.9:11434  # a model on another box
-#     AKSHARALLM_EXPLAIN_MODEL=qwen3.5:27b
+#     AKSHARALLM_EXPLAIN_MODEL=starcoder2:3b   # small enough to run beside training
 # and the Code tab's model picker overrides it again, per request.
 
 explain:
   host: http://127.0.0.1:11434
-  model: gemma4:12b
+  model: qwen3.8:27b
 
   # Low, on purpose: this is an explanation of code that already exists, not a brainstorm.
   temperature: 0.2
@@ -36,11 +36,11 @@ explain:
   num_predict: 800
 
   # THE ONE THAT MATTERS WHILE TRAINING. How many layers Ollama may put on the GPU.
-  # Unset (the default) means "all of them, if they fit" — about 8 GB for a 12B model. A
+  # Unset (the default) means "all of them, if they fit" — about 17 GB for qwen3.8:27b. A
   # Phase-2 run already holds ~21 GB of a 24 GB card, so asking a question mid-run can push
   # the trainer into an out-of-memory death several days in. Set this to 0 to keep the
   # explainer entirely on the CPU: it cannot touch the run, but be realistic about the cost
-  # — a 12B model reading a real file took over three minutes to produce its first word on
+  # — a 12B model (gemma4:12b, the old default) reading a real file took over three minutes to produce its first word on
   # this machine, against ~15 seconds on the card. Pair it with a much smaller model
   # (`model: starcoder2:3b`) if you want to read while a long run is going. The Code tab
   # says which of the two you are in.
@@ -80,7 +80,7 @@ judge:
   # The biggest model you have pulled. A judge's job is to be a consistent reader, and a
   # bigger model is a more consistent one. It runs after the answers are generated, so it
   # never competes with our own model for memory.
-  model: qwen3.5:27b
+  model: qwen3.8:27b
 
   # Zero, and not for taste: a judge that samples gives a different grade to the same
   # answer on a second run, which destroys the only thing the number is good for —
@@ -153,14 +153,14 @@ synth:
   max_attempts: 2
 
   # Per recipe. Anything left out falls back to the built-in default for that recipe
-  # (python: qwen2.5:14b, chat and preference: gemma4:31b).
+  # (qwen3.8:27b for all three — `OLLAMA_MODEL` in aksharallm/portal/explain.py).
   recipes:
     python:
-      model: qwen2.5:14b
+      model: qwen3.8:27b
     chat:
-      model: gemma4:31b
+      model: qwen3.8:27b
     preference:
-      model: gemma4:31b
+      model: qwen3.8:27b
       # Lower than the section default: a preference pair needs the *flaw* to be the one
       # asked for, and a very high temperature makes the bad answer bad in three ways at
       # once, which teaches DPO the wrong difference.

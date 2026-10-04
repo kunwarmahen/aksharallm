@@ -305,6 +305,14 @@ class SourceTree:
 # configuration
 # --------------------------------------------------------------------------------------
 
+#: The one local model every Ollama caller defaults to — the Code tab, the eval judge and the
+#: synthetic-data teachers. One name, so changing models is one edit: before 2026-10-04 each
+#: caller carried its own, and three of the four models they named were not installed.
+#: 17 GB on the card: it does not fit beside a training run (the Code tab warns; pick
+#: `starcoder2:3b` in its model picker, or `num_gpu: 0`, while one is going).
+OLLAMA_MODEL = "qwen3.8:27b"
+
+
 @dataclass
 class ExplainConfig:
     """Where the model lives and how much of the machine it may use.
@@ -324,7 +332,7 @@ class ExplainConfig:
     ENV_PREFIX = "AKSHARALLM_EXPLAIN"
 
     host: str = "http://127.0.0.1:11434"
-    model: str = "gemma4:12b"
+    model: str = OLLAMA_MODEL
     temperature: float = 0.2
     num_ctx: int = 8192
     num_predict: int = 800

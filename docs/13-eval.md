@@ -138,6 +138,18 @@ though the absolute number is not. Three things hold it steady:
 A judge that fails to answer is recorded as **ungraded**, not as a 1. Scoring it 1 would
 punish the model being tested for the judge's mistake.
 
+**The judge gives the card back when it is done.** Ollama keeps a model resident for minutes
+after its last request, and a 27B judge is ~18 GB. Inside one evaluation that costs nothing —
+the judge runs after our model has generated. Across several it is fatal: evaluating SFT,
+DPO and GRPO back to back, every run after the first died with CUDA OOM loading a 300M model
+beside a judge that had already finished. `judge.run` now ends with `release()`, an
+`keep_alive: 0` request, best-effort so it can never fail a result.
+
+**A judge is consistent only with itself.** Grades from two judge models are two different
+rulers. The base model was first graded by `qwen3.5:27b`; when that was no longer installed,
+the base was **re-graded** by `qwen3.8:27b` (`--label base-judge38`) before any chat model
+was compared with it. Always compare judge scores that carry the same `judge_model`.
+
 ---
 
 ## What a score means at our scale
@@ -295,7 +307,7 @@ python -m aksharallm.eval small-code --adapter small-code/sft_best.lora.pt --sui
 python -m aksharallm.eval small-code/ckpt_best-gptq-nf4-g64.pt --suite mmlu,arc-easy
 
 # open-ended, graded by a local model
-python -m aksharallm.eval small-code --suite judge --judge-model gemma4:31b
+python -m aksharallm.eval small-code --suite judge --judge-model qwen3.8:27b
 
 # every evaluation so far, and one suite across every step
 python -m aksharallm.eval report
@@ -362,9 +374,28 @@ answer. It is also, by [`runner.py`](../aksharallm/eval/runner.py)'s `_answer`, 
 suite that applies the chat template**:
 
 ```python
-if loaded.stage in ("sft", "dpo", "chat"):
-    text = self.engine.build_prompt(loaded, "chat", prompt=prompt)
+if loaded.stage in CHAT_STAGES + ("chat",):     # grpo, dpo, sft, code
+    text, stop_id, _ = self.engine.build_prompt(loaded, "chat", prompt=prompt)
 ```
+
+**That line never ran successfully until 2026-10-03.** It read `text = build_prompt(...)`,
+but `build_prompt` returns `(ids, stop_id, rendered)`, so the tuple went to the tokenizer and
+the judge raised `TypeError` on the first chat model it was given. Nobody had judged one: base
+models take the other branch. Because `judge` runs late in `--suite all`, the crash came ~45
+minutes in and took every finished suite with it (a failed evaluation writes nothing). Now the
+ids go to `generate_until` as ids — `<|im_start|>` is a special token and must not be
+re-encoded from its spelling — and the turn ends at `<|im_end|>`, not the document EOS.
+`test_a_chat_model_is_judged_on_its_rendered_chat_turn` pins both. **The lesson worth keeping:
+a branch only one kind of model takes is untested until that model exists — run the new
+checkpoint through a short `--suite judge` before committing an hour to `--suite all`.**
+
+`CHAT_STAGES` lives in [`infer/checkpoints.py`](../aksharallm/infer/checkpoints.py), beside
+the filename prefixes that decide a checkpoint's stage. Until 2026-10-03 this line was a
+literal `("sft", "dpo", "chat")` and there was no `grpo_` prefix at all, so a GRPO checkpoint
+read as `unknown` and **the judge handed a chat model raw text** — scoring it as a base
+model, and making GRPO look broken beside DPO for a reason that had nothing to do with GRPO.
+One tuple now, and `test_every_post_training_stage_is_a_chat_stage` walks the portal's list
+of stages and fails on any that is missing from it.
 
 GSM8K and HumanEval generate too, but they build their prompts directly and hand them to the
 model as raw text even on a chat checkpoint. **That is deliberate, and it is gotcha 1 doing
@@ -402,9 +433,13 @@ python -m aksharallm.eval small-code-sft --suite fast --label sft    # damage
 python -m aksharallm.eval calibrate small-code-dpo                   # after aligning
 ```
 
-A bare run name resolves to that run's best checkpoint, and a post-training run has no
-`ckpt_best.pt` — so `small-code-sft` resolves to `sft_best.pt`, and `small-code-dpo` to
-`dpo_best.pt`, with no path to type.
+A bare run name resolves to that run's best checkpoint — `ckpt_best.pt`, else
+`<stage>_best.pt` for any stage prefix, and only then a `_last` — so `small-code-dpo` is
+`dpo_best.pt` with no path to type. **This paragraph was written before it was true.** The
+lookup only knew `ckpt_best.pt` and otherwise took the first file in the listing, which sorts
+by step, highest first — and `_last` is always the higher step. So `small-code-dpo` and
+`small-code-grpo` silently meant `dpo_last.pt` and `grpo_last.pt`; `small-code-sft` was only
+right because its best happened to be its last. Fixed and pinned 2026-10-03.
 
 **`eval domains` is the one that catches the real disaster.** SmolTalk is entirely prose. A
 too-high learning rate eats the Python ability while the blended validation average — 85%
@@ -412,9 +447,119 @@ prose by construction — barely moves. The base model's split was prose **2.769
 **1.2558**; if Python climbs and the total does not, the total is precisely the number that
 will not show it.
 
+**A chat checkpoint does not know its own split.** The stage trainers record the base run's
+`val_bin` but no `train_sources` — they trained on chat data, so they have none — and
+`domains` used to fall back to a single `all` row. The forgetting check printed one number
+and split nothing. It now looks up the run config that built that same `val_bin`
+(`domains.sources_for_val_bin`; two configs disagreeing about it is refused, not guessed) and
+says so in its output. Worth knowing why the `all` row was not just less detailed but
+**wrong**: it draws 64 random windows from the whole file, and each one that happens to land
+in the Python span pulls the mean down by ~0.024. On the SFT model it read **2.537** —
+"unchanged from base" — where the split, which samples the same windows in each span for
+every checkpoint, blends to **2.670**. The paired comparison is the split.
+
 **Calibration goes after DPO, not after SFT.** Alignment is where a model learns to sound
 certain, and it is the stage that reliably degrades ECE. The base-model number recorded in
 stage 3 is what makes that visible; without it there is nothing to have degraded from.
+
+### Measured: base → SFT → DPO → GRPO (2026-10-03)
+
+The 300M, all four stages, the full `--suite all --limit 0`, one judge (`qwen3.8:27b`), on the
+GPU. Rows are `logs/eval/*-small-code{,-sft,-dpo,-grpo}-*.json`; `eval report` prints them.
+
+| | base | SFT | DPO | GRPO | ± (1 se) |
+|---|---|---|---|---|---|
+| MMLU (14,042) | 26.0% | 26.7% | 26.7% | 27.0% | 0.4 |
+| ARC-Easy (2,376) | 50.8% | 49.7% | 48.9% | 49.7% | 1.0 |
+| ARC-Challenge (1,172) | 26.9% | 26.7% | 27.2% | 26.6% | 1.3 |
+| HellaSwag (10,042) | 37.4% | 37.1% | 37.1% | 36.9% | 0.5 |
+| PIQA (1,838) | 65.9% | 65.5% | 65.3% | 65.7% | 1.1 |
+| GSM8K (1,319) | 1.5% | 1.7% | 2.0% | 1.7% | – |
+| HumanEval pass@1 | 3/164 | 5/164 | 5/164 | **7/164** | – |
+| HumanEval: does not run (syntax + error) | 99 | 66 | 65 | **34** | – |
+| HumanEval: runs, wrong answer | 62 | 93 | 94 | **123** | – |
+| judge, mean of 1–5 (12 prompts) | 1.00 | 1.42 | 1.25 | 1.42 | – |
+| `domains` prose loss | 2.763 | 2.903 | 2.906 | 2.905 | paired |
+| `domains` Python loss | 1.246 | 1.351 | 1.350 | 1.353 | paired |
+| `calibrate` ECE (15 bins, seed 0) | 0.012 | 0.053 | 0.051 | 0.055 | paired |
+| fitted temperature | 0.996 | 1.085 | 1.081 | 1.087 | |
+
+How to read it — and every line of this is the section above being tested:
+
+- **The knowledge suites did not move.** Every change is inside two standard errors, which
+  is what "SFT adds no knowledge" predicts. A pass on the damage check, not a disappointment.
+- **The judge is the only suite that moved, and it moved once**: 1.00 → 1.42 at SFT. DPO's
+  1.25 is three prompts each one grade lower; on twelve prompts that is noise, not a finding.
+  The base answers by repeating the prompt; SFT answers on topic, in the right register, and
+  then loops or gets the details wrong — which is a fair description of a 300M chat model.
+- **GRPO's effect is visible only in HumanEval's failure *types*, exactly where the progress
+  meter above says to look.** Programs that cannot run at all halve (66 → 34) while the pass
+  count stays too small to quote. GRPO was rewarded for code that passes tests; at 300M what it
+  learned was to write code that *runs* — the step before passing.
+- **SFT is what cost something, and the blended number would have hidden it.** Raw-text loss
+  rose +0.14 nats on prose and +0.105 on Python (+8% relative, slightly worse than prose), and
+  the model became overconfident on raw text: ECE 0.012 → 0.053, confidence 53.8% against
+  48.6% accuracy. A temperature of ~1.085 removes most of it. **DPO and GRPO changed neither**
+  — their weights are within 1.5e-4 of SFT's — so here it was SFT, not alignment, that degraded
+  calibration, contrary to the usual expectation stated above.
+
+Five bugs had to be fixed before this table could be trusted, and each one would have produced
+a plausible wrong number rather than an error: the judge crashed on any chat model; GRPO read
+as stage `unknown` (raw-text judging); `small-code-dpo`/`-grpo` meant `_last.pt`; `domains`
+did not split chat checkpoints; and `calibrate` read different windows per checkpoint. Each is
+described above where it lives, and each has a test that fails on the old code.
+
+### Comparing two models head to head (`judge48` and `eval versus`)
+
+The table above has one weak row: the judge. Twelve prompts graded out of five could not
+separate DPO from SFT — 1.25 against 1.42 was three prompts moving one grade each — and with
+every answer a 1 or a 2, two genuinely different models mostly land on the same grade.
+
+```mermaid
+flowchart LR
+    A["eval &lt;A&gt; --suite judge48"] --> RA["result A:<br/>48 answers"]
+    B["eval &lt;B&gt; --suite judge48"] --> RB["result B:<br/>48 answers"]
+    RA --> V["eval versus A B"]
+    RB --> V
+    V --> O1["judge: A shown first"]
+    V --> O2["judge: B shown first"]
+    O1 --> W{"same model<br/>both times?"}
+    O2 --> W
+    W -->|yes| WIN["a win"]
+    W -->|no| TIE["a tie"]
+```
+
+Two changes, both cheap:
+
+- **`judge48`** — forty-eight prompts, six per group (explanation, instruction-following,
+  summarisation, reasoning, code, honesty, safety, writing), none shared with `judge`, pitched
+  where a 300M chat model can earn *something*. A **new suite name**, never more prompts in
+  `judge`: gotcha 1 — a changed prompt set makes every earlier score a different benchmark.
+  It is in `--suite all` from now on.
+- **`python -m aksharallm.eval versus <A> <B>`** — the judge sees both answers to the same
+  prompt and says which is better. Asked **twice, with the order swapped**; a model wins only
+  if it is preferred both times. A judge that favours whatever it reads first therefore
+  produces ties, never wins, and the `inconsistent` count says how much of that happened. The
+  headline is an **exact sign test** on wins against losses, because 9–5 sounds decisive and
+  is p = 0.42. It reuses the answers each side's evaluation already wrote, so it costs judge
+  calls and no generation — any two checkpoints evaluated on the same suite can be compared,
+  weeks apart. Output: `logs/eval/versus-<a>-vs-<b>-<when>.json`, under `comparisons` so the
+  result readers never mistake it for a benchmark row. In the portal: the Eval tab's **Which
+  of two models answers better?** card, which lists only checkpoints that have judged answers.
+
+```bash
+python -m aksharallm.eval small-code-sft --suite judge48 --label sft
+python -m aksharallm.eval small-code-dpo --suite judge48 --label dpo
+python -m aksharallm.eval versus small-code-sft small-code-dpo      # wins are for the first
+```
+
+**Run base against SFT first.** SFT plainly answers better than a base model, so it is the
+positive control: a comparison that cannot see that difference cannot be trusted to see a
+smaller one.
+
+`tests/test_versus.py` pins the two properties against fake judges whose behaviour is known
+exactly — a fair one must find the better model, and one that always prefers answer A must
+decide **nothing** (48 ties, 48 inconsistent, no p-value).
 
 ### Label every one of them by stage
 
@@ -433,7 +578,7 @@ not mind waiting.
 
 ```yaml
 judge:
-  model: qwen3.5:27b     # the biggest thing you have; quality matters more than speed here
+  model: qwen3.8:27b     # the biggest thing you have; quality matters more than speed here
   temperature: 0.0       # a judge that samples is not a judge
   think: false           # same trap as the explainer — see docs/08
   num_predict: 400
@@ -779,6 +924,15 @@ The number was not wrong. It was measuring something narrower than it claimed, a
 cross-check said so — which is the argument for reporting a familiar quantity beside every
 unfamiliar one, even when nothing depends on it.
 
+**And the windows were not the same windows twice.** Until 2026-10-03 `eval calibrate` built
+its dataset with no seed — gotcha 16 again, in a reader rather than a trainer — so each run
+drew its windows from OS entropy. Comparing four checkpoints exposed it: SFT and DPO, whose
+weights differ by at most 1.5e-4, read **44.4% vs 48.6%** next-token accuracy and ECE gaps to
+match. The position subsample inside `collect` was seeded and its docstring promised
+repeatability; the windows it subsampled *from* were not. `--seed` (default 0) now fixes them
+and is recorded in the JSON, so a base-vs-SFT-vs-DPO comparison is paired: every model is
+scored on the same text, and only the model differs.
+
 ### All four in the portal
 
 The Eval tab's **"Is the benchmark trustworthy?"** panel now holds four cards, and they share
@@ -873,7 +1027,8 @@ word `undefined` — exactly where a reader most needs to trust the number.
 | 2 | [`eval/sources.py`](../aksharallm/eval/sources.py) | `Source` and `fetch` — downloaded once into `data/eval/`, with a `.meta.json` recording which copy of the dataset this is. Note the fallback repositories |
 | 3 | [`eval/scoring.py`](../aksharallm/eval/scoring.py) | `_encode_pair` (the continuation tokenized *with* the context — the subtle one), `loglikelihood`, `score_mc` (`acc` vs `acc_norm` vs `acc_greedy`), `generate_until`, `perplexity`. `_batches` is the token-budget batcher |
 | 4 | [`eval/runner.py`](../aksharallm/eval/runner.py) | `Harness` — one suite at a time, loading the model through `infer.Engine` rather than itself, which is where the device policy, adapters and quantized checkpoints come from free |
-| 5 | [`eval/judge.py`](../aksharallm/eval/judge.py) | `build_messages` / `parse_grade` / `run` — temperature 0, a rubric per prompt, and `Grade` with ungraded distinct from 1 |
+| 5 | [`eval/judge.py`](../aksharallm/eval/judge.py) | `build_messages` / `parse_grade` / `run` — temperature 0, a rubric per prompt, and `Grade` with ungraded distinct from 1. `release` at the end of `run` |
+| 5b | [`eval/versus.py`](../aksharallm/eval/versus.py) | `verdict` first — a win needs both orderings to agree, so position bias becomes ties. Then `sign_test`, and `load_side`, which is why a comparison costs no generation |
 | 6 | [`eval/report.py`](../aksharallm/eval/report.py) | `Results` → `summary_table` / `compare_table` — a folder of JSON, no database, and the trend across steps |
 | 7 | [`eval/__main__.py`](../aksharallm/eval/__main__.py) | `cmd_suites` / `cmd_fetch` / `cmd_run` / `cmd_report` — thin, by design |
 | 8 | [`aksharallm/infer/sandbox.py`](../aksharallm/infer/sandbox.py) | HumanEval's scorer is the same sandbox the Playground and GRPO use. Note who adds the `check(entry_point)` call |

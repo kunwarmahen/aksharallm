@@ -174,6 +174,27 @@
           </div>
 
           <div class="ev-audit-card">
+            <h3>Which of two models answers better?</h3>
+            <p>Grades out of five are too coarse to separate two small models — both mostly
+              score 1 or 2, and a real difference lands on the same grade. Shown <em>both</em>
+              answers, the judge can still say which is better.</p>
+            <p class="ev-hint">Each prompt is judged twice with the answers swapped; a model
+              wins only if it is preferred both times, so a judge that favours whatever it
+              reads first produces ties, not wins. Uses answers the evaluations already
+              wrote: only checkpoints with a judged result are listed.</p>
+            <div class="ev-row">
+              <label class="field">Suite
+                <select id="ev-vs-suite"><option value="judge48">judge48</option>
+                  <option value="judge">judge (12)</option></select>
+              </label>
+              <label class="field">Model 1 <select id="ev-vs-a"></select></label>
+              <label class="field">Model 2 <select id="ev-vs-b"></select></label>
+              <button id="ev-vs-run" class="ghost" type="button">Compare</button>
+            </div>
+            <div id="ev-vs-out" class="ev-audit-out"></div>
+          </div>
+
+          <div class="ev-audit-card">
             <h3>How much of the corpus is the same thing twice?</h3>
             <p>A duplicated document is trained on twice — a silent, unrequested extra epoch
               on whatever happened to be popular. Exact matching cannot see near-duplicates

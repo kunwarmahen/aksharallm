@@ -443,8 +443,8 @@ def test_per_recipe_default_is_used_when_nothing_is_configured(tmp_path, monkeyp
             monkeypatch.delenv(var, raising=False)
     cfg = SynthConfig(path=None)
     cfg.reload()
-    assert cfg.model_for("python") == "qwen2.5:14b"
-    assert cfg.model_for("chat") == "gemma4:31b"
+    assert cfg.model_for("python") == "qwen3.8:27b"
+    assert cfg.model_for("chat") == "qwen3.8:27b"
 
 
 def test_contention_warns_about_a_big_teacher_and_clears_a_small_one(tmp_path, monkeypatch):

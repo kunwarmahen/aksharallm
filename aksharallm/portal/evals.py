@@ -189,6 +189,7 @@ class EvalJobs:
         "domains": "domains-*.json",
         "calibrate": "calibration-*.json",
         "dedup": "dedup-*.json",
+        "versus": "versus-*.json",
     }
 
     def _finished(self, cur: dict) -> bool:
@@ -230,7 +231,7 @@ class EvalJobs:
 #: The label is lazy rather than `\S+` because a label may be a phrase — `collecting
 #: logits` is two words, and one space was enough to silence the bar again.
     _PROGRESS_RE = re.compile(
-        r"^\[(?:eval|contam|domains|calib|dedup)\] (.+?) ([\d,]+)/([\d,]+) \((\d+)%\)")
+        r"^\[(?:eval|contam|domains|calib|dedup|versus)\] (.+?) ([\d,]+)/([\d,]+) \((\d+)%\)")
 
     def _progress(self, log: list[str]) -> dict | None:
         for line in reversed(log):
@@ -348,7 +349,7 @@ class EvalJobs:
         wants to be doing that while an evaluation is trying to produce a number.
         """
         kind = str(spec.get("kind") or "")
-        if kind not in ("contaminate", "domains", "calibrate", "dedup"):
+        if kind not in ("contaminate", "domains", "calibrate", "dedup", "versus"):
             raise RunError(f"unknown audit {kind!r}")
         if self._pid():
             raise RunError("a job is already running — wait for it to finish.")
@@ -398,6 +399,25 @@ class EvalJobs:
                    "--batches", str(int(spec.get("batches") or 24)),
                    "--batch", str(int(spec.get("batch") or 2))]
             meta = {"kind": "calibrate", "checkpoint": info.rel}
+
+        elif kind == "versus":
+            suite = str(spec.get("suite") or "judge48")
+            if suites_mod.get(suite).kind != "judge":
+                raise RunError(f"{suite} is not a judged suite")
+            refs = []
+            for key in ("first", "second"):
+                ref = str(spec.get(key) or "").strip()
+                if not ref:
+                    raise RunError("pick two checkpoints to compare")
+                try:
+                    refs.append(self.store.identify(ref))
+                except (InferError, Exception) as exc:  # noqa: BLE001
+                    raise RunError(f"unknown checkpoint {ref!r}: {exc}")
+            if refs[0] == refs[1]:
+                raise RunError("pick two different checkpoints")
+            cmd = [sys.executable, "-u", "-m", "aksharallm.eval", "versus", refs[0], refs[1],
+                   "--suite", suite]
+            meta = {"kind": "versus", "checkpoint": f"{refs[0]} vs {refs[1]}", "suites": [suite]}
 
         elif kind == "dedup":
             source = str(spec.get("source") or "")
@@ -473,6 +493,28 @@ class EvalJobs:
     def calibration(self, limit: int = 10) -> dict:
         """Is the model's confidence honest? See `eval/calibration.py`."""
         return self._latest("calibration-*.json", limit)
+
+    def versus(self, limit: int = 10) -> dict:
+        """The latest head-to-head, plus which checkpoints can be compared at all.
+
+        `versus` reuses answers a judged evaluation already wrote, so only checkpoints with
+        such a result are offered — picking one without would fail after the click.
+        """
+        out = self._latest("versus-*.json", limit)
+        ready: dict[str, set] = {}
+        for f in self.dir.glob("*.json"):
+            try:
+                data = json.loads(f.read_text())
+            except (OSError, ValueError):
+                continue
+            s = data.get("suites")
+            if isinstance(s, dict) and data.get("checkpoint"):
+                for name, res in s.items():
+                    if isinstance(res, dict) and res.get("items") and name in suites_mod.SUITES \
+                            and suites_mod.SUITES[name].kind == "judge":
+                        ready.setdefault(name, set()).add(data["checkpoint"])
+        out["ready"] = {k: sorted(v) for k, v in ready.items()}
+        return out
 
     def dedup(self, limit: int = 10) -> dict:
         """How much of the corpus is a near-duplicate of the rest of it. See `data/dedup.py`.

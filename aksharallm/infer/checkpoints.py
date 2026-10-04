@@ -61,6 +61,7 @@ RUN_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 #: first. The training stage is not recorded *inside* the checkpoint (it predates this
 #: module), but each trainer writes its own filenames, and those are unambiguous.
 STAGE_PREFIXES = (
+    ("grpo_", "grpo"),    # RL-tuned chat model (aksharallm.train.grpo)
     ("dpo_", "dpo"),      # aligned chat model  (aksharallm.train.dpo)
     ("sft_", "sft"),      # instruction-tuned   (aksharallm.train.sft)
     ("code_", "code"),    # Python specialist   (Phase 4 continued-pretraining)
@@ -89,6 +90,12 @@ STAGE_INFO = {
         "note": "Instruction-tuned and preference-aligned. This is the model to judge the "
                 "chat side of the project on.",
     },
+    "grpo": {
+        "label": "chat (SFT+GRPO)",
+        "modes": ["complete", "chat", "code"],
+        "note": "Instruction-tuned, then reinforced against the code sandbox: rewarded for "
+                "Python that passes its tests. An alternative to DPO, not a step after it.",
+    },
     "code": {
         "label": "Python specialist",
         "modes": ["complete", "chat", "code"],
@@ -102,6 +109,14 @@ STAGE_INFO = {
                 "can do is a guess. Everything is enabled; believe the output, not the UI.",
     },
 }
+
+
+#: The stages that answer inside the ChatML template. One tuple, read by everything that has
+#: to decide "is this a chat model" — the Playground's default, the judge's prompt format.
+#: It used to be written out at each of those places, and GRPO was added to none of them:
+#: its checkpoints read as `unknown` and the judge handed them raw text instead of a chat
+#: turn, which scores a chat model as though it were a base one.
+CHAT_STAGES = ("grpo", "dpo", "sft", "code")
 
 
 def repo_root() -> Path:
@@ -396,10 +411,17 @@ class CheckpointStore:
             known = ", ".join(sorted(d.name for d in self.dirs())) or "none"
             raise InferError(f"no checkpoints for run '{run}' (runs with checkpoints: "
                              f"{known})")
+        # Best before last, whatever the stage's prefix: a post-training run writes
+        # `dpo_best.pt` / `grpo_best.pt`, not `ckpt_best.pt`, and falling through to
+        # `found[0]` handed `eval small-code-dpo` the *last* checkpoint while saying "best".
         by_name = {c.name: c for c in found}
         for name in ("ckpt_best.pt", "ckpt_last.pt"):
             if name in by_name:
                 return by_name[name].rel
+        for kind in ("best", "last"):
+            for prefix, _ in STAGE_PREFIXES:
+                if f"{prefix}{kind}.pt" in by_name:
+                    return by_name[f"{prefix}{kind}.pt"].rel
         return found[0].rel
 
     # ---- description -------------------------------------------------------------------
@@ -509,10 +531,10 @@ class CheckpointStore:
         usable = [c for c in self.list() if not c.error]
         if not usable:
             return None
-        order = {"dpo": 0, "sft": 1, "code": 2, "base": 3, "unknown": 4}
+        order = {"grpo": 0, "dpo": 0, "sft": 1, "code": 2, "base": 3, "unknown": 4}
         rank = lambda c: (order.get(c.stage, 9), -c.mtime)  # noqa: E731
         if prefer_chat:
-            chat = [c for c in usable if c.stage in ("dpo", "sft", "code")]
+            chat = [c for c in usable if c.stage in CHAT_STAGES]
             if chat:
                 return min(chat, key=rank)
         return min(usable, key=rank)

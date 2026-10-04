@@ -238,8 +238,9 @@ def score_mc(model, tok, items, device: str = "cpu",
 
 
 @torch.no_grad()
-def generate_until(model, tok, prompt: str, stop: list[str] | None = None,
-                   max_new_tokens: int = 256, device: str = "cpu") -> dict:
+def generate_until(model, tok, prompt: str | list[int], stop: list[str] | None = None,
+                   max_new_tokens: int = 256, device: str = "cpu",
+                   eos_id: int | None = None) -> dict:
     """Greedy continuation, cut at the first stop string.
 
     Greedy (`temperature=0`) is not a style choice: a benchmark that samples gives a
@@ -249,16 +250,25 @@ def generate_until(model, tok, prompt: str, stop: list[str] | None = None,
     The stop strings are checked against the decoded text rather than against token ids,
     because `"\\nQuestion:"` is not one token and which tokens it becomes depends on what
     precedes it.
+
+    The prompt is text, or token ids already rendered by the caller — a chat turn arrives as
+    ids from `Engine.build_prompt`, whose `<|im_start|>` tokens are special and must not be
+    re-encoded from their spelling. `eos_id` overrides the end token for the same reason: a
+    chat model ends its turn with `<|im_end|>`, not with the document's EOS.
     """
-    ids = tok.encode(prompt, bos=True)
+    if isinstance(prompt, str):
+        ids = tok.encode(prompt, bos=True)
+    else:
+        ids = list(prompt)
+    stop_id = tok.eos_id if eos_id is None else eos_id
     decoder = IncrementalDecoder(tok)
     text = ""
     t0 = time.monotonic()
     n = 0
     for token in stream_generate(model, ids, max_new_tokens=max_new_tokens, temperature=0.0,
-                                 top_k=None, top_p=None, eos_id=tok.eos_id, device=device):
+                                 top_k=None, top_p=None, eos_id=stop_id, device=device):
         n += 1
-        if token == tok.eos_id:
+        if token == stop_id:
             break
         text += decoder.push(token)
         if stop and any(s in text for s in stop):

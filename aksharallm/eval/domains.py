@@ -145,6 +145,35 @@ def verify_spans(val_bin: str | Path, spans: list[Span], tok,
     return out
 
 
+def sources_for_val_bin(val_bin: str | Path, root: str | Path) -> list[dict] | None:
+    """`train_sources` from the run config that built this `val_bin`, or None.
+
+    A post-training checkpoint (SFT/DPO/GRPO) records the base run's `val_bin` but not its
+    `train_sources` — the stage trained on chat data, so it has none of its own. Without
+    this, `domains` on a chat model printed one blended row, and the check that exists to
+    catch forgetting after SFT silently split nothing. The base run's config describes
+    exactly the file being measured, so its sources are the right ones to derive from.
+    Ambiguous (two configs, different sources) returns None rather than picking one.
+    """
+    import yaml
+    root = Path(root)
+    want = Path(val_bin)
+    want = (want if want.is_absolute() else root / want).resolve()
+    found = []
+    for cfg_path in sorted((root / "configs").glob("*.yaml")):
+        try:
+            data = (yaml.safe_load(cfg_path.read_text()) or {}).get("data") or {}
+        except (OSError, yaml.YAMLError, AttributeError):
+            continue
+        vb, srcs = data.get("val_bin"), data.get("train_sources")
+        if not vb or not srcs:
+            continue
+        vb = Path(vb)
+        if (vb if vb.is_absolute() else root / vb).resolve() == want and srcs not in found:
+            found.append(srcs)
+    return found[0] if len(found) == 1 else None
+
+
 def spans_for(val_bin: str | Path, sources: list[dict] | None, tok=None) -> list[Span]:
     """The spans to measure: the manifest if there is one, otherwise derived and checked."""
     known = load_manifest(val_bin)

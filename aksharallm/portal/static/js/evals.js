@@ -162,11 +162,15 @@ function gateAudits(st) {
   const why = !st.running ? '' :
     `${describeJob(cur)} is running${cur.source === 'terminal' ? ' in a terminal' : ''}`
     + ' — these share one job at a time.';
-  for (const id of ['#ev-con-run', '#ev-cal-run', '#ev-dd-run', '#ev-dom-run']) {
+  for (const id of ['#ev-con-run', '#ev-cal-run', '#ev-dd-run', '#ev-dom-run', '#ev-vs-run']) {
     const btn = $(id);
     if (!btn) continue;
     btn.disabled = !!st.running;
     btn.title = why || btn.dataset.title || '';
+  }
+  // Compare also needs two checkpoints with judged answers; the lock alone is not enough.
+  if (!st.running && $('#ev-vs-run')) {
+    $('#ev-vs-run').disabled = (vsReady[$('#ev-vs-suite').value] || []).length < 2;
   }
   note.hidden = !why;
   note.textContent = why;
@@ -442,6 +446,8 @@ function describeJob(cur) {
       return `measuring how honest ${ckpt} is about its confidence${on}`;
     case 'dedup':
       return `scanning ${cur.source || 'the corpus'} for near-duplicates`;
+    case 'versus':
+      return `judging ${ckpt} head to head on ${suites}`;
     default:
       return `${suites || 'the default suites'} on ${ckpt}${on}`;
   }
@@ -570,6 +576,47 @@ function renderCalibration(latest) {
     + `<p class="ev-hint">${escHtml(latest.caveat)}</p>`;
 }
 
+/* Head to head. The p-value leads, not the win rate: 9 wins to 5 reads as decisive and is
+ * p = 0.42. The picker lists only checkpoints with a judged result for the chosen suite,
+ * because `versus` reuses those answers and anything else would fail after the click. */
+let vsReady = {};
+function fillVersusPickers() {
+  const suite = $('#ev-vs-suite').value;
+  const ckpts = vsReady[suite] || [];
+  for (const [id, pick] of [['#ev-vs-a', 0], ['#ev-vs-b', 1]]) {
+    const sel = $(id);
+    const keep = sel.value;
+    sel.innerHTML = ckpts.map((c) => `<option>${escHtml(c)}</option>`).join('');
+    if (ckpts.includes(keep)) sel.value = keep;
+    else if (ckpts[pick]) sel.value = ckpts[pick];
+  }
+  $('#ev-vs-run').disabled = ckpts.length < 2;
+}
+
+function renderVersus(res) {
+  vsReady = res.ready || {};
+  fillVersusPickers();
+  const box = $('#ev-vs-out');
+  const latest = res.latest;
+  if (!latest) {
+    box.innerHTML = '<p class="ev-hint">No comparison yet. Evaluate two checkpoints with '
+      + '<code>--suite judge48</code>, then compare them here.</p>';
+    return;
+  }
+  const row = (name, r) => `<tr><th>${escHtml(name)}</th><td>${r.win}</td><td>${r.loss}</td>`
+    + `<td>${r.tie}</td><td>${r.win_rate == null ? '–' : `${Math.round(100 * r.win_rate)}%`}</td>`
+    + `<td>${r.p_value == null ? '–' : r.p_value.toFixed(3)}</td></tr>`;
+  const groups = Object.entries(latest.groups || {}).map(([g, r]) => row(g, r)).join('');
+  box.innerHTML =
+    `<p><b>${escHtml(latest.model1)}</b> vs <b>${escHtml(latest.model2)}</b> on `
+    + `${escHtml(latest.suite)}, judged by ${escHtml(latest.judge_model)}</p>`
+    + '<table><thead><tr><th></th><th>wins</th><th>losses</th><th>ties</th><th>win rate</th>'
+    + `<th>p</th></tr></thead><tbody>${row('overall', latest.overall)}${groups}</tbody></table>`
+    + `<p class="ev-hint">Wins and losses are for ${escHtml(latest.model1)}. `
+    + `${latest.overall.inconsistent} ties were the judge changing its mind when the order was `
+    + `swapped. ${fmt.ago(latest.when)}.</p>`;
+}
+
 /* Dedup shows the TOKEN share first and the history beside it, because a dedup number is
  * quoted per offset and the honest way to read one is next to another taken elsewhere in
  * the file. */
@@ -625,6 +672,9 @@ async function loadAudits() {
   try {
     renderDedup(await api('/api/eval/dedup'));
   } catch (err) { /* likewise */ }
+  try {
+    renderVersus(await api('/api/eval/versus'));
+  } catch (err) { /* likewise */ }
 }
 
 /* Start an audit and make the page admit it. The four handlers below were four copies of
@@ -666,6 +716,13 @@ function wireAudit() {
     startAudit({ kind: 'calibrate', checkpoint: $('#ev-ckpt').value, batches: 24 },
       'Measuring calibration. It keeps the full logits, so this is deliberately a small '
       + 'sample.');
+  });
+  $('#ev-vs-suite').addEventListener('change', fillVersusPickers);
+  $('#ev-vs-run').addEventListener('click', () => {
+    startAudit({
+      kind: 'versus', suite: $('#ev-vs-suite').value,
+      first: $('#ev-vs-a').value, second: $('#ev-vs-b').value,
+    }, 'Judging head to head — two judge calls per prompt, a few minutes.');
   });
   $('#ev-dd-run').addEventListener('click', () => {
     startAudit({

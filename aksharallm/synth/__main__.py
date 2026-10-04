@@ -2,7 +2,7 @@
 
     python -m aksharallm.synth recipes                       # what can be generated, and how it is checked
     python -m aksharallm.synth gen python --name py-v1 --n 200
-    python -m aksharallm.synth gen chat   --name chat-v1 --n 500 --teacher gemma4:31b
+    python -m aksharallm.synth gen chat   --name chat-v1 --n 500 --teacher qwen3.8:27b
     python -m aksharallm.synth gen python --name py-v1 --n 2000 --stop-in 45m
     python -m aksharallm.synth list                          # every generated dataset
     python -m aksharallm.synth show py-v1 --samples 3        # what is actually in it
