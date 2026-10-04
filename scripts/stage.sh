@@ -21,7 +21,9 @@
 #   BS=8  ACCUM=8                  SFT micro-batch and accumulation (BS*ACCUM*SEQ = tokens/step)
 #   MICRO=8                        GRPO completions scored at once (memory only)
 #   GROUP=8  STEPS=500  REWARD=code   GRPO group size, budget and reward
+#   TASKS=data/synth/py-v1 HOLDOUT=20 GRPO tasks (default when present; TASKS=builtin = the 10)
 #   RESUME=auto|none|<path>        continue a stopped stage (default auto); none starts over
+#   STAGE_RUN=small-code-r2-grpo   a second attempt in its own directory (must end in -<stage>)
 #   CRASH_WINDOW=30                seconds to watch a new trainer before declaring success
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -40,7 +42,11 @@ esac
 BASE_CKPT=checkpoints/$BASE_RUN/ckpt_best.pt
 SFT_RUN=$BASE_RUN-sft
 SFT_CKPT=checkpoints/$SFT_RUN/sft_best.pt
-RUN=$BASE_RUN-$STAGE                 # e.g. small-code-grpo
+# STAGE_RUN gives a second attempt its own directory beside the first, so the first stays
+# readable and comparable without being archived. Keep the -<stage> suffix: the portal reads
+# a run's stage from it (e.g. STAGE_RUN=small-code-r2-grpo).
+RUN=${STAGE_RUN:-$BASE_RUN-$STAGE}   # e.g. small-code-grpo
+case "$RUN" in *-"$STAGE") ;; *) echo "STAGE_RUN must end in -$STAGE: $RUN" >&2; exit 2 ;; esac
 RUN_DIR=checkpoints/$RUN
 LOG_DIR=logs/$RUN
 LOG=$LOG_DIR/${STAGE}_$(date '+%Y%m%d-%H%M%S').log
@@ -144,7 +150,18 @@ case "$STAGE" in
              --stop-file "$STOP_FILE" --resume "${RESUME:-auto}")
         ;;
     grpo)
-        # Code reward uses the built-in sandbox tasks -- no dataset to prepare.
+        # Tasks: the sandbox-verified synth set when it exists (111 usable from py-v1, 20 of
+        # them held out and scored greedily to pick grpo_best.pt), else the ten built-in
+        # Playground tasks -- enough to see the reward move, far too few to learn from.
+        # TASKS=builtin forces the old behaviour; HOLDOUT=N changes the held-out count.
+        TASK_ARGS=()
+        TASKS=${TASKS:-data/synth/py-v1}
+        if [[ "$TASKS" != builtin && -e "$TASKS" ]]; then
+            TASK_ARGS=(--tasks "$TASKS" --holdout "${HOLDOUT:-20}")
+            echo "tasks:    $TASKS (holdout ${HOLDOUT:-20})"
+        else
+            echo "tasks:    the 10 built-in Playground tasks (no holdout)"
+        fi
         # MICRO is memory only: the optimizer still steps once per group, whatever it is.
         # Scoring all P*G completions at once asks for ~1.15 GiB of logits per copy and
         # there are three (old/reference/new), which OOMs a 24 GB card at 300M. Lower it
@@ -152,7 +169,7 @@ case "$STAGE" in
         CMD=($PY -m aksharallm.train.grpo --init "$SFT_CKPT" --tokenizer "$TOK"
              --out-dir "$RUN_DIR" --reward "${REWARD:-code}" --group-size "${GROUP:-8}"
              --lr "${LR:-1e-6}" --steps "${STEPS:-500}" --micro-batch "${MICRO:-8}"
-             --stop-file "$STOP_FILE" --resume "${RESUME:-auto}")
+             --stop-file "$STOP_FILE" --resume "${RESUME:-auto}" "${TASK_ARGS[@]}")
         ;;
 esac
 

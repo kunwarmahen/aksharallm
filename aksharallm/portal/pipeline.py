@@ -60,9 +60,10 @@ GUIDANCE: dict[str, dict[str, str]] = {
     "grpo": {
         "choose": "Pick GRPO when a program CAN tell — do the tests pass, is the number "
                   "right. The sandbox computes the reward, so there is nothing to download.",
-        "metric": "reward, solved%",
-        "watch_for": "Reward flat at zero means no completion ever passed: the task is "
-                     "beyond the model, so improve SFT rather than the learning rate.",
+        "metric": "held-out solved% (val_solved) — reward and solved% are training tasks",
+        "watch_for": "Training reward rising while held-out solved% stays flat means it is "
+                     "memorising its tasks (the first 300M run did, on 10). Reward flat at "
+                     "zero means no completion ever passed: improve SFT, not the LR.",
     },
 }
 

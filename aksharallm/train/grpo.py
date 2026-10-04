@@ -170,6 +170,7 @@ class CodeReward:
         pass all tests            -> 1.0
         runs but asserts fail     -> 0.1   (it produced a real function, just wrong)
         error / timeout / syntax  -> 0.0
+        an empty function         -> 0.0   (see `tasks.wrote_a_body`)
     """
 
     def __init__(self, task, chat: bool = False, enabled: bool = True):
@@ -180,10 +181,17 @@ class CodeReward:
     def __call__(self, prompt: str, completion: str) -> float:
         from ..infer.sandbox import run_task
 
+        from ..infer.tasks import assemble, wrote_a_body
+
         r = run_task(self.task, completion, chat=self.chat, enabled=self.enabled)
         if r.ok:
             return 1.0
-        return 0.1 if r.status == "fail" else 0.0
+        if r.status != "fail":
+            return 0.0
+        # "Runs but fails" is only worth paying for if the model wrote something: an empty
+        # completion leaves the prompt's docstring-only function, which runs too.
+        program = assemble(self.task, completion, chat=self.chat)
+        return 0.1 if wrote_a_body(program, self.task.entry_point) else 0.0
 
 
 # ---- sampling ----------------------------------------------------------------------
@@ -284,6 +292,70 @@ def build_batch(groups, pad_id, device):
     return seq.to(device), mask.to(device)
 
 
+# ---- tasks and the held-out check ----------------------------------------------------
+
+def code_tasks(args) -> list:
+    """The tasks GRPO trains on: a synth dataset, or the ten built-in Playground tasks.
+
+    Ten is enough to see the reward move and far too few to learn from: on the 300M the
+    training reward rose 0.25 -> 0.63 over 500 steps while HumanEval did not move between
+    step 315 and 499 — it was learning those ten. A task file excludes, by function name,
+    HumanEval's tasks and the Playground's, so neither meter is trained on.
+    """
+    from ..infer.tasks import CODE_TASKS, load_task_file
+    if not args.tasks:
+        return list(CODE_TASKS)
+    exclude = {t.entry_point for t in CODE_TASKS} | humaneval_names()
+    tasks, dropped = load_task_file(args.tasks, exclude=exclude)
+    print(f"tasks      {len(tasks)} from {args.tasks} (dropped: "
+          + ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in dropped.items()) + ")")
+    if not tasks:
+        raise SystemExit(f"no usable tasks in {args.tasks}")
+    return tasks
+
+
+def humaneval_names() -> set[str]:
+    """HumanEval's function names, from the eval cache if it has been fetched."""
+    from ..infer.checkpoints import repo_root
+    path = repo_root() / "data" / "eval" / "humaneval.jsonl"
+    if not path.exists():
+        return set()
+    return {json.loads(l).get("entry_point", "") for l in path.read_text().splitlines()
+            if l.strip()}
+
+
+def split_holdout(tasks, n):
+    from ..infer.tasks import split_holdout as split
+    return split(tasks, n) if n > 0 else (list(tasks), [])
+
+
+@torch.no_grad()
+def evaluate_held_out(policy, held_out, sampler, tok, args) -> dict:
+    """Greedy, one completion per held-out task: the number the best checkpoint is chosen
+    on. Greedy because a sampled score at temperature 1.0 is noise of the same size as the
+    thing it is trying to measure."""
+    was = policy.training
+    policy.eval()
+    gens = []
+    if sampler is not None:
+        cap = args.prompts_per_step * args.group_size
+        for i in range(0, len(held_out), cap):
+            chunk = held_out[i:i + cap]
+            groups = sample_groups_batched(sampler, [p for p, _, _ in chunk], 1,
+                                           args.max_new_tokens, 0.0, None, None, tok.eos_id)
+            gens += [g[0][1] for g in groups]
+    else:
+        for pids, _, _ in held_out:
+            full = generate(policy, pids, max_new_tokens=args.max_new_tokens, temperature=0.0,
+                            top_k=None, top_p=None, eos_id=tok.eos_id, device=args.device)
+            gens.append(full[len(pids):])
+    rewards = [rfn(text, tok.decode(gen)) for (_, text, rfn), gen in zip(held_out, gens)]
+    policy.train(was)
+    return {"val_reward": sum(rewards) / len(rewards),
+            "val_solved": sum(r >= 1.0 for r in rewards) / len(rewards),
+            "val_n": len(rewards)}
+
+
 # ---- training loop -----------------------------------------------------------------
 
 def main():
@@ -294,6 +366,17 @@ def main():
     ap.add_argument("--reward", choices=["code", "substring"], default="code")
     ap.add_argument("--needle", default=" dragon", help="substring reward target (toy)")
     ap.add_argument("--chat", action="store_true", help="prompt code tasks in chat form")
+    ap.add_argument("--tasks", default=None, metavar="PATH",
+                    help="code tasks from a synth dataset (samples.jsonl or its folder) "
+                         "instead of the ten built-in Playground tasks")
+    ap.add_argument("--holdout", type=int, default=None, metavar="N",
+                    help="tasks never trained on, scored greedily every --eval-every steps; "
+                         "the best checkpoint is chosen on them (default 20 with --tasks, "
+                         "0 without)")
+    ap.add_argument("--eval-every", type=int, default=50)
+    ap.add_argument("--best-window", type=int, default=20,
+                    help="without a holdout, 'best' is the mean reward over this many steps "
+                         "-- never one batch")
     ap.add_argument("--group-size", type=int, default=8, help="G: completions per prompt")
     ap.add_argument("--prompts-per-step", type=int, default=4)
     # Memory only. The optimizer still steps once per group of P*G completions, whatever
@@ -351,12 +434,21 @@ def main():
 
     # Prompts + per-prompt reward functions.
     prompts: list[tuple[list[int], str, RewardFn]] = []
+    held_out: list[tuple[list[int], str, RewardFn]] = []
     if args.reward == "code":
-        from ..infer.tasks import CODE_TASKS
-        for task in CODE_TASKS:
-            text = task.instruction() if args.chat else task.prompt
-            ids = tok.encode(text, bos=True)
-            prompts.append((ids, text, CodeReward(task, chat=args.chat)))
+        task_list = code_tasks(args)
+        if args.holdout is None:
+            args.holdout = 20 if args.tasks else 0
+        train_tasks, held_tasks = split_holdout(task_list, args.holdout)
+
+        def as_prompt(task):
+            # `instruction` is a property. This was `task.instruction()`, which raised the
+            # moment anyone passed --chat; no run ever had, so nothing had said so.
+            text = task.instruction if args.chat else task.prompt
+            return tok.encode(text, bos=True), text, CodeReward(task, chat=args.chat)
+
+        prompts = [as_prompt(t) for t in train_tasks]
+        held_out = [as_prompt(t) for t in held_tasks]
     else:
         rf = SubstringReward(args.needle)
         for seed in ["Once upon a time", "One day", "The little", "In the forest"]:
@@ -382,7 +474,10 @@ def main():
     print("=" * 78)
     print(f"init       {args.init} ({human(policy.num_params())} params, policy + frozen ref)")
     print(f"reward     {args.reward}" + (f" (needle={args.needle!r})" if args.reward == "substring"
-                                         else f" ({len(prompts)} code tasks, chat={args.chat})"))
+                                         else f" ({len(prompts)} code tasks to train on, {len(held_out)} held out, "
+               f"chat={args.chat})"))
+    print(f"best       " + (f"held-out solve rate, every {args.eval_every} steps"
+                            if held_out else f"mean reward over {args.best_window} steps"))
     print(f"group      G={args.group_size} x {args.prompts_per_step} prompts/step "
           f"= {args.group_size * args.prompts_per_step} samples/step")
     print(f"objective  beta(KL)={args.beta} clip={args.clip_eps} lr={args.lr}")
@@ -402,15 +497,25 @@ def main():
     policy.train()
     rng = np.random.default_rng(0)
     best_reward = -1.0
+    best_rule = (f"held-out:{len(held_out)}:{args.tasks}" if held_out
+                 else f"window:{args.best_window}")
     if resumed_state:
         # best_reward must carry across sessions. Letting it reset to -1.0 makes the *first*
         # step of the next session "the best so far", overwriting grpo_best.pt with a policy
         # that has just been perturbed — the one failure mode here that destroys work.
         best_reward = float(resumed_state.get("best", -1.0))
+        if resumed_state.get("best_rule") != best_rule:
+            # A best measured by another rule (one batch, a different holdout) is not a
+            # number this one can be compared with; keeping it would mean nothing ever
+            # beats a lucky 1.0 again and grpo_best.pt silently stops updating.
+            print(f"best rule changed ({resumed_state.get('best_rule') or 'one batch'} -> "
+                  f"{best_rule}); grpo_best.pt will be replaced at the first measurement")
+            best_reward = -1.0
         resume.restore_rng(rng, resumed_state.get("rng_state"), "the prompt sampler")
         print(f"resumed from {resumed} at step {start_step}, best reward "
               f"{best_reward:.3f} (reference still {args.init})")
     t0 = time.time()
+    recent: list[float] = []
 
     # ---- stopping early ------------------------------------------------------------
     # The same file contract pretraining, SFT and DPO obey (aksharallm/train/stopfile.py).
@@ -565,10 +670,26 @@ def main():
                                    "elapsed": up, "eta_s": eta, **m}) + "\n")
             logf.flush()
 
-        progress = resume.step_progress(step, rng.bit_generator.state, best_reward)
-        if mean_r > best_reward:
-            best_reward = mean_r
-            progress = resume.step_progress(step, rng.bit_generator.state, best_reward)
+        # "Best" used to be the single highest batch reward — four prompts, so mostly luck:
+        # the 300M run's grpo_best.pt was step 315 of a curve still rising at 499. Now it is
+        # the held-out solve rate when there is a holdout, else a trailing mean of reward.
+        recent.append(mean_r)
+        score = None
+        if held_out and (step % args.eval_every == 0 or why or step == args.steps - 1):
+            v = evaluate_held_out(policy, held_out, sampler, tok, args)
+            score = v["val_solved"] + 1e-3 * v["val_reward"]   # reward breaks ties
+            logf.write(json.dumps({"step": step, **v, "time": time.time()}) + "\n")
+            logf.flush()
+            print(f"           held out: solved {v['val_solved']*100:.0f}% "
+                  f"({v['val_n']} tasks), reward {v['val_reward']:.3f}")
+        elif not held_out and len(recent) >= args.best_window:
+            score = sum(recent[-args.best_window:]) / args.best_window
+        progress = {**resume.step_progress(step, rng.bit_generator.state, best_reward),
+                    "best_rule": best_rule}
+        if score is not None and score > best_reward:
+            best_reward = score
+            progress = {**resume.step_progress(step, rng.bit_generator.state, best_reward),
+                    "best_rule": best_rule}
             save_checkpoint(out_dir / "grpo_best.pt", policy, optimizer,
                             _rebuild_cfg(ckpt, mcfg, args), step, best_reward,
                             extra={"grpo_progress": progress})
@@ -583,15 +704,17 @@ def main():
 
     save_checkpoint(out_dir / "grpo_last.pt", policy, optimizer,
                     _rebuild_cfg(ckpt, mcfg, args), last_step, best_reward,
-                    extra={"grpo_progress": resume.step_progress(
-                        last_step, rng.bit_generator.state, best_reward)})
+                    extra={"grpo_progress": {**resume.step_progress(
+                        last_step, rng.bit_generator.state, best_reward),
+                        "best_rule": best_rule}})
     # Clear the honoured request: a stop file left behind would end the *next* run at step 0.
     if why and stop_file.exists():
         stop_file.unlink(missing_ok=True)
     log_session("session_end", reason=why or "steps", last_step=last_step,
                 steps=last_step - start_step + 1, best_reward=best_reward,
                 elapsed=time.time() - run_t0)
-    print(f"\ndone. best mean reward {best_reward:.3f}"
+    print(f"\ndone. best {'held-out score' if held_out else 'windowed reward'} "
+          f"{best_reward:.3f}"
           f"{f' (stopped early: {why})' if why else ''}. checkpoints in {out_dir}")
     logf.close()
     report.write_quietly(out_dir, log="grpo_log.jsonl")

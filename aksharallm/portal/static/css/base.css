@@ -22,6 +22,7 @@
 
   --series-1:     #2a78d6;   /* categorical slot 1 — blue */
   --series-2:     #eb6834;   /* categorical slot 2 — orange */
+  --series-3:     #18946c;   /* categorical slot 3 — teal (GRPO held-out) */
 
   --good:         #0ca30c;
   --warning:      #fab219;
@@ -68,6 +69,7 @@
     --wash:    rgba(255, 255, 255, 0.05);
     --series-1: #3987e5;
     --series-2: #d95926;
+    --series-3: #2fb386;
   }
 }
 :root[data-theme="dark"] {
@@ -83,6 +85,7 @@
   --wash:    rgba(255, 255, 255, 0.05);
   --series-1: #3987e5;
   --series-2: #d95926;
+  --series-3: #2fb386;
 }
 
 * { box-sizing: border-box; }

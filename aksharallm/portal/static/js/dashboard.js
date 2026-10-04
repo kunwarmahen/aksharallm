@@ -311,13 +311,22 @@ function renderCharts(s) {
     };
   } else if (stage === 'grpo') {
     if (tokTitle) tokTitle.textContent = 'Reward';
-    if (tokNote) tokNote.textContent = 'mean reward over each group, and the share of prompts solved';
+    if (tokNote) {
+      tokNote.textContent = ser.held_step
+        ? 'reward and solved share on the training tasks · held-out solved is the one to trust'
+        : 'mean reward over each group, and the share of prompts solved';
+    }
     state.charts.tok = {
       label: 'mean reward and solved share by step',
       yFmt: (v) => v.toFixed(2),
       series: [
         { name: 'reward', color: '--series-1', x: step, y: ser.reward || [], label: true, fmt: (v) => v.toFixed(3) },
         { name: 'solved', color: '--series-2', x: step, y: ser.solved || [], fmt: (v) => `${(100 * v).toFixed(0)}%` },
+        // Sparse (every --eval-every steps) and greedy, on tasks never trained on. Training
+        // reward rising while this stays flat is memorisation — the first 300M run's story.
+        ...(ser.held_step ? [{ name: 'held-out solved', color: '--series-3', x: ser.held_step,
+                               y: ser.held_solved, label: true,
+                               fmt: (v) => `${(100 * v).toFixed(0)}%` }] : []),
       ],
       zeroFloor: true,
     };

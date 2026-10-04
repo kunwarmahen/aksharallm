@@ -4,6 +4,7 @@ dpo_loss -- an off-by-one or a sign error here silently produces an RL run that 
 nothing, or optimises backwards.
 """
 
+import json
 import math
 
 import pytest
@@ -283,3 +284,112 @@ def test_the_batched_sampler_keeps_each_completion_with_its_own_prompt():
         for full, gen in grp:
             assert full[:len(pids)] == list(pids), "a completion is under the wrong prompt"
             assert full[len(pids):] == gen
+
+
+# ---- tasks from a file, a held-out check, and the best checkpoint chosen on it ---------
+
+def _synth_rows():
+    """Five verified tasks with distinct names, in `synth`'s exact sample shape."""
+    rows = []
+    for i, (name, body, tests) in enumerate([
+        ("double", "return x * 2", "assert double(2) == 4\n"),
+        ("negate", "return -x", "assert negate(3) == -3\n"),
+        ("square", "return x * x", "assert square(3) == 9\n"),
+        ("halve", "return x / 2", "assert halve(4) == 2\n"),
+        ("intersperse", "return x", "assert intersperse(1) == 1\n"),   # a HumanEval name
+    ]):
+        rows.append({"id": f"python-{i}", "problem": f"Return {name} of x.", "entry_point": name,
+                     "solution": f"def {name}(x):\n    {body}\n", "tests": tests,
+                     "verified": True, "difficulty": "easy"})
+    rows.append({**rows[0], "id": "python-bad", "verified": False})        # never verified
+    return rows
+
+
+def test_a_synth_task_becomes_a_humaneval_shaped_prompt_its_solution_passes():
+    from aksharallm.infer.sandbox import run_program
+    from aksharallm.infer.tasks import task_from_synth
+    row = _synth_rows()[0]
+    task = task_from_synth(row)
+    assert task.prompt.startswith("def double(x):\n    \"\"\"")
+    body = "    return x * 2\n"
+    assert run_program(task.prompt + body + "\n" + task.tests).ok
+    assert task_from_synth({**row, "verified": False}) is None
+
+
+def test_task_files_drop_protected_names_and_split_holdout_by_name(tmp_path):
+    from aksharallm.infer.tasks import load_task_file, split_holdout
+    rows = _synth_rows() + [{**_synth_rows()[1], "id": "python-dup"}]   # `negate` twice
+    (tmp_path / "samples.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    tasks, dropped = load_task_file(tmp_path, exclude={"intersperse"})
+    assert dropped == {"unverified_or_unparseable": 1, "excluded_name": 1}
+    assert sorted(t.entry_point for t in tasks) == ["double", "halve", "negate", "negate", "square"]
+    for seed in range(20):
+        train, held = split_holdout(tasks, 1, seed=seed)
+        assert not {t.entry_point for t in train} & {t.entry_point for t in held}
+        assert len(train) + len(held) == len(tasks)
+    assert split_holdout(tasks, 2, seed=3) == split_holdout(tasks, 2, seed=3)
+
+
+def test_an_empty_function_earns_no_partial_credit():
+    """Writing nothing left the prompt's docstring-only function, which runs, fails its
+    asserts, and was paid the 0.1 meant for a real attempt."""
+    from aksharallm.infer.tasks import CODE_TASKS
+    from aksharallm.train.grpo import CodeReward
+    task = CODE_TASKS[0]                                   # add(a, b)
+    reward = CodeReward(task)
+    assert reward(task.prompt, "") == 0.0
+    assert reward(task.prompt, "Once upon a time.") == 0.0
+    assert reward(task.prompt, "    pass\n") == 0.0
+    assert reward(task.prompt, "    return a - b\n") == 0.1
+    assert reward(task.prompt, "    return a + b\n") == 1.0
+
+
+def test_grpo_trains_on_a_task_file_and_picks_best_on_the_held_out_tasks(tmp_path, monkeypatch):
+    """End to end on CPU, through `main()` — with --chat, whose prompt builder called a
+    property as a method and had never once run."""
+    import sys
+    from aksharallm.config import ModelConfig
+    from aksharallm.model.transformer import Transformer
+    from aksharallm.tokenizer.tokenizer import train_bpe
+    from aksharallm.train import grpo
+
+    tok = tmp_path / "tok.json"
+    train_bpe(iter(["def f(x):\n    return x * 2\n", "Write a Python function."] * 40),
+              vocab_size=300, out_path=tok)
+    cfg = dict(vocab_size=300, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2,
+               max_seq_len=256, tie_embeddings=True)
+    torch.manual_seed(0)
+    torch.save({"model": Transformer(ModelConfig(**cfg)).state_dict(), "model_config": cfg,
+                "config": {}, "step": 0}, tmp_path / "init.pt")
+    data = tmp_path / "synth"
+    data.mkdir()
+    (data / "samples.jsonl").write_text("\n".join(json.dumps(r) for r in _synth_rows()) + "\n")
+    out = tmp_path / "out"
+    monkeypatch.setattr(sys, "argv", [
+        "grpo", "--init", str(tmp_path / "init.pt"), "--tokenizer", str(tok),
+        "--out-dir", str(out), "--tasks", str(data), "--holdout", "1", "--eval-every", "1",
+        "--steps", "2", "--group-size", "2", "--prompts-per-step", "2",
+        "--max-new-tokens", "6", "--device", "cpu", "--sampler", "serial", "--chat"])
+    monkeypatch.setattr(grpo, "humaneval_names", lambda: {"intersperse"})
+    # `main()` turns TF32 on process-wide, as a trainer should. Restored afterwards, or every
+    # GPU kernel test that runs later in this session compares at TF32 precision and fails.
+    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32",
+                        torch.backends.cuda.matmul.allow_tf32)
+    monkeypatch.setattr(torch.backends.cudnn, "allow_tf32", torch.backends.cudnn.allow_tf32)
+    grpo.main()
+
+    rows = [json.loads(l) for l in (out / "grpo_log.jsonl").read_text().splitlines()]
+    held = [r for r in rows if "val_solved" in r]
+    assert [r["step"] for r in held] == [0, 1] and all(r["val_n"] == 1 for r in held)
+    best = torch.load(out / "grpo_best.pt", map_location="cpu", weights_only=False)
+    assert best["grpo_progress"]["best_rule"].startswith("held-out:1:")
+
+
+def test_the_held_out_rows_reach_the_dashboard_and_do_not_pose_as_steps():
+    from aksharallm.train import runlog
+    recs = [{"step": 0, "reward": 0.2, "solved": 0.1, "loss": 0.0},
+            {"step": 0, "val_solved": 0.25, "val_reward": 0.3, "val_n": 20},
+            {"step": 1, "reward": 0.3, "solved": 0.2, "loss": 0.0}]
+    ser = runlog.series(recs)
+    assert ser["step"] == [0, 1]                      # the held-out row is not a step
+    assert ser["held_step"] == [0] and ser["held_solved"] == [0.25]

@@ -331,7 +331,7 @@ and it's what we implement in [`train/grpo.py`](../aksharallm/train/grpo.py).
 ```mermaid
 flowchart TD
     P["a prompt<br/>(a coding task)"] --> S["sample a GROUP of<br/>G completions"]
-    S --> R["reward each:<br/>run its code in the sandbox<br/>pass=1 · runs-but-wrong=0.1 · error=0"]
+    S --> R["reward each:<br/>run its code in the sandbox<br/>pass=1 · real-but-wrong=0.1 · error or empty=0"]
     R --> A["advantage = how much better<br/>than the group's mean:<br/>(r − mean) / std"]
     A --> U["push policy UP on above-average,<br/>DOWN on below-average completions"]
     U --> KL["KL leash to a frozen reference<br/>(don't forget English)"]
@@ -395,6 +395,50 @@ thing in this whole stage — the reward machinery was free.
 We shape it slightly so a small model isn't stuck at zero: code that runs but asserts wrong
 earns 0.1 (it produced a real function), vs 0.0 for a syntax error or crash. A little
 gradient early beats a flat zero.
+
+**Shaping is a promise the reward has to keep, and this one didn't until 2026-10-04.** The
+prompt is a signature and a docstring; on its own that is a function that runs, returns
+`None` and fails its asserts — so an *empty* completion earned the 0.1 meant for a real
+attempt, and so did a paragraph of prose (which `extract_code` drops). Writing nothing paid
+exactly as well as trying. `tasks.wrote_a_body` now requires a statement beyond the docstring
+before the partial credit is paid. The 300M run never found the loophole — none of its 123
+wrong HumanEval answers is an empty body — but a reward that pays for nothing is a loophole
+waiting for a longer run.
+
+## What it trains on, and how "best" is decided
+
+```mermaid
+flowchart LR
+    F["data/synth/py-v1<br/>120 verified problems"] --> X["drop HumanEval's and the<br/>Playground's function names"]
+    X --> T["111 tasks, HumanEval-shaped:<br/>signature + docstring"]
+    T --> SP{"split by<br/>function name"}
+    SP -->|91| TR["train on these"]
+    SP -->|20| HO["held out: scored greedily<br/>every 50 steps"]
+    HO --> B["grpo_best.pt =<br/>best held-out solved%"]
+```
+
+The first 300M run is the argument for all of it. It trained on the **ten** Playground tasks,
+and its training reward climbed steadily — 0.25 → 0.63 averaged over 50 steps, solved 20% →
+59%. HumanEval was **identical** at step 315 and at step 499: 7/164, 34 programs that do not
+run. The rise after 315 was the model learning those ten. And `grpo_best.pt` was whichever
+step's single batch — four prompts — scored highest, which picked step 315 out of noise.
+
+So, three changes, all in [`train/grpo.py`](../aksharallm/train/grpo.py):
+
+- **`--tasks`** reads a `synth` python dataset (`tasks.load_task_file`). Each verified sample
+  becomes a HumanEval-shaped prompt — the solution's real signature, read with the AST, then
+  the problem as a docstring — because that is the shape the benchmark asks in. Tasks named
+  like a HumanEval or Playground function are dropped, so neither meter is trained on.
+- **`--holdout N`** (20 by default with a task file) keeps N tasks out, **split by function
+  name** — the synth set repeats names, and a near-duplicate on both sides would make the
+  held-out score partly a training score. Every `--eval-every` steps they are scored
+  greedily and logged as `val_solved`; the dashboard draws it as a third line beside reward.
+- **`grpo_best.pt` is chosen on `val_solved`**, or, with no holdout, on the mean reward over
+  `--best-window` steps. Never one batch. The rule is recorded in the checkpoint, and a resume
+  under a different rule starts "best" over rather than comparing two kinds of number.
+
+**What to watch: training reward rising while held-out solved stays flat is memorisation.**
+That is exactly what the first run would have shown, had it had the line.
 
 The reward is pluggable (`RewardFn`). Besides `CodeReward`, there's a toy `SubstringReward`
 ("does the output contain this word?") — useless for a real model, but it let us **prove the
@@ -508,7 +552,11 @@ base + SFT more first), or the reward is miswired.
 # real: RL on code, sandbox reward (needs a base+SFT model that can already sometimes pass)
 python -m aksharallm.train.grpo \
     --init checkpoints/small-sft/sft_best.pt --tokenizer data/blend/tokenizer.json \
-    --out-dir checkpoints/grpo --reward code --group-size 8 --lr 1e-6
+    --out-dir checkpoints/grpo --reward code --group-size 8 --lr 1e-6 \
+    --tasks data/synth/py-v1 --holdout 20
+
+# or through the launcher, which does the above by default when data/synth/py-v1 exists
+scripts/stage.sh grpo                       # TASKS=builtin for the ten Playground tasks
 
 # machinery check on any model (toy reward), proves the loop increases reward
 python -m aksharallm.train.grpo \

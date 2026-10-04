@@ -201,6 +201,13 @@ def series(records: Iterable[dict], max_points: int = 2000) -> dict[str, Any]:
         out[key] = [r.get(key) for r in steps]
     out["val_step"] = [r["step"] for r in vals]
     out["val_loss"] = [r["val_loss"] for r in vals]
+    # GRPO's held-out check: its own rows (`val_solved` every --eval-every steps), kept
+    # apart from the step series because they are sparse and measured greedily on tasks the
+    # run never trains on — the line that says whether a rising reward is learning.
+    held = [r for r in records if "val_solved" in r and "step" in r]
+    if held:
+        out["held_step"] = [r["step"] for r in held]
+        out["held_solved"] = [r["val_solved"] for r in held]
 
     # Mixture-of-experts routing, if this run has any. One array per expert rather than one
     # array of arrays, because the chart draws one line per expert and a collapsing expert

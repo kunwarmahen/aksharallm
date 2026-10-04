@@ -280,3 +280,114 @@ def catalogue() -> dict:
         "chat": [p.as_dict() for p in CHAT_PROMPTS],
         "tasks": [t.as_dict() for t in CODE_TASKS],
     }
+
+
+# --------------------------------------------------------------------------------------
+# tasks from a file: what GRPO trains on once ten tasks are not enough
+# --------------------------------------------------------------------------------------
+
+def task_from_synth(row: dict) -> CodeTask | None:
+    """One sandbox-verified `synth` python sample -> a HumanEval-shaped `CodeTask`.
+
+    The prompt is the function's real signature (read from the teacher's own solution with
+    the AST, so argument names and defaults match the tests) followed by the problem as a
+    docstring — the same shape HumanEval hands the model, which is what makes training on
+    these transfer to it. Returns None for anything not verified or not parseable: a task
+    whose tests were never shown to depend on the implementation is a reward for nothing.
+    """
+    import ast
+    import textwrap
+
+    name = str(row.get("entry_point") or "")
+    solution, tests = str(row.get("solution") or ""), str(row.get("tests") or "")
+    if not (row.get("verified") and name and solution and tests):
+        return None
+    try:
+        tree = ast.parse(solution)
+    except SyntaxError:
+        return None
+    fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == name), None)
+    if fn is None:
+        return None
+    doc = textwrap.fill(" ".join(str(row.get("problem") or "").split()), width=84,
+                        initial_indent="    ", subsequent_indent="    ")
+    prompt = f'def {name}({ast.unparse(fn.args)}):\n    """\n{doc}\n    """\n'
+    # Helpers the solution defines or imports are part of the task, not of the answer.
+    pre = [n for n in tree.body if n is not fn and isinstance(n, (ast.Import, ast.ImportFrom))]
+    if pre:
+        prompt = "\n".join(ast.unparse(n) for n in pre) + "\n\n" + prompt
+    return CodeTask(id=str(row.get("id") or name), title=name, prompt=prompt,
+                    tests=tests if tests.endswith("\n") else tests + "\n",
+                    entry_point=name, difficulty=str(row.get("difficulty") or "easy"))
+
+
+def load_task_file(path, exclude: set[str] = frozenset()) -> tuple[list[CodeTask], dict]:
+    """`CodeTask`s from a `synth` dataset (`samples.jsonl`, or the folder holding it).
+
+    `exclude` is a set of function names never to train on — the benchmark's and the
+    Playground's — because a training task named `intersperse` is HumanEval's
+    `intersperse` whatever its wording. Returns the tasks and a tally of what was dropped
+    and why, which the trainer prints: a silent filter is how a 120-task file becomes a
+    40-task run without anyone noticing.
+    """
+    import json
+    from pathlib import Path
+
+    p = Path(path)
+    if p.is_dir():
+        p = p / "samples.jsonl"
+    tasks, dropped = [], {"unverified_or_unparseable": 0, "excluded_name": 0}
+    for line in p.read_text().splitlines():
+        if not line.strip():
+            continue
+        task = task_from_synth(json.loads(line))
+        if task is None:
+            dropped["unverified_or_unparseable"] += 1
+        elif task.entry_point in exclude:
+            dropped["excluded_name"] += 1
+        else:
+            tasks.append(task)
+    return tasks, dropped
+
+
+def split_holdout(tasks: list[CodeTask], n: int, seed: int = 0) -> tuple[list, list]:
+    """`(train, held_out)`, split by **function name**, not by task.
+
+    The synth set repeats names (two different `merge_intervals` problems); splitting by
+    task would put one in each half, and the held-out score would be partly a training
+    score. Deterministic for a seed, so a resumed run holds out the same tasks.
+    """
+    import random
+
+    names = sorted({t.entry_point for t in tasks})
+    random.Random(seed).shuffle(names)
+    held, chosen = set(), 0
+    for name in names:
+        if chosen >= n:
+            break
+        held.add(name)
+        chosen += sum(t.entry_point == name for t in tasks)
+    return ([t for t in tasks if t.entry_point not in held],
+            [t for t in tasks if t.entry_point in held])
+
+
+def wrote_a_body(program: str, entry_point: str) -> bool:
+    """Whether `entry_point` in `program` does anything beyond its docstring.
+
+    GRPO pays 0.1 for code that runs but fails its tests — partial credit for writing a real
+    function. Without this check an *empty* completion earned it too: the prompt's signature
+    and docstring alone form a function that runs and returns None. So did a paragraph of
+    prose, which `extract_code` drops. Writing nothing paid exactly as well as trying.
+    """
+    import ast
+    try:
+        tree = ast.parse(program)
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == entry_point:
+            body = [b for b in node.body
+                    if not (isinstance(b, ast.Expr) and isinstance(b.value, ast.Constant))
+                    and not isinstance(b, ast.Pass)]
+            return bool(body)
+    return False
