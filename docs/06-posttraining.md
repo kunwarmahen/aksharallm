@@ -473,6 +473,35 @@ a full-strength signal. A shaping term is only small if nothing rescales it. So:
 `grpo_best.pt` kept the step-100 checkpoint (30%), so round 2's useful model survived its own
 run — the reason the best is chosen on held-out tasks rather than on training reward.
 
+### Round 3: the reward fix worked, and it still did not transfer
+
+Pass-only reward, temperature 0.8, everything else as round 2. The held-out line did what
+round 2's could not — it rose and *stayed* up:
+
+| step | 0 | 50 | 100 | 150 | 200 | 250 | 300 | 350 | 400 | 450 | 499 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| held-out solved | 20% | 25% | 30% | 40% | 30% | 35% | 40% | 40% | **45%** | 45% | 45% |
+
+Training passes climbed 3.3% → 8.7% (round 2: flat at ~4%) and KL stayed near 0.006 (round 2
+drifted to 0.027). Then the scoring: **HumanEval 5/164 — exactly SFT's**, judge48 19.8% against
+SFT's 20.3%, and SFT-vs-r3 head to head 4–8 (p = 0.39). Knowledge suites, per-domain loss and
+calibration unchanged.
+
+**Why 20 → 45% did not move HumanEval: held out is not out of distribution.** The 20 tasks are
+held out *by function name*, but they were written by the same teacher, from the same topic
+grid, in the same phrasing as the 91 it trained on. So the line measured progress on *that kind
+of problem*. HumanEval is human-written and harder, and at 300M it is capped by how much Python
+the base model knows — which reinforcement cannot add. Two consequences, written down for the
+next attempt:
+
+- a held-out set is only as independent as its source: hold out a **different source** (MBPP,
+  HumanEval-style human-written tasks), not just different names;
+- the lever for HumanEval at this size is **more Python in pretraining** — the Python
+  specialist (PLAN.md, Phase 4) — not more RL.
+
+**The whole of Phase 3 in one line:** SFT made a chat model; of everything after it, only the
+first GRPO run beat SFT on the judge (11–1, p = 0.006), and nothing moved HumanEval.
+
 The reward is pluggable (`RewardFn`). Besides `CodeReward`, there's a toy `SubstringReward`
 ("does the output contain this word?") — useless for a real model, but it let us **prove the
 loop optimises anything** before the code model existed: point GRPO at the 13.8M TinyStories

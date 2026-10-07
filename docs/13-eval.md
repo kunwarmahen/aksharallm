@@ -509,6 +509,34 @@ as stage `unknown` (raw-text judging); `small-code-dpo`/`-grpo` meant `_last.pt`
 did not split chat checkpoints; and `calibrate` read different windows per checkpoint. Each is
 described above where it lives, and each has a test that fails on the old code.
 
+### Measured: rounds 2 and 3, and the first head-to-heads (2026-10-05/06)
+
+Round 2 re-ran GRPO on synthetic tasks and DPO at 4x the learning rate; round 3 re-ran GRPO
+with the reward fixed (`docs/06` § Round 2, Round 3). Every checkpoint was also scored on
+`judge48`, and the stages were compared with `eval versus` (wins/losses for the first model):
+
+| A vs B | A wins | B wins | ties | p | reading |
+|---|---|---|---|---|---|
+| base vs SFT | 7 | 32 | 9 | 0.0001 | **SFT** — the positive control holds |
+| SFT vs DPO r1 | 8 | 7 | 33 | 1.0 | no difference |
+| SFT vs GRPO r1 | 1 | 11 | 36 | 0.006 | **GRPO r1** — the only real win after SFT |
+| SFT vs GRPO r2 | 3 | 6 | 39 | 0.51 | no difference |
+| SFT vs DPO r2 | 16 | 10 | 22 | 0.33 | no difference (leans SFT) |
+| DPO r2 vs GRPO r2 | 12 | 21 | 15 | 0.16 | no difference (leans GRPO) |
+| GRPO r1 vs GRPO r2 | 9 | 4 | 35 | 0.27 | no difference |
+| SFT vs GRPO r3 | 4 | 8 | 36 | 0.39 | no difference |
+| GRPO r2 vs GRPO r3 | 6 | 6 | 36 | 1.0 | identical |
+
+judge48 absolute: base 0.0%, SFT 20.3%, DPO r1 15.6%, DPO r2 12.0%, GRPO r1 22.4%, GRPO r2
+20.3%, GRPO r3 19.8%. HumanEval: 3 / 5 / 5 / 3 / 7 / 4 / 5 of 164 in the same order — all
+inside noise. Knowledge suites, per-domain loss (prose ~2.90 / Python ~1.35) and ECE (~0.052)
+are the same for every post-SFT checkpoint.
+
+Two things this table teaches about the instrument: **most prompts are ties** (33–39 of 48)
+when two stages are close, which is the honest answer rather than a weakness; and the 12-prompt
+`judge` could not have shown the one real result here — GRPO r1's 22.4% vs SFT's 20.3% on
+judge48 is a difference only the paired comparison makes significant.
+
 ### Comparing two models head to head (`judge48` and `eval versus`)
 
 The table above has one weak row: the judge. Twelve prompts graded out of five could not
