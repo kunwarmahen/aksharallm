@@ -17,6 +17,8 @@
 # Env knobs:
 #   TOK=path/to/tokenizer.json   override the tokenizer (else inferred from base_run)
 #   DATA=smoltalk|ultrafeedback  override the dataset recipe
+#   SFT_DIR=data/sft-code          SFT from an already-built data dir; default data/sft, or
+#                                  data/sft-code for small-code-py (the code mix, data.mix_sft)
 #   SEQ=1024   EPOCHS=2   LR=...   extra trainer args passed through
 #   BS=8  ACCUM=8                  SFT micro-batch and accumulation (BS*ACCUM*SEQ = tokens/step)
 #   MICRO=8                        GRPO completions scored at once (memory only)
@@ -131,13 +133,27 @@ launch_stage data
 case "$STAGE" in
     sft)
         DATA=${DATA:-smoltalk}
-        [ -s data/sft/train_tokens.npy ] || $PY -m aksharallm.data.prepare_sft "$DATA" \
-            --tokenizer "$TOK" --out-dir data/sft --seq-len "$SEQ"
+        # The Python specialist SFTs on the code mix (data.mix_sft: two Python instruction
+        # sets + ~30% SmolTalk, HumanEval-decontaminated). Decided here, not by the caller,
+        # so the portal's button, the scheduler and a typed command all agree.
+        case "$BASE_RUN" in
+            small-code-py) SFT_DEFAULT=data/sft-code ;;
+            *)             SFT_DEFAULT=data/sft ;;
+        esac
+        SFT_DIR=${SFT_DIR:-$SFT_DEFAULT}
+        if [ "$SFT_DIR" = data/sft ]; then
+            [ -s data/sft/train_tokens.npy ] || $PY -m aksharallm.data.prepare_sft "$DATA" \
+                --tokenizer "$TOK" --out-dir data/sft --seq-len "$SEQ"
+        else
+            # A mix is built by hand (data.mix_sft), never here: refuse rather than guess.
+            [ -s "$SFT_DIR/train_tokens.npy" ] || { echo "no SFT data in $SFT_DIR" >&2; exit 1; }
+        fi
+        echo "sft data: $SFT_DIR"
         # The trainer's own default (16 x 4) was sized for the tiny models and OOMs a 300M
         # model on a 24 GB card: 16 x 1024 of activations on top of AdamW's fp32 states
         # leaves nothing, and it dies in the first forward pass. 8 x 8 is the same 65,536
         # tokens/step, measured at ~21 GB peak on a 3090. Raise BS on a bigger card.
-        CMD=($PY -m aksharallm.train.sft --base "$BASE_CKPT" --data-dir data/sft
+        CMD=($PY -m aksharallm.train.sft --base "$BASE_CKPT" --data-dir "$SFT_DIR"
              --tokenizer "$TOK" --out-dir "$RUN_DIR" --epochs "${EPOCHS:-2}" --lr "${LR:-1e-5}"
              --batch-size "${BS:-8}" --grad-accum "${ACCUM:-8}"
              --stop-file "$STOP_FILE" --resume "${RESUME:-auto}")

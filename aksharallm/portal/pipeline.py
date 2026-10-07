@@ -75,6 +75,8 @@ STAGE_DATA: dict[str, tuple[str, str, str]] = {
     # stage: (file that proves it exists, default recipe, what preparing it costs)
     "sft": ("data/sft/train_tokens.npy", "smoltalk",
             "downloads and tokenizes SmolTalk first"),
+    # The Python specialist's SFT reads the code mix instead (stage.sh picks it by base).
+    # It is built by hand with data.mix_sft, never by the launcher.
     "dpo": ("data/dpo/train_chosen_tokens.npy", "ultrafeedback",
             "downloads and tokenizes UltraFeedback (~61k pairs) first"),
 }

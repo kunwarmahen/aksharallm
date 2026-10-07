@@ -805,8 +805,45 @@ less startup and the checks, trains ~4.5 hours — ~1,700 steps — so the 6,000
 itself at 05:00 through the STOP file, then `eval domains` and a full HumanEval on that
 night's best checkpoint, so every night adds a point to both curves.
 
-**Then SFT** on Python instruction data (`data/synth/py-v1` plus chat data, so it still
-converses), judged on HumanEval and against the general SFT model head to head.
+### Then the code SFT: `data/sft-code`
+
+Built 2026-10-07, while the continued pretraining was still to run — it is CPU work, and
+having it ready makes the SFT one command the night the base finishes:
+
+```bash
+python -m aksharallm.data.prepare_sft self-oss-instruct --tokenizer data/blend/tokenizer.json \
+    --out-dir data/sft-parts/self-oss-instruct
+python -m aksharallm.data.prepare_sft magicoder-python --tokenizer data/blend/tokenizer.json \
+    --out-dir data/sft-parts/magicoder-python
+python -m aksharallm.data.mix_sft --part data/sft-parts/self-oss-instruct \
+    --part data/sft-parts/magicoder-python --part data/sft:0.32 \
+    --out-dir data/sft-code --tokenizer data/blend/tokenizer.json
+scripts/stage.sh sft small-code-py        # reads data/sft-code for this base, by default
+```
+
+| part | what it is | blocks kept |
+|---|---|---|
+| `self-oss-instruct` | 50,569 Python instructions whose responses passed their own tests when executed (StarCoder2's self-alignment set, ODC-BY) | 14,779 |
+| `magicoder-python` | the 37,976 Python rows of Magicoder-OSS-Instruct-75K (MIT) | 18,284 |
+| `data/sft` × 0.32 | SmolTalk, the general SFT's data, so it still converses (~30% of the mix) | 14,804 |
+| **total** | 47,867 train / 2,383 val blocks of 1,024, 49M tokens, 53.5% trainable | |
+
+**Decontaminated against HumanEval**, because that is the number this phase is judged on.
+Any block sharing a 13-gram with a HumanEval prompt, canonical solution or test is dropped,
+and the manifest lists the task ids each source hit. The first run of this is a lesson:
+counting every 13-gram flagged **19% of self-oss-instruct and 5% of plain SmolTalk**,
+because this tokenizer splits numbers into digit groups and 13 tokens can be
+`1, 2, 3, 4, 5` — HumanEval's tests are full of list literals. Only n-grams with at least
+three distinct words count now (`informative`), and the drop fell to **305 blocks (0.6%)**.
+The 33 **strong** hits (8+ shared n-grams, a 20-token run) were read by hand: digit-name
+lists (`"zero", "one", … "nine"`), the Wikipedia definition of the Collatz sequence, and the
+prime-sieve loop — idioms and shared reference text, no copied problem. They are dropped
+anyway; a check that reported nothing because it was broken would look the same as a clean
+set, which is why `tests/test_mix_sft.py` leads with a planted prompt.
+
+At `BS=8 ACCUM=8` it is 748 steps an epoch, 2 epochs, ~85 minutes: one night window with
+its evaluation. Judge it on HumanEval and judge48, and `eval versus` against the general
+`small-code-sft`.
 
 **Why it's worth it:** a 300M model specialised on Python routinely beats a general 7B
 model *on Python*, while running ~20× faster — and unlike most targets, the eval is
@@ -878,9 +915,10 @@ for longer. What is new is the machinery around it, and it is mostly shell:
 | 10 | [`aksharallm/portal/explain.py`](../aksharallm/portal/explain.py) | `SourceTree.resolve` (the reading boundary), `PRIMER` and `build_messages` — what the Code tab actually sends a local model |
 | 11 | [`configs/small-code-py.yaml`](../configs/small-code-py.yaml) · [`aksharallm/train/pretrain.py`](../aksharallm/train/pretrain.py) | the Python specialist: `train.init` and `init_weights` — weights only, and why a resume wins over it |
 | 12 | [`aksharallm/data/dedup.py`](../aksharallm/data/dedup.py) | `filter_bin` and `duplicate_pairs` — the filter half (banding by sorting, `--against` another bin), after the measuring half doc 2 covers |
+| 13 | [`aksharallm/data/mix_sft.py`](../aksharallm/data/mix_sft.py) | `mix`, then `content_probe` and `informative` — why a 13-gram of digits is not contamination — and `STRONG` |
 
 The portal itself is [doc 10](10-running-and-watching.md); the Python-specialist stage (Stage C)
-reuses 2 and 3 with the weights flipped toward code, plus 11 and 12.
+reuses 2 and 3 with the weights flipped toward code, plus 11–13.
 
 ---
 

@@ -499,6 +499,11 @@ The expensive routes. Each one is a real research direction rather than a switch
   scripts/experiment.sh small-code-py                  # ~4 nights; stop/resume as usual
   python -m aksharallm.eval domains small-code-py --val-bin data/blend/val.bin
   python -m aksharallm.eval small-code-py --suite humaneval --limit 0
+  # then the code SFT, on the decontaminated code mix (data.mix_sft; docs/08)
+  python -m aksharallm.data.mix_sft --part data/sft-parts/self-oss-instruct \
+      --part data/sft-parts/magicoder-python --part data/sft:0.32 \
+      --out-dir data/sft-code --tokenizer data/blend/tokenizer.json
+  scripts/stage.sh sft small-code-py
   ```
 
   **How you know it worked:** in `eval domains` the Python loss falls below the base's

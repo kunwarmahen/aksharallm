@@ -58,10 +58,32 @@ def _identity(row):
     return row["messages"]
 
 
+def _self_oss(row):
+    # StarCoder2's self-alignment set: Python instructions whose responses were kept only if
+    # their own tests passed when executed. The response explains, codes, and tests.
+    return [{"role": "user", "content": row["instruction"]},
+            {"role": "assistant", "content": row["response"]}]
+
+
+def _magicoder_python(row):
+    # OSS-Instruct spans many languages; the specialist wants the Python rows only. A row in
+    # another language becomes an empty conversation, which `is_valid` counts as skipped.
+    if str(row.get("lang", "")).lower() != "python":
+        return []
+    return [{"role": "user", "content": row["problem"]},
+            {"role": "assistant", "content": row["solution"]}]
+
+
 RECIPES = {
     "smoltalk": ("HuggingFaceTB/smoltalk", "all", "train", _smoltalk),
     "ultrachat": ("HuggingFaceH4/ultrachat_200k", None, "train_sft", _ultrachat),
     "openhermes": ("teknium/OpenHermes-2.5", None, "train", _openhermes),
+    # Python instruction data for the specialist's code SFT (docs/08 § The Python
+    # specialist). Combine with chat data and decontaminate with `data.mix_sft`.
+    "self-oss-instruct": ("bigcode/self-oss-instruct-sc2-exec-filter-50k", None, "train",
+                          _self_oss),
+    "magicoder-python": ("ise-uiuc/Magicoder-OSS-Instruct-75K", None, "train",
+                         _magicoder_python),
     # A local JSONL of {"messages": [...]} rows -- which is exactly what
     # `python -m aksharallm.synth export` writes. Generated data goes through the same
     # tokenizing, packing and mask code as a downloaded corpus; the only thing that differs
