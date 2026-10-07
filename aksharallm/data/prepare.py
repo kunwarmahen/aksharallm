@@ -172,6 +172,12 @@ def main():
     ap.add_argument("--val-tokens", type=int, default=10_000_000)
     ap.add_argument("--n-proc", type=int, default=max(1, (os.cpu_count() or 8) - 2))
     ap.add_argument("--tokenizer", default=None, help="reuse an existing tokenizer.json")
+    ap.add_argument("--skip-docs", type=int, default=None,
+                    help="skip this many documents from the start of the stream before the "
+                         "train split (default: val_tokens/100, the val split's share). Used "
+                         "to take FRESH documents past the ones an earlier bin already holds")
+    ap.add_argument("--train-name", default="train.bin",
+                    help="file name for the train split inside --out-dir")
     args = ap.parse_args()
 
     assert args.vocab_size <= 65536, "vocab must fit in uint16"
@@ -195,15 +201,21 @@ def main():
     # ---- 2. validation split ------------------------------------------------------
     # Taken from the *start* of the stream and skipped for training, so there is no
     # overlap between train and val. Contaminated val loss is worse than no val loss.
-    print(f"[2/3] writing validation split ({args.val_tokens:,} tokens)")
-    val_texts = stream_texts(repo, config, column, "train")
-    n_val = tokenize_to_bin(val_texts, tok_path, out_dir / "val.bin", args.n_proc,
-                            max_tokens=args.val_tokens, desc="val")
+    # `--val-tokens 0` writes none: a continuation of a stream another bin already took its
+    # val split from (the Python specialist's fresh download) needs no second one.
+    n_val = 0
+    if args.val_tokens > 0:
+        print(f"[2/3] writing validation split ({args.val_tokens:,} tokens)")
+        val_texts = stream_texts(repo, config, column, "train")
+        n_val = tokenize_to_bin(val_texts, tok_path, out_dir / "val.bin", args.n_proc,
+                                max_tokens=args.val_tokens, desc="val")
+    else:
+        print("[2/3] no validation split (--val-tokens 0)")
 
     # ---- 3. train split -----------------------------------------------------------
     # Skip roughly the documents consumed by val (approximate is fine at this scale;
     # we skip generously to guarantee no leakage).
-    skip_docs = args.val_tokens // 100
+    skip_docs = args.val_tokens // 100 if args.skip_docs is None else args.skip_docs
     print(f"[3/3] writing train split (skipping first {skip_docs:,} docs to avoid val overlap)")
 
     def train_stream():
@@ -212,12 +224,12 @@ def main():
                 continue
             yield t
 
-    n_train = tokenize_to_bin(train_stream(), tok_path, out_dir / "train.bin", args.n_proc,
+    n_train = tokenize_to_bin(train_stream(), tok_path, out_dir / args.train_name, args.n_proc,
                               max_tokens=args.max_train_tokens, desc="train")
 
     gb = (n_train + n_val) * 2 / 1e9
     print(f"\ndone. train={n_train:,} tok  val={n_val:,} tok  ({gb:.2f} GB on disk)")
-    print(f"  {out_dir}/train.bin  {out_dir}/val.bin  {tok_path}")
+    print(f"  {out_dir}/{args.train_name}  {out_dir}/val.bin  {tok_path}")
     sys.stdout.flush()
 
     # We almost always stop the stream early (--max-train-tokens), which leaves the

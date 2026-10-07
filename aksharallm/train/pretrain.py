@@ -168,6 +168,26 @@ def load_checkpoint(path, model, optimizer=None, device="cuda"):
     return ckpt
 
 
+def init_weights(path, model, cfg: Config, device="cuda") -> tuple[str, int | None]:
+    """Load another run's weights into `model` for continued pretraining. Returns
+    (path, that run's step).
+
+    Weights only, deliberately: the optimizer state, step and best-val all describe the old
+    run's schedule, and restoring them would start this one at its last step with nothing
+    left to decay. The load is strict -- a shape that does not match is a different model,
+    not a starting point -- and the tokenizer must be the one the weights were trained with
+    (gotcha 3: the tokenizer decides what every embedding row means, and a mismatch trains
+    happily on scrambled inputs)."""
+    ckpt = torch.load(path, map_location=device, weights_only=False)
+    theirs = (ckpt.get("config") or {}).get("data", {}).get("tokenizer")
+    if theirs and Path(theirs).resolve() != Path(cfg.data.tokenizer).resolve():
+        raise ValueError(f"train.init {path} was trained with tokenizer {theirs}, but this "
+                         f"run uses {cfg.data.tokenizer}. Continued pretraining must keep "
+                         "the tokenizer its weights were trained with.")
+    distributed.unwrap(model).load_state_dict(ckpt["model"])
+    return str(path), ckpt.get("step")
+
+
 @torch.no_grad()
 def evaluate(model, dataset: TokenDataset, batch_size: int, n_batches: int, ctx) -> float:
     model.eval()
@@ -350,6 +370,11 @@ def main():
         start_step = ckpt["step"] + 1
         best_val = ckpt.get("best_val", float("inf"))
         print(f"resumed from {resume} at step {start_step}")
+    init_from, init_step = None, None
+    if not resume and cfg.train.init:
+        init_from, init_step = init_weights(cfg.train.init, model, cfg, device)
+        print(f"initialised from {init_from} (its step {init_step}): weights only, "
+              "fresh optimizer, this config's schedule from step 0")
 
     # The GLOBAL batch: every rank contributes a full micro-batch on every micro-step, so
     # the per-rank figure would make throughput, the budget, the ETA and the cost per million
@@ -463,7 +488,8 @@ def main():
                 max_steps=cfg.train.max_steps, stop_at=stop_at, stop_by=stop_by,
                 tokens_per_step=tokens_per_step, params=n_params,
                 params_active=n_params_active, params_nonemb=n_params_nonemb,
-                objective=objective.name, metric=objective.metric)
+                objective=objective.name, metric=objective.metric,
+                init=init_from, init_step=init_step)
 
     if start_step >= cfg.train.max_steps:
         # Resuming a finished run. It is not an error -- the checkpoint is intact and this

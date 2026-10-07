@@ -237,6 +237,12 @@ class TrainConfig:
     wandb_project: str | None = None
     wandb_run: str | None = None
     resume: str | None = None  # path to ckpt, or "auto" to pick up latest in out_dir
+    # Continued pretraining: start from ANOTHER run's weights, at step 0, with a fresh
+    # optimizer and this config's own schedule. Weights only -- the old run's AdamW moments
+    # and its step number belong to a schedule that has already ended. A resume always wins:
+    # `init` is read only when there is nothing to resume, so night two of a continued run
+    # carries on from its own ckpt_last.pt instead of starting over from the base.
+    init: str | None = None
     # Bounded stops. Neither ends the run: both save ckpt_last.pt and exit cleanly, so
     # re-running with resume:auto continues with no loss spike. Use them to train in
     # chunks ("give me 500 more steps tonight") instead of babysitting a kill.

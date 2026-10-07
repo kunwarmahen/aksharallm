@@ -1,0 +1,67 @@
+# Phase 4 (the Python specialist): continued pretraining of the blended 300M base on mostly
+# Python. Same model, same tokenizer (gotcha 3), new data mix, a fresh re-warmed schedule.
+# docs/08 § "The Python specialist" has the why; PLAN.md § Phase 4 the plan.
+#
+# Build the data first (CPU and network only, ~30 min):
+#   python -m aksharallm.data.prepare codeparrot-python --out-dir data/py \
+#       --tokenizer data/blend/tokenizer.json --val-tokens 0 --skip-docs 665000 \
+#       --max-train-tokens 1400000000 --train-name codeparrot-fresh.raw.bin
+#   python -m aksharallm.data.dedup data/py/codeparrot-fresh.raw.bin \
+#       --write-kept data/py/codeparrot-fresh.bin --against data/blend/codeparrot-python.bin
+# --skip-docs 665000 steps past the ~665k files Phase 2 already used (100k val skip +
+# 564,916 trained); --against then removes anything the base has seen anyway, and its
+# "exact matches" count is the check that the stream really is fresh.
+#
+# Launch: scripts/experiment.sh small-code-py, or the nightly queue
+# logs/queue/py-nights.sh (00:30-05:30 only). After every session:
+#   python -m aksharallm.eval domains small-code-py --val-bin data/blend/val.bin
+# which measures prose and Python on exactly the file the base's 2.763 / 1.246 came from.
+
+name: small-code-py
+
+model:
+  vocab_size: 32768
+  d_model: 1024
+  n_layers: 24
+  n_heads: 16
+  n_kv_heads: 4
+  max_seq_len: 1024
+  tie_embeddings: true
+  dropout: 0.0
+
+data:
+  # Python-only validation: the Python span of data/blend/val.bin (1.5M tokens). On the
+  # blend's own val.bin (85% prose) "best" would mean "forgot the least prose", not "best at
+  # Python". Prose is watched by `eval domains --val-bin data/blend/val.bin` instead.
+  val_bin: data/py/val-python.bin
+  tokenizer: data/blend/tokenizer.json
+  train_sources:
+    - {bin: data/py/codeparrot-fresh.bin, weight: 0.70}       # never seen by the base
+    - {bin: data/blend/fineweb-edu-10bt.bin, weight: 0.30}    # replay, so prose holds
+
+optim:
+  lr: 1.0e-4            # a third of the base's 3e-4 peak; the base ended at 3e-5
+  min_lr_ratio: 0.1     # cosine down to 1e-5
+  warmup_steps: 300     # re-warm (~5% of the run): expect loss to rise briefly, then fall
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  init: checkpoints/small-code/ckpt_best.pt   # weights only, step 0, fresh AdamW
+  out_dir: checkpoints/small-code-py
+  batch_size: 12
+  grad_accum: 20        # 12 * 20 * 1024 = 245,760 tokens/step, as in Phase 2
+  seq_len: 1024
+  max_steps: 6000       # 1.47B tokens = 1.03B Python + 0.44B prose; ~4 night windows
+  eval_every: 500
+  eval_batches: 50
+  sample_every: 1000
+  ckpt_every: 250       # a 05:30 stop saves anyway; this bounds a crash's loss to ~10 min
+  log_every: 50
+  compile: true
+  seed: 2026
+  wandb_project: null
+  resume: auto          # nights 2+ resume from ckpt_last.pt; `init` is then ignored

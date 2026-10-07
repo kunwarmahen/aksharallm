@@ -86,6 +86,9 @@ LAUNCHERS: dict[str, dict] = {
     # The dictation punctuation tagger: the pretraining loop with a third objective, at
     # Phase-1 scale, so the experiment launcher. docs/23 § cleanup.
     "punct": {"script": "scripts/experiment.sh", "args": ["punct"]},
+    # Phase 4, the Python specialist: continued pretraining from small-code (`train.init`).
+    # A blended config, which experiment.sh checks rather than builds. docs/08.
+    "small-code-py": {"script": "scripts/experiment.sh", "args": ["small-code-py"]},
 }
 
 

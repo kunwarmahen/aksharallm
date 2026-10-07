@@ -340,7 +340,10 @@ def cmd_domains(args) -> int:
     if not val_bin:
         print("error: this checkpoint does not record a val_bin; pass --val-bin")
         return 1
-    sources = data_cfg.get("train_sources")
+    # A checkpoint's own train_sources describe ITS val_bin. Measured on a different file
+    # (`--val-bin`, e.g. the Python specialist on the base's blend val.bin) they would cut
+    # that file at the wrong weights, so the sources must come from whatever built it.
+    sources = data_cfg.get("train_sources") if val_bin == data_cfg.get("val_bin") else None
     if not sources:
         sources = dom.sources_for_val_bin(val_bin, store.root)
         if sources:

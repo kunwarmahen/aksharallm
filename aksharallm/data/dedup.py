@@ -423,6 +423,212 @@ def scan_bin(path: str | Path, eos_id: int, *, params: LSHParams | None = None,
 
 
 # ---------------------------------------------------------------------------------------
+# filtering: write a deduplicated copy
+# ---------------------------------------------------------------------------------------
+# `scan_bin` measures; this removes. It differs from the scan in three ways that only matter
+# once documents are actually being dropped:
+#   * documents are found over the WHOLE file at once, so one straddling a chunk edge is
+#     neither split in two nor lost (the scan tolerates that; a filter would write halves);
+#   * banding is a sort per band rather than a dict of tuples -- over a million documents
+#     the dicts alone are gigabytes;
+#   * it can deduplicate AGAINST other bins. The Python specialist's fresh download is
+#     filtered against the bin Phase 2 already trained on, which removes repeats of code the
+#     model has seen *and* doubles as the check that the fresh stream really is fresh: a
+#     shifted stream shows up as most of it matching the old bin.
+
+
+def all_document_spans(tokens: np.ndarray, eos_id: int,
+                       chunk: int = 200_000_000) -> np.ndarray:
+    """`(n, 2)` int64 `[start, end)` of every EOS-terminated document in the whole stream.
+
+    Anything after the last EOS is dropped: `prepare.py` stops at a token budget, so the
+    file's tail is a document cut off mid-way, and copying half a file into a corpus is
+    exactly what a filter should not do."""
+    ends = [np.flatnonzero(np.asarray(tokens[p : p + chunk]) == eos_id) + p
+            for p in range(0, tokens.size, chunk)]
+    ends = np.concatenate(ends) if ends else np.empty(0, dtype=np.int64)
+    if ends.size == 0:
+        raise ValueError("no EOS token in this stream, so it has no document boundaries")
+    starts = np.concatenate([[0], ends[:-1] + 1])
+    return np.stack([starts, ends], axis=1).astype(np.int64)
+
+
+_w_tokens: dict = {}
+_w_hash: tuple | None = None
+
+
+def _sig_init(seed: int, n_perm: int):
+    global _w_hash
+    _w_hash = hash_family(n_perm, seed)
+
+
+def _sig_batch(job) -> np.ndarray:
+    """Signatures for one batch of spans of one file. Workers open the memmap themselves, so
+    only (path, spans) crosses the process boundary, never the tokens."""
+    path, spans, max_doc_tokens = job
+    if path not in _w_tokens:
+        _w_tokens[path] = np.memmap(path, dtype=np.uint16, mode="r")
+    toks = _w_tokens[path]
+    a, b = _w_hash
+    out = np.empty((len(spans), a.size), dtype=np.int64)
+    for i, (s, e) in enumerate(spans):
+        out[i] = signature(shingle_hashes(np.asarray(toks[s : min(e, s + max_doc_tokens)])), a, b)
+    return out
+
+
+def signatures_for(path: str, spans: np.ndarray, *, params: LSHParams, seed: int = 0,
+                   max_doc_tokens: int = 4096, n_proc: int = 8, batch: int = 2_000,
+                   progress=None, tag: str = "") -> np.ndarray:
+    """MinHash signatures for `spans` of `path`, `(n, P)` int64, computed in a process pool."""
+    import multiprocessing as mp
+    jobs = [(str(path), spans[i : i + batch], max_doc_tokens)
+            for i in range(0, len(spans), batch)]
+    out = np.empty((len(spans), params.permutations), dtype=np.int64)
+    with mp.get_context("fork").Pool(n_proc, initializer=_sig_init,
+                                      initargs=(seed, params.permutations)) as pool:
+        for j, sig in enumerate(pool.imap(_sig_batch, jobs)):
+            out[j * batch : j * batch + len(sig)] = sig
+            if progress and (j % 25 == 0 or j == len(jobs) - 1):
+                done = min((j + 1) * batch, len(spans))
+                progress(f"[dedup] {tag} {done:,}/{len(spans):,} "
+                         f"({done / max(1, len(spans)) * 100:.0f}%)")
+    return out
+
+
+def duplicate_pairs(sigs: np.ndarray, params: LSHParams,
+                    threshold: float | None = None) -> np.ndarray:
+    """`(m, 2)` index pairs that share a band AND whose estimated Jaccard clears the
+    threshold. Banding by sorting: equal band keys end up adjacent, and each run of equal
+    keys is a bucket. Inside a bucket every member is compared with the bucket's first --
+    enough to put a bucket into one cluster, linear rather than quadratic in its size."""
+    threshold = params.threshold if threshold is None else threshold
+    rows = params.rows
+    rng = np.random.default_rng(12345)
+    found = []
+    for band in range(params.bands):
+        block = sigs[:, band * rows : (band + 1) * rows].astype(np.uint64)
+        # Fold R int64s into one uint64 key; a collision here only creates a candidate,
+        # and every candidate is checked against the signature estimate below.
+        mult = rng.integers(1, 1 << 62, size=rows, dtype=np.int64).astype(np.uint64)
+        key = (block * mult).sum(axis=1)
+        order = np.argsort(key, kind="stable")
+        k = key[order]
+        new_run = np.concatenate([[True], k[1:] != k[:-1]])
+        run_first = order[np.maximum.accumulate(np.where(new_run, np.arange(k.size), 0))]
+        member = ~new_run
+        a, b = run_first[member], order[member]
+        if a.size:
+            est = (sigs[a] == sigs[b]).mean(axis=1)
+            keep = est >= threshold
+            found.append(np.stack([a[keep], b[keep]], axis=1))
+    return np.concatenate(found) if found else np.empty((0, 2), dtype=np.int64)
+
+
+def filter_bin(src: str | Path, out: str | Path, eos_id: int = 0, *, against=(),
+               params: LSHParams | None = None, seed: int = 0, max_doc_tokens: int = 4096,
+               min_doc_tokens: int = 32, n_proc: int = 8, progress=None) -> dict:
+    """Write `out`: `src` with near-duplicates removed, one document kept per cluster.
+
+    The rule for which copy survives: if a cluster contains a document from an `against`
+    bin, **no** `src` member survives (the model has already trained on that code). Otherwise
+    the longest member is kept. Documents under `min_doc_tokens` are dropped too -- a
+    20-token Python file is an empty `__init__.py` or a coding line, there are thousands of
+    identical ones, and they are too short to shingle reliably. Every count is reported."""
+    params = params or LSHParams()
+    src, out = Path(src), Path(out)
+    toks = np.memmap(src, dtype=np.uint16, mode="r")
+    spans = all_document_spans(toks, eos_id)
+    lens = spans[:, 1] - spans[:, 0]
+    short = lens < min_doc_tokens
+    live = np.flatnonzero(~short)
+
+    ref_spans, ref_paths = [], []
+    for ref in against:
+        rs = all_document_spans(np.memmap(ref, dtype=np.uint16, mode="r"), eos_id)
+        rs = rs[(rs[:, 1] - rs[:, 0]) >= min_doc_tokens]
+        ref_spans.append(rs)
+        ref_paths.append(str(ref))
+
+    sig_parts = [signatures_for(str(src), spans[live], params=params, seed=seed,
+                                max_doc_tokens=max_doc_tokens, n_proc=n_proc,
+                                progress=progress, tag=f"{src.name}")]
+    for rp, rs in zip(ref_paths, ref_spans):
+        sig_parts.append(signatures_for(rp, rs, params=params, seed=seed,
+                                        max_doc_tokens=max_doc_tokens, n_proc=n_proc,
+                                        progress=progress, tag=f"{Path(rp).name} (reference)"))
+    sigs = np.concatenate(sig_parts)
+    n_src = live.size
+    n_all = sigs.shape[0]
+    pairs = duplicate_pairs(sigs, params)
+
+    # Union-find over every index, src first, references after.
+    parent = np.arange(n_all)
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for a, b in pairs.tolist():
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+    roots = np.fromiter((find(i) for i in range(n_all)), dtype=np.int64, count=n_all)
+    src_len = lens[live]
+    drop = np.zeros(n_src, dtype=bool)
+    # Clusters that reach a reference document: drop every src member.
+    ref_roots = set(roots[n_src:].tolist())
+    seen_ref = np.isin(roots[:n_src], np.fromiter(ref_roots, dtype=np.int64,
+                                                  count=len(ref_roots)))
+    drop |= seen_ref
+    # Clusters purely inside src: keep the longest member.
+    best: dict[int, int] = {}
+    for i in np.flatnonzero(~seen_ref).tolist():
+        r = int(roots[i])
+        j = best.get(r)
+        if j is None or src_len[i] > src_len[j]:
+            if j is not None:
+                drop[j] = True
+            best[r] = i
+        else:
+            drop[i] = True
+    # Exactly identical signatures against the reference: the "is this stream fresh" check.
+    exact_ref = 0
+    if n_all > n_src:
+        ref_keys = {s.tobytes() for s in sigs[n_src:]}
+        exact_ref = int(sum(sigs[i].tobytes() in ref_keys for i in range(n_src)))
+
+    keep_idx = live[~drop]
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(out.suffix + ".tmp")
+    written = 0
+    eos = np.array([eos_id], dtype=np.uint16)
+    with open(tmp, "wb") as f:
+        for i in keep_idx.tolist():
+            s, e = spans[i]
+            np.asarray(toks[s:e]).tofile(f)
+            eos.tofile(f)
+            written += int(e - s) + 1
+        f.flush()
+    tmp.replace(out)
+
+    total = int(spans[-1, 1]) + 1
+    return {
+        "source": str(src), "out": str(out), "against": ref_paths,
+        "documents": int(len(spans)), "tokens": total,
+        "dropped_short": int(short.sum()), "dropped_short_tokens": int(lens[short].sum()),
+        "dropped_duplicate_within": int((drop & ~seen_ref).sum()),
+        "dropped_seen_in_reference": int(seen_ref.sum()),
+        "exact_matches_in_reference": exact_ref,
+        "kept_documents": int(keep_idx.size), "kept_tokens": written,
+        "kept_token_share": written / total if total else 0.0,
+        "threshold": params.threshold, "permutations": params.permutations,
+        "max_doc_tokens": max_doc_tokens, "min_doc_tokens": min_doc_tokens,
+    }
+
+
+# ---------------------------------------------------------------------------------------
 # the CLI
 # ---------------------------------------------------------------------------------------
 
@@ -459,9 +665,32 @@ def main(argv=None) -> int:
                          "logs/eval/dedup-<corpus>-<when>.json")
     ap.add_argument("--no-write", action="store_true",
                     help="print only; do not keep the report")
+    ap.add_argument("--write-kept", default=None, metavar="OUT.bin",
+                    help="FILTER instead of sampling: a whole-file pass that writes a "
+                         "deduplicated copy here (one document kept per cluster)")
+    ap.add_argument("--against", action="append", default=[], metavar="BIN",
+                    help="with --write-kept: also drop documents near-duplicating one in "
+                         "this bin (e.g. the corpus a model already trained on). Repeatable")
+    ap.add_argument("--n-proc", type=int, default=8)
     args = ap.parse_args(argv)
 
     params = LSHParams(bands=args.bands, rows=args.rows)
+    if args.write_kept:
+        t0 = time.time()
+        rep = filter_bin(args.bin, args.write_kept, args.eos, against=args.against,
+                         params=params, max_doc_tokens=args.max_doc_tokens,
+                         n_proc=args.n_proc, progress=print)
+        rep["seconds"] = round(time.time() - t0, 1)
+        print(f"\n  {rep['documents']:,} documents, {rep['tokens']:,} tokens in {rep['source']}")
+        print(f"  dropped {rep['dropped_short']:,} under {rep['min_doc_tokens']} tokens, "
+              f"{rep['dropped_duplicate_within']:,} duplicates within, "
+              f"{rep['dropped_seen_in_reference']:,} already in the reference "
+              f"({rep['exact_matches_in_reference']:,} of those exactly)")
+        print(f"  kept {rep['kept_documents']:,} documents, {rep['kept_tokens']:,} tokens "
+              f"({rep['kept_token_share'] * 100:.1f}%)  ->  {rep['out']}   "
+              f"[{rep['seconds']:.0f}s]")
+        Path(args.write_kept).with_suffix(".dedup.json").write_text(json.dumps(rep, indent=1))
+        return 0
     print(f"{args.bin}")
     print(f"  {params.permutations} permutations in {params.bands} bands of {params.rows}"
           f"  ->  threshold ~{params.threshold:.3f}, "

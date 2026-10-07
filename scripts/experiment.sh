@@ -14,6 +14,8 @@
 #   scripts/experiment.sh tiny-moe          # the MoE experiment (configs/tiny-moe.yaml)
 #   scripts/experiment.sh tiny-diffusion    # the masked diffusion experiment (docs/20)
 #   scripts/experiment.sh tiny              # re-run the dense baseline
+#   scripts/experiment.sh small-code-py     # the Python specialist (continued pretraining
+#                                           # from small-code; 300M, so nights not hours)
 #
 # Env knobs (same names and meanings as phase2.sh):
 #   STOP_AFTER=500      train 500 steps this launch, then save and exit
@@ -161,6 +163,26 @@ fi
 echo
 echo "=== 1/3  data ==="
 launch_stage data
+# A blended config (train_sources) names several bins and none of them is built here --
+# the Python specialist's come from prepare.py + data.dedup (docs/08 § The Python
+# specialist). Missing ones are an error, not a cue to build TinyStories.
+SOURCES=$($PY - "$CFG" <<'EOF'
+import sys, yaml
+d = (yaml.safe_load(open(sys.argv[1])) or {}).get("data", {})
+for s in d.get("train_sources") or []:
+    print(s["bin"])
+EOF
+)
+if [ -n "$SOURCES" ]; then
+    for b in $SOURCES; do
+        if [ ! -s "$b" ]; then
+            echo "    ERROR: $CFG names $b as a training source and it is missing or empty" >&2
+            exit 1
+        fi
+        sz=$(stat -c%s "$b")
+        echo "    $b: $((sz / 1000000)) MB / $((sz / 2)) tokens"
+    done
+else
 TRAIN_BIN=$($PY - "$CFG" <<'EOF'
 import sys, yaml
 print((yaml.safe_load(open(sys.argv[1])) or {}).get("data", {}).get("train_bin", ""))
@@ -177,6 +199,7 @@ else
     echo "    $TRAIN_BIN is missing. Building TinyStories (~10 minutes)..."
     $PY -m aksharallm.data.prepare tinystories --out-dir data/tinystories \
         --vocab-size 8192 --max-train-tokens 400000000
+fi
 fi
 
 # ---- smoke ------------------------------------------------------------------------------

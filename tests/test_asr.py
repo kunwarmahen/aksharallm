@@ -564,7 +564,10 @@ def test_a_portal_job_is_judged_by_the_clis_exit_code(tmp_path, monkeypatch, arg
     monkeypatch.setattr(jobs, "command", lambda spec: (argv, "test"))
     cur = jobs.start({"kind": "fetch"})
     assert cur["command"].startswith("python -m aksharallm.asr ")
-    for _ in range(100):
+    # Up to 60 s: the job is a real `python -m aksharallm.asr` subprocess, and importing
+    # torch under a loaded machine (the launch gate runs this suite) took longer than the
+    # 10 s this used to allow -- a timing flake that could cancel a night's training run.
+    for _ in range(600):
         st = jobs.status()
         if not st["running"]:
             break

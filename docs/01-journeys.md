@@ -36,16 +36,18 @@ flowchart TD
     BASE -.optional.-> SMALL["🗜️ quantize<br/>4x smaller"]
     BASE -.optional.-> LONG["📏 long context<br/>4x the window, free"]
     BASE -.optional.-> MOE["🧩 MoE upcycle"]
+    BASE -.optional.-> PYS["🐍 Python specialist<br/>continued pretraining"]
     SMALL -.-> USE
     LONG -.-> USE
     MOE -.-> USE
+    PYS -.-> SFT
 
     classDef stage fill:#2d6cdf,stroke:#1a4a9e,color:#fff
     classDef art fill:#e8f0fe,stroke:#2d6cdf,color:#1a1a1a
     classDef side fill:#f5f5f5,stroke:#999,color:#333,stroke-dasharray: 4 3
     class PRE,SFT,ALIGN,TOK,USE stage
     class BASE,CHAT,FINAL,RAW,BIN art
-    class SMALL,LONG,MOE side
+    class SMALL,LONG,MOE,PYS side
 ```
 
 Solid arrows are **the main line** — the route that ends in a model you can talk to. Dotted
@@ -482,6 +484,26 @@ The expensive routes. Each one is a real research direction rather than a switch
 - **MoE upcycling** — split the feed-forward layer of a trained model into several experts
   plus a router, so the model has more capacity at the same cost per token. Measured here at
   13.8M scale: **val 1.4081 against the dense 1.4764**.
+- **Specialise it (the Python specialist)** — keep pretraining the base, but on mostly
+  Python: fresh code it has never seen, deduplicated against what it has, with 30% prose
+  replayed so it does not forget how to write English. This is the route to take when
+  post-training has stopped helping — here, SFT, DPO and three rounds of GRPO left HumanEval
+  at 3–7 of 164, because RL can only choose among programs the base can already write.
+
+  ```bash
+  python -m aksharallm.data.prepare codeparrot-python --out-dir data/py \
+      --tokenizer data/blend/tokenizer.json --val-tokens 0 --skip-docs 665000 \
+      --max-train-tokens 1400000000 --train-name codeparrot-fresh.raw.bin
+  python -m aksharallm.data.dedup data/py/codeparrot-fresh.raw.bin \
+      --write-kept data/py/codeparrot-fresh.bin --against data/blend/codeparrot-python.bin
+  scripts/experiment.sh small-code-py                  # ~4 nights; stop/resume as usual
+  python -m aksharallm.eval domains small-code-py --val-bin data/blend/val.bin
+  python -m aksharallm.eval small-code-py --suite humaneval --limit 0
+  ```
+
+  **How you know it worked:** in `eval domains` the Python loss falls below the base's
+  1.246 while prose stays near 2.763, and HumanEval moves off the base's 3/164. In the
+  portal it is `small-code-py` in the run picker, with Start on the dashboard.
 - **Scale up** — a bigger model on more tokens. The honest answer to most quality problems,
   and the one that costs the most.
 

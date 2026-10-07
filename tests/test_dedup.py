@@ -346,3 +346,65 @@ def test_no_write_prints_only(tmp_path, monkeypatch):
                         lambda root=None: tmp_path / "logs" / "eval")
     assert main([str(_corpus(tmp_path)), "--limit", "10", "--no-write"]) == 0
     assert not (tmp_path / "logs" / "eval").exists()
+
+
+# ---------------------------------------------------------------------------------------
+# filtering: a deduplicated copy, and deduplication against another bin
+# ---------------------------------------------------------------------------------------
+
+
+def _write(path, docs, tail=None):
+    parts = []
+    for d in docs:
+        parts += [d, np.array([EOS], dtype=np.uint16)]
+    if tail is not None:
+        parts.append(tail)  # a document cut off by the token budget: no EOS after it
+    np.concatenate(parts).tofile(path)
+
+
+def _read_docs(path):
+    from aksharallm.data.dedup import all_document_spans
+    t = np.fromfile(path, dtype=np.uint16)
+    return [t[s:e] for s, e in all_document_spans(t, EOS)]
+
+
+def test_the_filter_keeps_one_of_each_cluster_and_the_longest(tmp_path):
+    from aksharallm.data.dedup import filter_bin
+    a, b, c = doc(400, 1), doc(400, 2), doc(400, 3)
+    a_long = np.concatenate([a, doc(10, 9)])          # a near-copy of a, slightly longer
+    short = doc(10, 4)
+    _write(tmp_path / "src.bin", [a, b, a_long, c, short, a.copy()], tail=doc(50, 5))
+    rep = filter_bin(tmp_path / "src.bin", tmp_path / "out.bin", EOS, n_proc=2)
+    kept = _read_docs(tmp_path / "out.bin")
+    assert len(kept) == 3
+    assert any(np.array_equal(k, a_long) for k in kept), "the longest copy is the one kept"
+    assert any(np.array_equal(k, b) for k in kept) and any(np.array_equal(k, c) for k in kept)
+    assert rep["dropped_duplicate_within"] == 2 and rep["dropped_short"] == 1
+    # The tail had no EOS -- half a file -- and must not be copied.
+    assert rep["kept_tokens"] == sum(k.size + 1 for k in kept)
+
+
+def test_a_document_already_in_the_reference_is_dropped_and_counted(tmp_path):
+    """The positive control for "is the fresh download fresh": a document the model
+    already trained on must go, and an identical one must show up as an exact match."""
+    from aksharallm.data.dedup import filter_bin
+    seen, fresh = doc(400, 11), doc(400, 12)
+    _write(tmp_path / "old.bin", [seen, doc(400, 13)])
+    _write(tmp_path / "new.bin", [seen.copy(), fresh, edited(seen, 50)])
+    rep = filter_bin(tmp_path / "new.bin", tmp_path / "out.bin", EOS,
+                     against=[tmp_path / "old.bin"], n_proc=2)
+    kept = _read_docs(tmp_path / "out.bin")
+    assert len(kept) == 1 and np.array_equal(kept[0], fresh)
+    assert rep["dropped_seen_in_reference"] == 2
+    assert rep["exact_matches_in_reference"] == 1
+
+
+def test_documents_straddling_a_chunk_edge_are_found_whole(tmp_path):
+    from aksharallm.data.dedup import all_document_spans
+    docs = [doc(97, i) for i in range(1, 30)]
+    _write(tmp_path / "s.bin", docs)
+    t = np.fromfile(tmp_path / "s.bin", dtype=np.uint16)
+    spans = all_document_spans(t, EOS, chunk=64)       # far smaller than a document
+    assert len(spans) == len(docs)
+    for (s, e), d in zip(spans, docs):
+        assert np.array_equal(t[s:e], d)

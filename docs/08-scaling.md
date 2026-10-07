@@ -726,12 +726,87 @@ flowchart LR
     M --> E["eval: HumanEval pass@1"]
 ```
 
-**Continued pretraining** — keep doing next-token prediction, but on a **code-heavy** mix
-(e.g. 70% Python / 30% general, to avoid forgetting), at a *lower* LR (~10% of the base
-run's), for a few hundred million to ~1B tokens. Reuse `MixedTokenDataset` — just flip the
-weights toward code — starting from the base's `ckpt_best.pt`.
+**Continued pretraining** — keep doing next-token prediction, but on a **code-heavy** mix,
+starting from the base's weights. This is Phase 4 (`PLAN.md`), and it exists because
+Phase 3 showed the ceiling: SFT, DPO and three rounds of GRPO left HumanEval at 3–7 of 164.
+Preference tuning and RL can only *select* among programs the base can already write.
 
-**Then SFT** on Python instruction data (function-writing, bug-fixing, explaining).
+### The data: fresh Python, deduplicated against what the base already saw
+
+Phase 2 saw ~1.47B Python tokens — one full pass over `data/blend/codeparrot-python.bin`.
+CodeParrot-clean has ~5.17M files and Phase 2 used ~665k of them (a 100k-document val skip,
+then 564,916 trained), so there are ~12B tokens of the *same* source the model has never
+seen. A second epoch of the old bin would have been free to build; the fresh download cost
+~12 minutes of network, ~11 minutes of CPU to deduplicate, and no GPU — and none of the
+Python it trains on is code the base has already seen.
+
+```mermaid
+flowchart LR
+    HF["codeparrot-clean<br/>(stream)"] -->|"--skip-docs 665000"| RAW["codeparrot-fresh.raw.bin<br/>1.4B tokens"]
+    OLD["blend/codeparrot-python.bin<br/>(what the base trained on)"] --> DD
+    RAW --> DD["data.dedup --write-kept<br/>--against OLD"]
+    DD --> FRESH["codeparrot-fresh.bin"]
+    FRESH -->|0.70| MIX["MixedTokenDataset"]
+    FW["blend/fineweb-edu-10bt.bin"] -->|"0.30 replay"| MIX
+    MIX --> CPT["pretrain.py<br/>train.init = small-code/ckpt_best.pt"]
+```
+
+```bash
+python -m aksharallm.data.prepare codeparrot-python --out-dir data/py \
+    --tokenizer data/blend/tokenizer.json --val-tokens 0 --skip-docs 665000 \
+    --max-train-tokens 1400000000 --train-name codeparrot-fresh.raw.bin
+python -m aksharallm.data.dedup data/py/codeparrot-fresh.raw.bin \
+    --write-kept data/py/codeparrot-fresh.bin --against data/blend/codeparrot-python.bin
+```
+
+**Measured, 2026-10-06:** the 1.4B-token download is 527,585 files. The filter dropped
+21,130 near-duplicates of each other and **128,390 (24%) that near-duplicate a file the base
+already trained on** — but only **8,428 of those exactly**, which is the answer to "is it
+fresh": a shifted stream would match almost entirely and exactly. GitHub Python is that
+repetitive across repositories (forks, vendored libraries, generated migrations). It kept
+**378,063 files, 824.9M tokens (58.9%)** — the dropped files are the long vendored ones, so
+the token share falls further than the document share. At 70% of a 1.47B budget that is
+~1.25 passes over the fresh code, a repeat small enough to be worth the same as new data.
+
+`--write-kept` is the dedup *filter* (the default mode only measures a sample). It finds
+documents over the whole file at once (a document straddling a chunk edge is neither split
+nor lost), keeps the longest member of each near-duplicate cluster, drops files under 32
+tokens, and — with `--against` — drops every document that near-duplicates one the base
+already trained on. Its **exact matches** count is the check that the stream really was
+fresh: had the Hub's order shifted since July, most of the download would match the old bin
+exactly, and the filter would say so instead of quietly training on old data again.
+
+### The run: `configs/small-code-py.yaml`
+
+| knob | value | why |
+|---|---|---|
+| `train.init` | `checkpoints/small-code/ckpt_best.pt` | weights only, step 0, a fresh AdamW. `resume` cannot do this — it would restore step 39,999 of a schedule that has already decayed. A resume always wins over `init`, so night two continues |
+| mix | 70% fresh Python / 30% FineWeb-Edu | the 30% is **replay**: without it, prose is forgotten while the Python loss looks great |
+| LR | 1e-4 peak, 300-step warmup, cosine to 1e-5 | a third of the base's peak. The base ended at 3e-5, so this is a *re-warm*: expect the loss to rise for a few hundred steps before it falls, and do not read that as a fault |
+| budget | 6,000 steps × 245,760 = 1.47B tokens | 1.03B Python + 0.44B prose |
+| `val_bin` | `data/py/val-python.bin` | the Python span of the blend's `val.bin`. On the blend's own val (85% prose), "best" would mean "forgot the least prose" |
+
+**Prose is watched separately, after every session:**
+
+```bash
+python -m aksharallm.eval domains small-code-py --val-bin data/blend/val.bin
+```
+
+`data/blend/val.manifest.json` pins that file's two spans (prose 0–8.5M, Python 8.5M–10M,
+verified by content and falling exactly on a document edge), so this measures the
+specialist on *exactly* the tokens the base's prose 2.763 / Python 1.246 came from. Python
+must fall; prose may rise a little and must not rise much (~0.1 is the line to start
+worrying). `--val-bin` uses the sources of whatever built that file, not the checkpoint's
+own — the specialist's 70/30 weights would cut the blend's val in the wrong place.
+
+**How long, on this card:** ~26.6k tok/s is ~96M tokens an hour. A 00:30–05:30 window,
+less startup and the checks, trains ~4.5 hours — ~1,700 steps — so the 6,000 steps are
+**about four nights**. `logs/queue/py-nights.sh` runs exactly that: start or resume, stop
+itself at 05:00 through the STOP file, then `eval domains` and a full HumanEval on that
+night's best checkpoint, so every night adds a point to both curves.
+
+**Then SFT** on Python instruction data (`data/synth/py-v1` plus chat data, so it still
+converses), judged on HumanEval and against the general SFT model head to head.
 
 **Why it's worth it:** a 300M model specialised on Python routinely beats a general 7B
 model *on Python*, while running ~20× faster — and unlike most targets, the eval is
@@ -801,9 +876,11 @@ for longer. What is new is the machinery around it, and it is mostly shell:
 | 8 | [`aksharallm/portal/gpu.py`](../aksharallm/portal/gpu.py) | `Sampler` and `summarise` — `nvidia-smi` every 5s, each sample tagged with whether a trainer was alive |
 | 9 | [`aksharallm/portal/schedule.py`](../aksharallm/portal/schedule.py) | `Rule` → `Schedule` → `Scheduler` — windows stored as the two rules they really are, the midnight-crossing day shift, and the 15-minute grace window |
 | 10 | [`aksharallm/portal/explain.py`](../aksharallm/portal/explain.py) | `SourceTree.resolve` (the reading boundary), `PRIMER` and `build_messages` — what the Code tab actually sends a local model |
+| 11 | [`configs/small-code-py.yaml`](../configs/small-code-py.yaml) · [`aksharallm/train/pretrain.py`](../aksharallm/train/pretrain.py) | the Python specialist: `train.init` and `init_weights` — weights only, and why a resume wins over it |
+| 12 | [`aksharallm/data/dedup.py`](../aksharallm/data/dedup.py) | `filter_bin` and `duplicate_pairs` — the filter half (banding by sorting, `--against` another bin), after the measuring half doc 2 covers |
 
 The portal itself is [doc 10](10-running-and-watching.md); the Python-specialist stage (Stage C)
-reuses 2 and 3 with the weights flipped toward code.
+reuses 2 and 3 with the weights flipped toward code, plus 11 and 12.
 
 ---
 
