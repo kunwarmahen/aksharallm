@@ -16,7 +16,8 @@
 #
 #   scripts/portal.sh --status        # running? which pid, which port
 #   scripts/portal.sh --stop          # stop it
-#   scripts/portal.sh --restart --lan # stop it, start it again in the background
+#   scripts/portal.sh --restart       # stop it, start it again in the background, same flags
+#   scripts/portal.sh --restart --lan # ...or with different ones
 #   scripts/portal.sh --bg --lan      # start in the background (log: logs/portal.log)
 #
 # Stopping or restarting the portal never touches a training run: the trainer is a separate,
@@ -117,6 +118,19 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# A bare --restart keeps the arguments the running portal was started with. It used to
+# start it again with none, which silently dropped --lan: the portal came back on localhost
+# only and every phone and laptop that had been watching it lost it, with nothing said.
+if [ "$RESTART" = "1" ] && [ ${#ARGS[@]} -eq 0 ] && p=$(portal_pid); then
+    mapfile -d '' OLD < "/proc/$p/cmdline" 2>/dev/null || OLD=()
+    for i in "${!OLD[@]}"; do
+        if [ "${OLD[$i]}" = "aksharallm.portal" ]; then
+            ARGS=("${OLD[@]:$((i + 1))}")
+            break
+        fi
+    done
+    [ ${#ARGS[@]} -gt 0 ] && echo "restarting with the same arguments: ${ARGS[*]}"
+fi
 [ "$RESTART" = "1" ] && stop_portal
 
 if p=$(portal_pid); then

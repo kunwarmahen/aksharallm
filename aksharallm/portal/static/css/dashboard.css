@@ -77,6 +77,7 @@
 .day-presets button { padding: 5px 9px; font-size: 12px; font-weight: 500; }
 
 .sched-events { margin-top: 14px; }
+.sched-sub { margin: 18px 0 4px; font-size: 0.95rem; }
 .sched-events summary {
   cursor: pointer; color: var(--ink-2); font-size: 12px; margin-bottom: 8px;
 }

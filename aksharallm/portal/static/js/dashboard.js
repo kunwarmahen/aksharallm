@@ -984,10 +984,46 @@ function renderSchedule(sched) {
     host.appendChild(t);
   }
 
+  renderQueues(sched.queues || []);
+
   const log = $('#sched-log');
   const events = sched.events || [];
   log.textContent = events.length ? events.join('\n') : '(the scheduler has not done anything yet)';
   if (!$('.sched-events').dataset.touched) log.scrollTop = log.scrollHeight;
+}
+
+/* Night queues (portal/queues.py) -- read from what each queue leaves behind: its log's
+ * last "===" line, its done markers, and whether its process is alive. A dead queue reads
+ * "not running", never the "sleeping until 00:30" its log ended on. */
+function renderQueues(qs) {
+  const host = $('#sched-queues');
+  host.textContent = '';
+  if (!qs.length) {
+    const empty = document.createElement('div');
+    empty.className = 'chart-empty';
+    empty.textContent = 'No night queue has run here.';
+    host.appendChild(empty);
+    return;
+  }
+  const when = (t) => new Date(t * 1000).toLocaleString(undefined,
+    { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  const rows = qs.map((q) => [
+    q.name,
+    q.state + (q.alive && q.said_at ? ` (${q.said_at.slice(5, 16)})` : ''),
+    q.start && q.end ? `${q.start}–${q.end}` + (q.train_end ? ` · trains to ${q.train_end}` : '')
+      : '—',
+    q.next_window ? when(q.next_window)
+      + (q.next_window_in_s != null ? ` · in ${fmt.dur(q.next_window_in_s)}` : '') : '—',
+    q.done.length ? `${q.done.length}: ${q.done.slice(-4).join(', ')}` : 'none yet',
+    q.alive ? `pid ${q.pid}` : '—',
+  ]);
+  const t = table(['queue', 'state', 'window', 'next window', 'jobs done (latest)', 'process'],
+    rows);
+  [...t.tBodies[0].rows].forEach((tr, i) => {
+    if (!qs[i].alive) tr.className = 'rule-paused';
+    tr.title = `${qs[i].script} · log ${qs[i].log}`;
+  });
+  host.appendChild(t);
 }
 
 export function wireSchedule() {

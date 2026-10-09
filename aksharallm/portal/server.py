@@ -66,6 +66,7 @@ from .learn import Learn
 from .synth import SynthJobs
 from .runs import (PHASE_LAUNCHING, PHASE_TRAINING, LAUNCHERS, RunError, RunStore,
                    _stage_of_run, repo_root)
+from .queues import queues
 from .schedule import Rule, Schedule, Scheduler, parse_days
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -731,6 +732,10 @@ class Handler(BaseHTTPRequestHandler):
                 "in_portal": bool(self.scheduler._thread),
                 "events": self.scheduler.recent(40),
                 "startable": self.scheduler.startable(),
+                # Night queues (logs/queue/*.sh) are not rules and the scheduler does not
+                # fire them -- but a panel called Schedule that cannot see the thing
+                # training every night is lying by omission. queues.py.
+                "queues": queues(self.store.root),
             })
         return self._error(404, "no such api path")
 

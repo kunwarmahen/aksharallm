@@ -200,6 +200,36 @@ tonight, stop it when you need the GPU, resume tomorrow. Six days of *compute*, 
 as many *evenings* as you like. Each launch is one "session"; the portal's Sessions panel
 lists them so you can compare.
 
+### Night queues: several jobs, several nights, one window
+
+A schedule *rule* starts or stops one run. When a night needs a sequence — train until
+05:00, then measure prose vs Python, then run HumanEval, and repeat until the budget is
+spent — the repo uses a **night queue**: a bash loop in `logs/queue/<name>.sh` that sleeps
+until its window opens, runs each job only if its estimate fits before the window closes,
+leaves `logs/queue/<name>/<job>.done` when one finishes, and sleeps again. Phase 3's scoring
+(`nights.sh`) and the Phase 4 Python specialist (`py-nights.sh`) both ran this way.
+
+```mermaid
+flowchart LR
+    S["sleep until<br/>START (00:30)"] --> G{"GPU free?"}
+    G -->|no| W["wait 5 min"] --> G
+    G -->|yes| J["next job not .done<br/>and it fits before END"]
+    J -->|"train (stop.sh --by 05:00)"| D["eval domains"] --> H["HumanEval"]
+    H --> M["mark .done"] --> S
+```
+
+**The Schedule panel shows them under "Night queues"**, and it learns everything from what a
+queue already leaves behind — nothing has to be added to the script: alive or not from
+`/proc` (a queue killed by a reboot reads **not running**, never the "sleeping until 00:30"
+its log ended on), its state from the last `===` line of its log, its window from the
+script's `START=`/`END=` defaults, and which jobs are done from the markers. This section
+exists because for two nights the panel said nothing was scheduled while a queue trained
+every night — the portal only knew about `schedule.json`.
+
+Two rules for queues, both paid for: **never edit a script a running queue will execute**
+(bash reads it as it goes; editing `stage.sh` mid-queue once crashed one), and copy the
+template rather than reusing one with old markers — delete the markers to re-run jobs.
+
 ---
 
 ## Post-training: the right order, enforced
@@ -1232,6 +1262,7 @@ page.
 | 8 | [`aksharallm/portal/gpu.py`](../aksharallm/portal/gpu.py) | `Sampler` → `snapshot` — the 5-second `nvidia-smi` sample, tagged with whether a trainer was alive |
 | 9 | [`aksharallm/portal/cost.py`](../aksharallm/portal/cost.py) | `integrate` (power curve → watt-hours), `Ledger` (the append-only ten-minute buckets), `report` (coverage, and why "whole run (est.)" is its own column) |
 | 10 | [`aksharallm/portal/schedule.py`](../aksharallm/portal/schedule.py) | `Rule.due` (the 15-minute grace window — a missed fire stays missed) → `Scheduler.check` → `Scheduler.fire`, which is idempotent, and the one-per-machine `lock` |
+| 10b | [`aksharallm/portal/queues.py`](../aksharallm/portal/queues.py) | `describe` — a night queue reconstructed from its script, log and `.done` markers, and `_pids_running`, which resolves a relative argv against the process's own cwd (matching the bare path made one live queue "alive" in every checkout) |
 | 11 | [`aksharallm/portal/pipeline.py`](../aksharallm/portal/pipeline.py) | `Pipeline` — the post-training panel. A small parallel reader to `RunStore`, because SFT/DPO/GRPO have no `configs/<run>.yaml` and do have prerequisites |
 | 12 | [`evals.py`](../aksharallm/portal/evals.py) · [`quantize.py`](../aksharallm/portal/quantize.py) · [`finetune.py`](../aksharallm/portal/finetune.py) · [`synth.py`](../aksharallm/portal/synth.py) | one job runner per tab. Read any *one* of them — they are the same shape: start a subprocess of the CLI, stream its output, write a JSON result. [`learn.py`](../aksharallm/portal/learn.py) is the exception, and says why |
 | 13 | [`aksharallm/portal/static/js/router.js`](../aksharallm/portal/static/js/router.js) | `registerTab` — the router knows nothing about any tab; each module registers itself with `open` / `leave`. This is why a tab is inert until you open it |
@@ -1242,7 +1273,7 @@ page.
 What pins it: `tests/test_report.py` (the findings, and the two ways a report could quietly
 lie), `tests/test_portal.py` and its siblings (`test_portal_cost.py`,
 `test_portal_eval.py`, `test_portal_finetune.py`, `test_portal_quantize.py`,
-`test_portal_synth.py`, `test_portal_pipeline.py`) —
+`test_portal_synth.py`, `test_portal_pipeline.py`, `test_queues.py`) —
 `test_a_second_portal_does_not_steal_the_pid_file` is the one whose absence caused real
 confusion. For the client: `tests/test_portal_css.py` (the clipped-column trap) and
 `tests/test_portal_nav.py` (a view missing from the drawer, and a `<body>` state class that

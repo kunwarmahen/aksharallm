@@ -340,6 +340,12 @@ skipped. phase2.sh ignores the skip when there is no checkpoint to resume.">
 
     <div class="scroll-x" id="sched-rules"></div>
 
+    <h3 class="sched-sub">Night queues</h3>
+    <p class="panel-note dim">Job lists in <code>logs/queue/*.sh</code> that sleep until a window
+      opens, run their jobs in order (train, then evaluate) and sleep again. The rules above
+      do not fire them; this is what they are doing.</p>
+    <div class="scroll-x" id="sched-queues"></div>
+
     <details class="sched-events">
       <summary>Scheduler activity</summary>
       <pre id="sched-log" class="log"></pre>
