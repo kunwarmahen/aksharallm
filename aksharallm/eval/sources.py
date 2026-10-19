@@ -104,6 +104,25 @@ SOURCES: dict[str, Source] = {
         ("task_id", "prompt", "canonical_solution", "test", "entry_point"),
         note="164 Python functions with hidden tests. The objective code number.",
     ),
+    # MBPP: 974 crowd-written Python problems, each a sentence and three asserts. A second,
+    # independently written code benchmark -- the one that separates "better at Python"
+    # from "better at HumanEval". The train/validation splits feed GRPO (docs/06); only
+    # `test` is ever reported.
+    "mbpp": Source(
+        "mbpp", ("google-research-datasets/mbpp",), "full", "test",
+        ("task_id", "text", "code", "test_list", "test_setup_code"),
+        note="500 problems, the reported split.",
+    ),
+    "mbpp-train": Source(
+        "mbpp-train", ("google-research-datasets/mbpp",), "full", "train",
+        ("task_id", "text", "code", "test_list", "test_setup_code"),
+        note="374 problems; GRPO's training tasks, never scored.",
+    ),
+    "mbpp-val": Source(
+        "mbpp-val", ("google-research-datasets/mbpp",), "full", "validation",
+        ("task_id", "text", "code", "test_list", "test_setup_code"),
+        note="90 problems; GRPO's held-out set for choosing its best checkpoint.",
+    ),
 }
 
 

@@ -116,6 +116,87 @@ limit, not a container. Read it before pointing this at a model you did not trai
 The dataset's test block ends with a `check(entry_point)` call that the runner has to add.
 Forget it and every assert is *defined* and never *run*, and every model scores 100%.
 
+#### Sampled: `humaneval-pass10`, when greedy counts are too small to compare
+
+Greedy decoding gives each problem one verdict, so a 300M model's score is a handful of
+problems — and **5/164 against 8/164 cannot be told apart** (McNemar p 0.375; that exact
+pair is what prompted this). `humaneval-pass10` asks for **20 samples per problem at
+temperature 0.8** and scores the fraction that pass:
+
+```mermaid
+flowchart LR
+  P[164 prompts<br/>raw, as greedy] --> B[BatchEngine<br/>20 samples each, T 0.8]
+  B -->|cancel at first stop string| C[completions]
+  C --> S[sandbox x 3,280<br/>8 threads]
+  S --> K["per problem: c of 20 pass<br/>pass@k = 1 - C(n-c,k)/C(n,k)"]
+```
+
+- **The estimator is the unbiased one** (Chen et al., 2021). `1 - (1 - c/n)^k` reads higher
+  at small n; a test pins the difference.
+- **Its pass@1 is the *sampled* pass rate**, not greedy pass@1. Different decoding is a
+  different benchmark (gotcha 4), which is why this is a separate suite and not a flag, and
+  why it is left out of `--suite all`.
+- **It is batched**, through the server's `BatchEngine`, with each sequence cancelled when
+  its text reaches a stop string — ~42 min per 300M checkpoint on the 3090, where serial
+  sampling would be hours. A standard error is reported beside each pass@k.
+
+```bash
+python -m aksharallm.eval small-code-py-sft --suite humaneval-pass10 --limit 0 --label pass10
+```
+
+**Measured 2026-10-19, every 300M checkpoint that matters** (20 samples x 164, T 0.8):
+
+| checkpoint | greedy | sampled pass@1 | pass@10 | solved at least once |
+|---|---|---|---|---|
+| `small-code` (base) | 3/164 | 1.1% ± 0.5 | 3.4% ± 1.3 | 7 |
+| `small-code-py` (+ continued Python pretraining) | 3/164 | 1.6% ± 0.7 | 4.7% ± 1.5 | 10 |
+| `small-code-sft` (general SFT) | 5/164 | 1.7% ± 0.7 | 5.3% ± 1.6 | 11 |
+| `small-code-grpo` (GRPO r1 on the general SFT) | 7/164 | **2.9% ± 1.2** | 4.5% ± 1.6 | 8 |
+| `small-code-r3-grpo` | 5/164 | 1.9% ± 0.8 | 4.5% ± 1.6 | 8 |
+| **`small-code-py-sft`** (specialist + code SFT) | **8/164** | 2.6% ± 0.9 | **6.7% ± 1.8** | **13** |
+
+Paired per problem (bootstrap over the 164, sampled pass@1):
+
+- **code SFT vs general SFT: +0.85 pt, 95% CI [−0.03, +1.86], p ≈ 0.06** — 9 problems better,
+  6 worse. Same direction as greedy (8 vs 5), now *nearly* significant rather than p 0.375.
+- **specialist base vs base: +0.55 pt, p ≈ 0.06.** Continued pretraining helps by about the
+  same amount before SFT as after it, which is two near-independent readings agreeing.
+- **SFT on top of either base: +0.6 to +0.95 pt, p 0.05 / 0.02.**
+- **GRPO r1 vs its SFT: pass@1 +1.19 pt (p ≈ 0.01) but pass@10 −0.8 pt (n.s.)** — the RL
+  signature: it concentrated probability on problems the model could already solve and found
+  no new ones (8 solved at least once against the SFT's 11).
+
+**Reading.** Every step of the specialist route moves in the right direction, and the full
+route (base → py → code SFT) roughly **doubles** sampled pass@1 (1.1% → 2.6%) and pass@10
+(3.4% → 6.7%). But the ceiling is the model: the best checkpoint solves **13 of 164 problems
+even once in 20 tries**. At 300M, more post-training redistributes a small pool of solvable
+problems; it does not grow it.
+
+#### MBPP: a second code benchmark, written by different people
+
+HumanEval is 164 problems from one team in one style. A model that improves on it and not on
+anything else has learned *HumanEval*. MBPP (`mbpp`, 500 test problems; `mbpp-pass10`
+sampled) is crowd-written: a sentence and three asserts, no signature. So `build_mbpp` makes
+it HumanEval-shaped — the signature is read **from the reference solution with the AST**
+(the function the first assert *calls*, not the first one defined, since many solutions
+define helpers first), and the docstring is the sentence plus the **first assert as an
+example**, because without it most problems do not say what to return. All three asserts
+are scored, through the same sandbox and `extract_code` as HumanEval.
+
+- **Positive control, run on all 500:** each reference solution passes its own assembled
+  tests. A harness that mis-joined prompt and tests would score every model zero and look
+  exactly like a weak model.
+- **Decontaminated against the code SFT data** with `mix_sft`'s content 13-gram probe:
+  10 of 47,867 `data/sft-code` blocks touch MBPP-test, none strongly; a planted MBPP solution
+  is found (15 shared n-grams, attributed to the right task). The pretraining Python has not
+  yet been scanned for it.
+- `mbpp-train` (374) and `mbpp-val` (90) are cached too, for GRPO; they are never reported.
+
+```bash
+python -m aksharallm.eval fetch mbpp mbpp-train mbpp-val
+python -m aksharallm.eval small-code-py-sft --suite mbpp --limit 0 --label mbpp
+```
+
 ### 5. Judged by another model
 
 Everything above has an objective answer. That covers a lot and misses the thing you would
@@ -1051,10 +1132,11 @@ word `undefined` — exactly where a reader most needs to trust the number.
 
 | # | file | what to look for |
 |---|---|---|
-| 1 | [`eval/suites.py`](../aksharallm/eval/suites.py) | **start here.** `Suite` and the `SUITES` table — every benchmark's chance line, its `expect` sentence and its builder. Then `build_mmlu` / `build_hellaswag` / `build_gsm8k` / `build_humaneval` to see exactly what the model is shown |
+| 1 | [`eval/suites.py`](../aksharallm/eval/suites.py) | **start here.** `Suite` and the `SUITES` table — every benchmark's chance line, its `expect` sentence and its builder. Then `build_mmlu` / `build_hellaswag` / `build_gsm8k` / `build_humaneval` / `mbpp_item` to see exactly what the model is shown |
 | 2 | [`eval/sources.py`](../aksharallm/eval/sources.py) | `Source` and `fetch` — downloaded once into `data/eval/`, with a `.meta.json` recording which copy of the dataset this is. Note the fallback repositories |
 | 3 | [`eval/scoring.py`](../aksharallm/eval/scoring.py) | `_encode_pair` (the continuation tokenized *with* the context — the subtle one), `loglikelihood`, `score_mc` (`acc` vs `acc_norm` vs `acc_greedy`), `generate_until`, `perplexity`. `_batches` is the token-budget batcher |
 | 4 | [`eval/runner.py`](../aksharallm/eval/runner.py) | `Harness` — one suite at a time, loading the model through `infer.Engine` rather than itself, which is where the device policy, adapters and quantized checkpoints come from free |
+| 4b | [`eval/sampled.py`](../aksharallm/eval/sampled.py) | `pass_at_k` first (the unbiased estimator), then `sample_completions` — the batched sampler with its cancel-at-stop — and `score`, which folds 3,280 sandbox verdicts into pass@1/pass@10 with standard errors. Pinned by `tests/test_eval_sampled.py` |
 | 5 | [`eval/judge.py`](../aksharallm/eval/judge.py) | `build_messages` / `parse_grade` / `run` — temperature 0, a rubric per prompt, and `Grade` with ungraded distinct from 1. `release` at the end of `run` |
 | 5b | [`eval/versus.py`](../aksharallm/eval/versus.py) | `verdict` first — a win needs both orderings to agree, so position bias becomes ties. Then `sign_test`, and `load_side`, which is why a comparison costs no generation |
 | 6 | [`eval/report.py`](../aksharallm/eval/report.py) | `Results` → `summary_table` / `compare_table` — a folder of JSON, no database, and the trend across steps |

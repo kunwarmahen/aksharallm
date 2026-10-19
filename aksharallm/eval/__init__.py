@@ -13,12 +13,14 @@ take:
     multiple choice       MMLU, ARC, HellaSwag, PIQA — scored by log-likelihood, never
                           generated, so the number is exactly reproducible.
     generative            GSM8K — the model writes an answer and a regex checks the number.
-    executed              HumanEval — the model writes code and it is run against tests.
+    executed              HumanEval, MBPP — the model writes code and it is run against tests;
+                          `humaneval-pass10` samples it 20 times per problem for pass@k.
     judged                twelve open-ended prompts graded 1-5 by a local Ollama model.
 
     aksharallm.eval.sources    downloading and caching the data (data/eval/)
     aksharallm.eval.suites     what each benchmark asks, and how it is scored
     aksharallm.eval.scoring    the model-side primitives (log-likelihood, greedy decode)
+    aksharallm.eval.sampled    HumanEval sampled: batched generation + unbiased pass@k
     aksharallm.eval.judge      the LLM-judge
     aksharallm.eval.runner     running suites against a checkpoint
     aksharallm.eval.report     every result so far, and the deltas between them

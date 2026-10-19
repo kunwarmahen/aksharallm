@@ -221,8 +221,10 @@ class Harness:
                                     progress=progress, label=name)
         if suite.kind == "gen":
             return self._run_gen(name, items, loaded, opts, progress)
+        if suite.kind == "code" and suite.samples:
+            return self._run_code_sampled(suite, items, loaded, opts, progress)
         if suite.kind == "code":
-            return self._run_code(items, loaded, opts, progress)
+            return self._run_code(items, loaded, opts, progress, label=name)
         raise EvalError(f"suite {name!r} has an unknown kind {suite.kind!r}")
 
     def _answer(self, loaded, prompt: str, opts: Options) -> str:
@@ -275,7 +277,7 @@ class Harness:
         return {"n": len(items), "correct": correct, "accuracy": correct / n,
                 "score": correct / n, "items": records}
 
-    def _run_code(self, items, loaded, opts: Options, progress) -> dict:
+    def _run_code(self, items, loaded, opts: Options, progress, label: str = "humaneval") -> dict:
         """HumanEval, executed. `pass@1` with greedy decoding — one sample per problem.
 
         The generated code runs in `infer/sandbox.py`: a separate, isolated interpreter with
@@ -309,7 +311,7 @@ class Harness:
                             "detail": (verdict.detail or "")[:300],
                             "code": program[:2000]})
             if progress:
-                progress(i + 1, len(items), "humaneval")
+                progress(i + 1, len(items), label)
         n = max(1, len(items))
         # The histogram of *how* it failed is the real signal while pass@1 is pinned at
         # zero: syntax errors give way to name errors, which give way to assertion errors,
@@ -322,6 +324,25 @@ class Harness:
         return {"n": len(items), "passed": passed, "pass@1": passed / n,
                 "score": passed / n, "failures": dict(sorted(failures.items())),
                 "items": records}
+
+    def _run_code_sampled(self, suite, items, loaded, opts: Options, progress) -> dict:
+        """HumanEval sampled `suite.samples` times per problem -- see `eval/sampled.py`.
+        Raw prompts on every stage, exactly as `_run_code`, so base and SFT stay comparable."""
+        from ..infer import sandbox
+        from . import sampled
+
+        ok, why = sandbox.available()
+        if not ok:
+            raise EvalError(f"the sandbox cannot run here ({why}), and HumanEval without "
+                            "execution is not a measurement.")
+        seed = 1234
+        comps = sampled.sample_completions(
+            loaded.model, loaded.tokenizer, [it.prompt for it in items], suite.samples,
+            temperature=suite.temperature, top_p=0.95, max_new=opts.max_new_tokens,
+            device=loaded.device, seed=seed, progress=progress)
+        out = sampled.score(items, comps, ks=(1, 10), progress=progress)
+        out.update({"temperature": suite.temperature, "top_p": 0.95, "seed": seed})
+        return out
 
     # ---- writing it down ---------------------------------------------------------------
     def save(self, result: dict, path: Path | str | None = None) -> Path:
@@ -349,6 +370,11 @@ def describe(name: str, result: dict) -> str:
                 + (f", chance {base * 100:.0f}%" if base else "") + ")")
     if kind == "gen":
         return f"{result['accuracy'] * 100:.1f}%  ({result['correct']}/{result['n']})"
+    if kind == "code" and "pass@10" in result:
+        return (f"pass@10 {result['pass@10'] * 100:.1f}% ± {result['pass@10_stderr'] * 100:.1f}, "
+                f"pass@1 {result['pass@1'] * 100:.1f}% ± {result['pass@1_stderr'] * 100:.1f}  "
+                f"({result['solved_any']}/{result['n']} solved at least once, "
+                f"{result['samples']} samples each)")
     if kind == "code":
         return f"pass@1 {result['pass@1'] * 100:.1f}%  ({result['passed']}/{result['n']})"
     if kind == "judge":

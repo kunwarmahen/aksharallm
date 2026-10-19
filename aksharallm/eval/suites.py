@@ -322,6 +322,59 @@ def build_humaneval(rows: list[dict], **_) -> list[CodeItem]:
     return items
 
 
+def mbpp_item(row: dict) -> CodeItem | None:
+    """One MBPP row as a HumanEval-shaped completion task.
+
+    MBPP gives a sentence, a reference solution and three asserts -- no signature. A base
+    model completing a file needs one, so it is read from the reference solution with the
+    AST (the function the first assert calls), with the sentence and the **first** assert as
+    the docstring: the assert is the only place the expected call shape and return type are
+    stated, and without it most problems are ambiguous ("write a function to find the
+    shared elements" -- returned as what?). All three asserts are scored. The reference's
+    module-level imports go above the signature, as HumanEval's prompts carry theirs.
+    Returns None for a row whose solution does not parse.
+    """
+    import ast
+    import re
+    import textwrap
+
+    code, tests = str(row.get("code") or ""), list(row.get("test_list") or [])
+    if not (code and tests):
+        return None
+    import warnings
+
+    try:
+        # MBPP's solutions write regexes as "\w+" rather than r"\w+": valid code, but a
+        # compile-time SyntaxWarning since 3.12 -- the same noise `run_program` silences.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            tree = ast.parse(code.replace("\r\n", "\n").replace("\t", "    "))
+    except SyntaxError:
+        return None
+    fns = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    called = re.findall(r"\b([A-Za-z_]\w*)\s*\(", tests[0])
+    name = next((c for c in called if c in fns), None)
+    if name is None:
+        return None
+    fn = fns[name]
+    doc = textwrap.fill(" ".join(str(row.get("text") or "").split()), width=84,
+                        initial_indent="    ", subsequent_indent="    ")
+    example = "    >>> " + tests[0].strip().removeprefix("assert").strip()
+    prompt = f'def {name}({ast.unparse(fn.args)}):\n    """\n{doc}\n{example}\n    """\n'
+    pre = [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))]
+    if pre:
+        prompt = "\n".join(ast.unparse(n) for n in pre) + "\n\n" + prompt
+    setup = str(row.get("test_setup_code") or "").strip()
+    body = "\n".join(t.strip() for t in tests)
+    return CodeItem(id=f"mbpp/{row.get('task_id')}", prompt=prompt,
+                    tests=(setup + "\n" if setup else "") + body + "\n", entry_point=name)
+
+
+def build_mbpp(rows: list[dict], **_) -> list[CodeItem]:
+    """MBPP, executed exactly like HumanEval (see `mbpp_item` for the prompt)."""
+    return [it for it in (mbpp_item(r) for r in rows) if it is not None]
+
+
 # --------------------------------------------------------------------------------------
 # open-ended: the LLM-judge set
 # --------------------------------------------------------------------------------------
@@ -570,6 +623,9 @@ class Suite:
     #: measurement — see the same argument in the quantize panel.
     baseline: float | None = None
     builder: str = ""
+    #: Completions per problem for a sampled code suite (0 = greedy, one per problem).
+    samples: int = 0
+    temperature: float = 0.0
 
 
 SUITES: dict[str, Suite] = {
@@ -610,6 +666,25 @@ SUITES: dict[str, Suite] = {
         "0/164 for a long time. The in-repo tasks in aksharallm/infer/tasks.py are the "
         "gentler progress meter; this is the number you would publish.",
         source="humaneval", default_limit=164, builder="build_humaneval"),
+    "humaneval-pass10": Suite(
+        "humaneval-pass10", "code", "HumanEval sampled: 20 completions per problem at "
+        "temperature 0.8, scored as unbiased pass@1 and pass@10.",
+        "The same 164 problems with the power greedy decoding lacks: each problem scores "
+        "c/20 instead of 0 or 1, so two checkpoints a few problems apart can be told apart. "
+        "Its pass@1 is the SAMPLED pass rate and is not comparable with `humaneval`'s.",
+        source="humaneval", default_limit=164, builder="build_humaneval",
+        samples=20, temperature=0.8),
+    "mbpp": Suite(
+        "mbpp", "code", "500 crowd-written Python problems (MBPP test), three asserts each.",
+        "The second code benchmark, written by different people in a different style from "
+        "HumanEval. A model that only improves on one of the two learned that benchmark.",
+        source="mbpp", default_limit=500, builder="build_mbpp"),
+    "mbpp-pass10": Suite(
+        "mbpp-pass10", "code", "MBPP sampled: 20 completions per problem at temperature "
+        "0.8, scored as unbiased pass@1 and pass@10.",
+        "MBPP with the power greedy decoding lacks. Its pass@1 is the SAMPLED pass rate and "
+        "is not comparable with `mbpp`'s.",
+        source="mbpp", default_limit=500, builder="build_mbpp", samples=20, temperature=0.8),
     "judge": Suite(
         "judge", "judge", "12 open-ended prompts graded 1-5 by a local Ollama model.",
         "The only suite here that sees fluency, format-following and invented facts — the "
@@ -634,11 +709,14 @@ SUITES: dict[str, Suite] = {
 #: hundreds of tokens per item; the MC suites are a single forward pass per choice.
 DEFAULT_SUITES = ("perplexity", "arc-easy", "hellaswag", "piqa", "mmlu")
 FAST_SUITES = ("perplexity", "arc-easy", "piqa")
-ALL_SUITES = tuple(SUITES)
+# Sampled suites are left out of `all`: 20 generations per problem would make `--suite all`
+# several times slower than it has always been. Ask for them by name.
+ALL_SUITES = tuple(s for s in SUITES if not SUITES[s].samples)
 
 _BUILDERS = {
     "build_mmlu": build_mmlu, "build_arc": build_arc, "build_hellaswag": build_hellaswag,
     "build_piqa": build_piqa, "build_gsm8k": build_gsm8k, "build_humaneval": build_humaneval,
+    "build_mbpp": build_mbpp,
 }
 
 
