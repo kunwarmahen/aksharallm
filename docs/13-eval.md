@@ -188,8 +188,17 @@ are scored, through the same sandbox and `extract_code` as HumanEval.
   exactly like a weak model.
 - **Decontaminated against the code SFT data** with `mix_sft`'s content 13-gram probe:
   10 of 47,867 `data/sft-code` blocks touch MBPP-test, none strongly; a planted MBPP solution
-  is found (15 shared n-grams, attributed to the right task). The pretraining Python has not
-  yet been scanned for it.
+  is found (15 shared n-grams, attributed to the right task).
+- **And against the pretraining Python** — both bins the specialist trained on (the base's
+  1.5B codeparrot tokens and the fresh 825M), by the share of each item's *distinct* 13-grams
+  found anywhere in them. **No reference solution has half its n-grams in the corpus**; the
+  highest is 37%, and the top three are one-line idioms (`''.join(x.capitalize() …)` for
+  snake-to-camel, a regex date swap). One question of 413 overlaps at all. Tests reach 48% —
+  assert literals, the same digit-group effect as above. Counting *distinct* n-grams rather
+  than hits matters for code: a solution copied into a GitHub file would light up most of
+  its windows, an idiom only a few. Result: `logs/eval/audit-mbpp-vs-pretraining-python.json`
+  (named so the contamination card's `contamination-*.json` glob does not read it as its
+  latest report).
 - `mbpp-train` (374) and `mbpp-val` (90) are cached too, for GRPO; they are never reported.
 
 ```bash
