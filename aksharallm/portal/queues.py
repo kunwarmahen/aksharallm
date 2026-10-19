@@ -32,7 +32,14 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 _DEFAULT = re.compile(r"^(START|END|TRAIN_END)=\$\{\1:-(\d{1,2}:\d{2})\}", re.M)
-_DONE = re.compile(r"^DONE=(\S+)", re.M)
+# `DONE=logs/queue/x; mkdir -p "$DONE"` is as common as a line of its own, so the value stops
+# at the first `;`, and quotes are not part of the path. Capturing `\S+` read the `;` into the
+# path, looked in a directory that does not exist, and showed a queue six jobs in as none.
+_DONE = re.compile(r"""^DONE=["']?([^\s;"']+)""", re.M)
+# A queue's own last word that it completed its list. ALL.done is one way to say it; most
+# queues just `say "done"` / `say "ALL DONE"` as they exit. Without this, a queue that ran
+# every job and exited cleanly read "not running" -- the word for a crash.
+_FINISHED = re.compile(r"(^|\s)(all )?done\.?$", re.I)
 _SAY = re.compile(r"^=== (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (.*)$")
 
 
@@ -100,10 +107,10 @@ def describe(script: Path, root: Path, now: datetime | None = None) -> dict | No
     done = ([p.name[: -len(".done")] for p in
              sorted(done_dir.glob("*.done"), key=lambda p: p.stat().st_mtime)]
             if done_dir.is_dir() else [])
-    finished = "ALL" in done
     pids = _pids_running(script)
     alive = bool(pids)
     said_at, said = _last_say(log)
+    finished = "ALL" in done or (not alive and bool(said and _FINISHED.search(said)))
     if alive:
         state = said or "running"
     else:

@@ -84,3 +84,29 @@ def test_a_script_that_never_ran_is_not_listed(tmp_path):
     q.mkdir(parents=True)
     (q / "draft.sh").write_text(SCRIPT.format(name="draft"))
     assert queues(tmp_path) == []
+
+
+def test_done_on_the_same_line_as_other_shell_still_finds_the_markers(tmp_path):
+    """`DONE=logs/queue/x; mkdir -p "$DONE"` -- the `;` is not part of the directory. The old
+    pattern read it in, looked in `x;/`, and showed a queue six jobs in as having done none."""
+    script = make(tmp_path, "pass10", LOG, done=["small-code", "small-code-sft"])
+    script.write_text(script.read_text().replace(
+        "DONE=logs/queue/pass10\n", 'DONE=logs/queue/pass10; mkdir -p "$DONE"\n'))
+    (q,) = queues(tmp_path)
+    assert sorted(q["done"]) == ["small-code", "small-code-sft"]
+
+
+def test_a_queue_that_said_done_and_exited_is_finished_not_dead(tmp_path):
+    """Most queues end with `say "done"`, not an ALL.done marker. Reading that as "not running"
+    -- the word for a crash -- made a clean night look like a failed one."""
+    make(tmp_path, "mbpp", "=== 2026-10-19 10:02:11 small-code\n=== 2026-10-19 10:31:02 done\n")
+    (q,) = queues(tmp_path)
+    assert q["finished"] and q["state"] == "finished"
+    # ...while a queue that merely stopped talking mid-list is still not running.
+    make(tmp_path, "mbpp", "=== 2026-10-19 10:02:11 small-code\n")
+    (q,) = queues(tmp_path)
+    assert not q["finished"] and q["state"] == "not running"
+    # "done for tonight" is a nightly pause, not the end of the list.
+    make(tmp_path, "mbpp", "=== 2026-10-19 05:06 window over or nothing fits; done for tonight\n")
+    (q,) = queues(tmp_path)
+    assert not q["finished"]

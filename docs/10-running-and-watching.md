@@ -222,9 +222,15 @@ flowchart LR
 queue already leaves behind — nothing has to be added to the script: alive or not from
 `/proc` (a queue killed by a reboot reads **not running**, never the "sleeping until 00:30"
 its log ended on), its state from the last `===` line of its log, its window from the
-script's `START=`/`END=` defaults, and which jobs are done from the markers. This section
-exists because for two nights the panel said nothing was scheduled while a queue trained
-every night — the portal only knew about `schedule.json`.
+script's `START=`/`END=` defaults, and which jobs are done from the markers in the directory
+its `DONE=` line names. A queue that exited after a last line of `done` / `ALL DONE` (or
+wrote `ALL.done`) reads **finished**; one that stopped talking mid-list reads **not
+running**. This section exists because for two nights the panel said nothing was scheduled
+while a queue trained every night — the portal only knew about `schedule.json`. Two more
+misreadings were fixed later, both from writing a queue in a slightly different style:
+`DONE=logs/queue/x; mkdir -p "$DONE"` read the `;` into the path and showed six finished
+jobs as none, and a queue that ended with `say "done"` rather than an `ALL.done` marker read
+**not running** — the word for a crash.
 
 Two rules for queues, both paid for: **never edit a script a running queue will execute**
 (bash reads it as it goes; editing `stage.sh` mid-queue once crashed one), and copy the
