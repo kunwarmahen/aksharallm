@@ -499,6 +499,13 @@ next attempt:
 - the lever for HumanEval at this size is **more Python in pretraining** — the Python
   specialist (PLAN.md, Phase 4) — not more RL.
 
+**Tested since (2026-10-19), with HumanEval sampled 20 times per problem** ([doc 13](13-eval.md)):
+both halves held. The Python specialist plus a code SFT raised sampled pass@1 from the general
+SFT's 1.7% to 2.6% and pass@10 from 5.3% to 6.7% ([doc 8](08-scaling.md)). And GRPO r1 showed
+what RL does at this size in one row: **pass@1 +1.2 points over its SFT (p ≈ 0.01), pass@10
+down 0.8, and 8 problems solved at least once against the SFT's 11.** It made the model more
+reliable on programs it could already write and found no new ones — sharpening, not learning.
+
 **The whole of Phase 3 in one line:** SFT made a chat model; of everything after it, only the
 first GRPO run beat SFT on the judge (11–1, p = 0.006), and nothing moved HumanEval.
 

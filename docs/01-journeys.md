@@ -496,19 +496,26 @@ The expensive routes. Each one is a real research direction rather than a switch
       --max-train-tokens 1400000000 --train-name codeparrot-fresh.raw.bin
   python -m aksharallm.data.dedup data/py/codeparrot-fresh.raw.bin \
       --write-kept data/py/codeparrot-fresh.bin --against data/blend/codeparrot-python.bin
-  scripts/experiment.sh small-code-py                  # ~4 nights; stop/resume as usual
+  scripts/experiment.sh small-code-py                  # 3-4 nights; stop/resume as usual
   python -m aksharallm.eval domains small-code-py --val-bin data/blend/val.bin
+  python -m aksharallm.eval domains small-code-py --val-bin data/py-heldout/val.bin
   python -m aksharallm.eval small-code-py --suite humaneval --limit 0
   # then the code SFT, on the decontaminated code mix (data.mix_sft; docs/08)
   python -m aksharallm.data.mix_sft --part data/sft-parts/self-oss-instruct \
       --part data/sft-parts/magicoder-python --part data/sft:0.32 \
       --out-dir data/sft-code --tokenizer data/blend/tokenizer.json
   scripts/stage.sh sft small-code-py
+  python -m aksharallm.eval small-code-py-sft --suite humaneval-pass10 --limit 0
   ```
 
-  **How you know it worked:** in `eval domains` the Python loss falls below the base's
-  1.246 while prose stays near 2.763, and HumanEval moves off the base's 3/164. In the
-  portal it is `small-code-py` in the run picker, with Start on the dashboard.
+  **How you know it worked:** the loss on Python **no run has seen** (`data/py-heldout`,
+  built in [docs/08](08-scaling.md)) falls below the base's 1.564 — here to 1.465 — while
+  prose on the blend's val stays within ~0.1 of 2.763. Do not judge it on the blend's own
+  Python span: that shares duplicated files with the base's training data and rewards
+  memory. Greedy HumanEval counts are too small to compare at 300M, so the code SFT is judged
+  sampled (`humaneval-pass10`): here pass@10 **6.7% against the general SFT's 5.3%**. In the
+  portal it is `small-code-py` in the run picker, with Start on the dashboard, and the
+  sampled suite is a checkbox on the **Eval** tab.
 - **Scale up** — a bigger model on more tokens. The honest answer to most quality problems,
   and the one that costs the most.
 

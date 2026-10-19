@@ -801,7 +801,7 @@ own — the specialist's 70/30 weights would cut the blend's val in the wrong pl
 
 **How long, on this card:** ~26.6k tok/s is ~96M tokens an hour. A 00:30–05:30 window,
 less startup and the checks, trains ~4.5 hours — ~1,700 steps — so the 6,000 steps are
-**about four nights**. `logs/queue/py-nights.sh` runs exactly that: start or resume, stop
+**about four nights** (in the event, three windows plus a two-hour daytime session). `logs/queue/py-nights.sh` runs exactly that: start or resume, stop
 itself at 05:00 through the STOP file, then `eval domains` and a full HumanEval on that
 night's best checkpoint, so every night adds a point to both curves.
 
@@ -845,19 +845,74 @@ At `BS=8 ACCUM=8` it is 748 steps an epoch, 2 epochs, ~85 minutes: one night win
 its evaluation. Judge it on HumanEval and judge48, and `eval versus` against the general
 `small-code-sft`.
 
-**Why it's worth it:** a 300M model specialised on Python routinely beats a general 7B
-model *on Python*, while running ~20× faster — and unlike most targets, the eval is
-**objective**: HumanEval/MBPP run the generated code against unit tests. That objective
-score is the realistic "genuinely useful" outcome for this repo.
+### Judging it: Python the model has never seen, and HumanEval sampled
+
+The first two nights read as a failure on the obvious check. On the Python span of the
+blend's `val.bin` the specialist was *worse* than the base (1.163 → 1.189 over every one of
+its 1,464 windows), and the loss was concentrated in the windows the base found easiest. That
+span shares duplicated GitHub files with the base's training data — setuptools tables,
+vendored ansible modules — so it rewards **memorised copies**, which the deduplicated fresh
+data deliberately removed. A slice that rewards memory cannot judge a run built to stop
+memorising, so a second one was built from code **no run has seen in any copy**:
+
+```bash
+python -m aksharallm.data.prepare codeparrot-python --out-dir data/py-heldout \
+    --tokenizer data/blend/tokenizer.json --val-tokens 0 --skip-docs 1194000 \
+    --max-train-tokens 3000000 --train-name heldout.raw.bin
+python -m aksharallm.data.dedup data/py-heldout/heldout.raw.bin \
+    --write-kept data/py-heldout/val.bin \
+    --against data/blend/codeparrot-python.bin --against data/py/codeparrot-fresh.raw.bin
+python -m aksharallm.eval domains small-code-py --val-bin data/py-heldout/val.bin \
+    --batches 100 --device cpu
+```
+
+`--skip-docs 1194000` starts past every file Phase 2 and Phase 4 read from the stream; the
+dedup then drops anything near-duplicating either training bin (372 of 1,229 files, only 17
+exactly). It keeps **857 files, 1.69M tokens**, and `val.manifest.json` beside it names its
+one span so `eval domains` reads it like any other val file.
+
+```mermaid
+flowchart LR
+    B["small-code<br/>never-seen 1.564"] -->|"6,000 steps<br/>70% fresh Python"| P["small-code-py<br/>1.465"]
+    P -->|"code SFT<br/>data/sft-code"| S["small-code-py-sft<br/>pass@10 6.7%"]
+    B -->|"general SFT"| G["small-code-sft<br/>pass@10 5.3%"]
+```
+
+**Measured (finished 2026-10-10 and 2026-10-18):**
+
+| | base | `small-code-py` (step 5,999) | general SFT | **code SFT** (`small-code-py-sft`) |
+|---|---|---|---|---|
+| never-seen Python loss | 1.564 | **1.465** | 1.654 | 1.570 |
+| blend val prose / Python | 2.763 / 1.246 | 2.794 / 1.231 | 2.903 / 1.350 | 2.913 / 1.332 |
+| ARC-Easy / PIQA | 49.2 / 64.8% | 48.8 / 65.6% | 49.7 / 65.5% | 48.0 / 63.3% |
+| HumanEval greedy | 3/164 | 3/164 | 5/164 | **8/164** |
+| HumanEval sampled pass@1 / pass@10 | 1.1 / 3.4% | 1.6 / 4.7% | 1.7 / 5.3% | **2.6 / 6.7%** |
+
+- **The continued pretraining did what it was for.** Perplexity on unseen Python 4.78 → 4.33;
+  prose rose 0.03 (the line was 0.1); the knowledge suites did not move. It took three
+  night windows of ~1,700 steps each plus one daytime session of 859 (2026-10-09
+  13:41–15:52), at a steady 27.2k tok/s throughout.
+- **SFT adds ~0.1 of raw-text loss on both routes** (1.465 → 1.570 here, 1.564 → 1.654 for
+  the general SFT). That is the same cost the general SFT paid in Phase 3, and the specialist
+  keeps its lead through it.
+- **Greedy HumanEval is too coarse to judge** — 8 against 5 is McNemar p 0.375. Sampled
+  (`humaneval-pass10`, [doc 13](13-eval.md)), the code SFT beats the general SFT by +0.85 pt
+  pass@1 paired over the 164 problems (p ≈ 0.06), and the specialist base beats the base by
+  +0.55 pt (p ≈ 0.06): two near-independent readings in the same direction.
+- **And it is still small.** The best checkpoint solves 13 of 164 problems even once in 20
+  tries. The route roughly doubled the pass rates; the 300M model is what caps them. The
+  folklore that a small specialist beats a general 7B at its specialty is about models a
+  few times this size trained on far more code — it is not what a 300M model on 1B tokens of
+  Python does.
 
 (For a *different* domain later, the same recipe applies — swap the corpus. For a small
 personal corpus, prefer RAG over pretraining; see below.)
 
 ---
 
-## Phase 3 — pushing to ~1B on one GPU
+## Later — pushing to ~1B on one GPU
 
-You flagged this as a future TODO. The techniques, in the order you'd reach for them:
+The item after the Python specialist, and the lever its results point at. The techniques, in the order you'd reach for them:
 
 | technique | saves | costs |
 |---|---|---|
