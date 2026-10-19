@@ -67,7 +67,7 @@ LAUNCH_META=$RUN_DIR/launch.meta
 # directories, so an unknown base fails without littering checkpoints/ with an empty dir.
 if [ -z "${TOK:-}" ]; then
     case "$BASE_RUN" in
-        small-code) TOK=data/blend/tokenizer.json ;;
+        small-code|small-code-py) TOK=data/blend/tokenizer.json ;;   # -py: continued pretraining, same tokenizer (gotcha 3)
         small)      TOK=data/fineweb/tokenizer.json ;;
         tiny)       TOK=data/tinystories/tokenizer.json ;;
         *) echo "ERROR: cannot infer tokenizer for base '$BASE_RUN'; set TOK=..." >&2; exit 1 ;;
