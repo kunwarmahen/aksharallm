@@ -23,7 +23,8 @@
 #   BS=8  ACCUM=8                  SFT micro-batch and accumulation (BS*ACCUM*SEQ = tokens/step)
 #   MICRO=8                        GRPO completions scored at once (memory only)
 #   GROUP=8  STEPS=500  REWARD=code   GRPO group size, budget and reward
-#   TASKS=data/synth/py-v1 HOLDOUT=20 GRPO tasks (default when present; TASKS=builtin = the 10)
+#   TASKS=data/synth/py-v1 HOLDOUT=20 GRPO tasks (default when present; TASKS=builtin = the 10;
+#                                  TASKS=mbpp = MBPP-train, best on MBPP-validation)
 #   TEMP=0.8 PARTIAL=0             GRPO sampling temperature; reward for runs-but-wrong (0.1 = rounds 1-2)
 #   RESUME=auto|none|<path>        continue a stopped stage (default auto); none starts over
 #   STAGE_RUN=small-code-r2-grpo   a second attempt in its own directory (must end in -<stage>)
@@ -173,7 +174,12 @@ case "$STAGE" in
         # TASKS=builtin forces the old behaviour; HOLDOUT=N changes the held-out count.
         TASK_ARGS=()
         TASKS=${TASKS:-data/synth/py-v1}
-        if [[ "$TASKS" != builtin && -e "$TASKS" ]]; then
+        if [[ "$TASKS" == mbpp ]]; then
+            # MBPP-train to learn on, MBPP-validation (90) to choose the best on; HOLDOUT=N
+            # takes the first N of those. MBPP-test is never trained on.
+            TASK_ARGS=(--tasks mbpp --holdout "${HOLDOUT:-0}")
+            echo "tasks:    MBPP-train, best chosen on MBPP-validation"
+        elif [[ "$TASKS" != builtin && -e "$TASKS" ]]; then
             TASK_ARGS=(--tasks "$TASKS" --holdout "${HOLDOUT:-20}")
             echo "tasks:    $TASKS (holdout ${HOLDOUT:-20})"
         else

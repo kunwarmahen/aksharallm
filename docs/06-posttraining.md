@@ -506,6 +506,29 @@ what RL does at this size in one row: **pass@1 +1.2 points over its SFT (p ≈ 0
 down 0.8, and 8 problems solved at least once against the SFT's 11.** It made the model more
 reliable on programs it could already write and found no new ones — sharpening, not learning.
 
+### Round 4: human-written tasks, held out by split (`--tasks mbpp`)
+
+Round 3's lesson, made into a flag. `--tasks mbpp` (`TASKS=mbpp scripts/stage.sh grpo
+small-code-py`) trains on **MBPP-train** and chooses its best checkpoint on **MBPP-validation**,
+a different split of a human-written set, so the held-out line can no longer be the same
+teacher's phrasing seen again. MBPP-test, the reported number, cannot be loaded as tasks at
+all (`infer.tasks.mbpp_tasks` refuses it). Training tasks are dropped by function name if the
+name appears in MBPP-test, MBPP-validation, HumanEval or the Playground: 337 of 374 remain.
+
+```mermaid
+flowchart LR
+  T["MBPP-train<br/>337 after name filter"] -->|"GRPO: reward = tests pass"| P[policy]
+  V["MBPP-validation, 90<br/>greedy every 50 steps"] -->|chooses| B[grpo_best.pt]
+  P --> B
+  X["MBPP-test, 500"] -.never loaded as tasks.-> P
+  B -->|scored once| X
+```
+
+It starts from the **code SFT** (`small-code-py-sft`), not the general one, because on MBPP the
+two solve almost disjoint problems (27 and 30 solved, 4 in common; [doc 13](13-eval.md)): RL
+on top of the code SFT is the combination nothing has measured yet. Expect what round 1
+showed — greedy pass rates up, nothing the model could not already nearly write.
+
 **The whole of Phase 3 in one line:** SFT made a chat model; of everything after it, only the
 first GRPO run beat SFT on the judge (11–1, p = 0.006), and nothing moved HumanEval.
 

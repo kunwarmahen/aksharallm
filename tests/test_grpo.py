@@ -404,3 +404,67 @@ def test_partial_credit_is_off_unless_asked_for():
     assert CodeReward(task)(task.prompt, "    return a - b\n") == 0.0
     assert CodeReward(task)(task.prompt, "    return a + b\n") == 1.0
     assert CodeReward(task, partial=0.1)(task.prompt, "    return a - b\n") == 0.1
+
+
+# ---- MBPP as GRPO's tasks ----------------------------------------------------------------
+
+_MBPP = {
+    "mbpp-train": [
+        {"task_id": 601, "text": "Write a function to add two numbers.",
+         "code": "def add(a, b):\n    return a + b", "test_setup_code": "",
+         "test_list": ["assert add(1, 2) == 3", "assert add(0, 0) == 0", "assert add(-1, 1) == 0"]},
+        {"task_id": 602, "text": "Write a function to double a number.",
+         "code": "def dbl(x):\n    return 2 * x", "test_setup_code": "",
+         "test_list": ["assert dbl(2) == 4", "assert dbl(0) == 0", "assert dbl(-3) == -6"]},
+        {"task_id": 603, "text": "Write a function to negate a number.",
+         "code": "def neg(x):\n    return -x", "test_setup_code": "",
+         "test_list": ["assert neg(2) == -2", "assert neg(0) == 0", "assert neg(-3) == 3"]},
+    ],
+    "mbpp-val": [
+        {"task_id": 511, "text": "Write a function to double a number.",
+         "code": "def dbl(x):\n    return x + x", "test_setup_code": "",
+         "test_list": ["assert dbl(5) == 10", "assert dbl(1) == 2", "assert dbl(0) == 0"]},
+    ],
+    "mbpp": [
+        {"task_id": 11, "text": "Write a function to negate a number.",
+         "code": "def neg(x):\n    return 0 - x", "test_setup_code": "",
+         "test_list": ["assert neg(1) == -1", "assert neg(4) == -4", "assert neg(0) == 0"]},
+    ],
+}
+
+
+@pytest.fixture
+def fake_mbpp(monkeypatch):
+    from aksharallm.eval import sources
+    monkeypatch.setattr(sources, "load", lambda name, root=None, **kw: list(_MBPP[name]))
+
+
+def test_mbpp_test_split_can_never_be_a_training_task(fake_mbpp):
+    from aksharallm.infer.tasks import mbpp_tasks
+    with pytest.raises(ValueError, match="benchmark"):
+        mbpp_tasks("test")
+    tr, _ = mbpp_tasks("train")
+    assert [t.entry_point for t in tr] == ["add", "dbl", "neg"]
+
+
+def test_grpo_drops_training_tasks_named_like_validation_or_test(fake_mbpp):
+    """`dbl` is a validation name and `neg` a test name: neither may be trained on, or the
+    held-out score is partly a training score and the benchmark partly a training set."""
+    from aksharallm.infer.tasks import mbpp_tasks, mbpp_test_names
+    held, _ = mbpp_tasks("val")
+    exclude = mbpp_test_names() | {t.entry_point for t in held}
+    tr, dropped = mbpp_tasks("train", exclude=exclude)
+    assert [t.entry_point for t in tr] == ["add"] and dropped["excluded_name"] == 2
+
+
+def test_an_mbpp_reference_body_earns_full_reward_and_a_wrong_one_none(fake_mbpp):
+    from aksharallm.infer import sandbox
+    from aksharallm.infer.tasks import mbpp_tasks
+    ok, why = sandbox.available()
+    if not ok:
+        pytest.skip(why)
+    from aksharallm.train.grpo import CodeReward
+    (task, *_), _ = mbpp_tasks("train")
+    reward = CodeReward(task)
+    assert reward(task.prompt, "    return a + b\n") == 1.0
+    assert reward(task.prompt, "    return a - b\n") == 0.0

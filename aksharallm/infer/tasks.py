@@ -350,6 +350,47 @@ def load_task_file(path, exclude: set[str] = frozenset()) -> tuple[list[CodeTask
     return tasks, dropped
 
 
+def mbpp_tasks(split: str, exclude: set[str] = frozenset()) -> tuple[list[CodeTask], dict]:
+    """MBPP problems as `CodeTask`s -- `split` is "train" (374) or "val" (90), never "test".
+
+    The prompt is exactly the one the `mbpp` eval suite scores (`eval.suites.mbpp_item`), so
+    what GRPO practises on and what the benchmark asks are the same shape. The **test**
+    split is refused here: it is the reported number, and a trainer that could load it is
+    one typo away from training on the benchmark. `exclude` drops tasks by function name,
+    as for synth tasks -- the trainer passes MBPP-test's and HumanEval's names, because a
+    training task called `remove_Occ` is the test's `remove_Occ` whatever its wording.
+    Needs `python -m aksharallm.eval fetch mbpp-train mbpp-val` first.
+    """
+    from ..eval import sources
+    from ..eval.suites import mbpp_item
+
+    if split not in ("train", "val"):
+        raise ValueError(f"MBPP split {split!r}: only 'train' and 'val' may be trained or "
+                         "selected on; 'test' is the benchmark")
+    tasks, dropped = [], {"unparseable": 0, "excluded_name": 0}
+    for row in sources.load(f"mbpp-{split}", None, auto_fetch=False):
+        item = mbpp_item(row)
+        if item is None:
+            dropped["unparseable"] += 1
+        elif item.entry_point in exclude:
+            dropped["excluded_name"] += 1
+        else:
+            tasks.append(CodeTask(id=item.id, title=item.entry_point, prompt=item.prompt,
+                                  tests=item.tests, entry_point=item.entry_point))
+    return tasks, dropped
+
+
+def mbpp_test_names() -> set[str]:
+    """MBPP-test's function names (empty if it has not been fetched)."""
+    from ..eval import sources
+    from ..eval.suites import mbpp_item
+    try:
+        rows = sources.load("mbpp", None, auto_fetch=False)
+    except Exception:
+        return set()
+    return {it.entry_point for it in map(mbpp_item, rows) if it is not None}
+
+
 def split_holdout(tasks: list[CodeTask], n: int, seed: int = 0) -> tuple[list, list]:
     """`(train, held_out)`, split by **function name**, not by task.
 

@@ -377,9 +377,10 @@ def main():
     ap.add_argument("--reward", choices=["code", "substring"], default="code")
     ap.add_argument("--needle", default=" dragon", help="substring reward target (toy)")
     ap.add_argument("--chat", action="store_true", help="prompt code tasks in chat form")
-    ap.add_argument("--tasks", default=None, metavar="PATH",
-                    help="code tasks from a synth dataset (samples.jsonl or its folder) "
-                         "instead of the ten built-in Playground tasks")
+    ap.add_argument("--tasks", default=None, metavar="PATH|mbpp",
+                    help="code tasks from a synth dataset (samples.jsonl or its folder), or "
+                         "'mbpp' (train on MBPP-train, hold out MBPP-validation), instead of "
+                         "the ten built-in Playground tasks")
     ap.add_argument("--holdout", type=int, default=None, metavar="N",
                     help="tasks never trained on, scored greedily every --eval-every steps; "
                          "the best checkpoint is chosen on them (default 20 with --tasks, "
@@ -454,10 +455,33 @@ def main():
     prompts: list[tuple[list[int], str, RewardFn]] = []
     held_out: list[tuple[list[int], str, RewardFn]] = []
     if args.reward == "code":
-        task_list = code_tasks(args)
-        if args.holdout is None:
-            args.holdout = 20 if args.tasks else 0
-        train_tasks, held_tasks = split_holdout(task_list, args.holdout)
+        if args.tasks == "mbpp":
+            # Train on MBPP-train, choose the best checkpoint on MBPP-validation: a held-out
+            # set from a *different split*, not names carved off the training file. r3 held
+            # out synth tasks by name and went 20 -> 45% on them while HumanEval did not move,
+            # because they shared a teacher, a topic grid and a phrasing. MBPP-test is the
+            # benchmark and is never loaded here (mbpp_tasks refuses it).
+            from ..infer.tasks import CODE_TASKS, mbpp_tasks, mbpp_test_names
+            held_tasks, _ = mbpp_tasks("val")
+            if args.holdout:
+                held_tasks = held_tasks[:args.holdout]
+            # By name, as for synth tasks: 7 MBPP-train functions share a name with a
+            # validation task, and a held-out score that is partly a training score picks
+            # the checkpoint that memorised best.
+            exclude = ({t.entry_point for t in CODE_TASKS} | humaneval_names()
+                       | mbpp_test_names() | {t.entry_point for t in held_tasks})
+            train_tasks, dropped = mbpp_tasks("train", exclude=exclude)
+            print(f"tasks      {len(train_tasks)} MBPP-train (dropped: "
+                  + ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in dropped.items())
+                  + f"), {len(held_tasks)} MBPP-validation held out")
+            if not train_tasks:
+                raise SystemExit("no MBPP tasks: python -m aksharallm.eval fetch mbpp "
+                                 "mbpp-train mbpp-val")
+        else:
+            task_list = code_tasks(args)
+            if args.holdout is None:
+                args.holdout = 20 if args.tasks else 0
+            train_tasks, held_tasks = split_holdout(task_list, args.holdout)
 
         def as_prompt(task):
             # `instruction` is a property. This was `task.instruction()`, which raised the
