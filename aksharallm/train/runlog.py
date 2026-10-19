@@ -94,6 +94,9 @@ def split_sessions(records: Iterable[dict]) -> list[dict]:
             if cur is None:
                 cur = new_session()
             cur["end"] = rec
+            fv = _final_val(rec)
+            if fv and not (cur["vals"] and cur["vals"][-1]["step"] == fv["step"]):
+                cur["vals"].append(fv)
             cur = None
         elif "val_loss" in rec:
             if cur is None:
@@ -106,6 +109,35 @@ def split_sessions(records: Iterable[dict]) -> list[dict]:
                 cur = new_session(unmarked=True)
             cur["steps"].append(rec)
     return sessions
+
+
+def _final_val(end: dict) -> dict | None:
+    """A `session_end`'s closing evaluation as an ordinary `{step, val_loss}` row, or None.
+
+    The trainers evaluate once more on their last step and record it only in the session
+    record, spelt `final_val_loss` -- deliberately not `val_loss`, because a reader scanning
+    for that key would index the record by a `step` it does not have (gotcha 24a). But
+    every reader that skips it shows a finished run's *second-to-last* validation: the
+    dashboard said best 1.1401 at step 5,500 for a run whose checkpoint holds 1.1387 at 5,999.
+    """
+    v, step = end.get("final_val_loss"), end.get("last_step")
+    if v is None or step is None:
+        return None
+    return {"step": step, "val_loss": v, "final": True}
+
+
+def val_records(records: Iterable[dict]) -> list[dict]:
+    """Every validation reading, in log order: the `{step, val_loss}` rows plus each session's
+    closing evaluation, unless a row at that step already says it."""
+    out: list[dict] = []
+    for r in records:
+        if r.get("event") == "session_end":
+            fv = _final_val(r)
+            if fv and not (out and out[-1]["step"] == fv["step"]):
+                out.append(fv)
+        elif "val_loss" in r and "step" in r:
+            out.append(r)
+    return out
 
 
 def load_sessions(path: str | Path) -> list[dict]:
@@ -189,8 +221,9 @@ def series(records: Iterable[dict], max_points: int = 2000) -> dict[str, Any]:
     series so a 40,000-step run at `log_every=1` can't hand the browser a megabyte — the
     *last* point is always kept, because the newest reading is the one being watched.
     """
+    records = list(records)
     steps = [r for r in records if is_step_record(r)]
-    vals = [r for r in records if "val_loss" in r]
+    vals = val_records(records)
 
     if max_points and len(steps) > max_points:
         stride = len(steps) // max_points + 1
@@ -235,7 +268,7 @@ def latest(records: Iterable[dict]) -> dict:
     """
     records = list(records)
     step_recs = [r for r in records if is_step_record(r)]
-    val_recs = [r for r in records if "val_loss" in r]
+    val_recs = val_records(records)
     last = step_recs[-1] if step_recs else {}
     starts = [r for r in records if r.get("event") == "session_start"]
     ends = [r for r in records if r.get("event") == "session_end"]
