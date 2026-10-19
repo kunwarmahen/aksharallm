@@ -197,6 +197,27 @@ python -m aksharallm.eval fetch mbpp mbpp-train mbpp-val
 python -m aksharallm.eval small-code-py-sft --suite mbpp --limit 0 --label mbpp
 ```
 
+**Measured 2026-10-19, greedy, all 500** (`logs/queue/mbpp.sh`):
+
+| checkpoint | MBPP | syntax errors | paired (McNemar) |
+|---|---|---|---|
+| `small-code` (base) | 4 (0.8%) | 296 | |
+| `small-code-py` | 10 (2.0%) | 194 | vs base +9/−3, p 0.15 |
+| `small-code-sft` | 14 (2.8%) | 75 | vs base +13/−3, p 0.02 |
+| **`small-code-py-sft`** | **27 (5.4%)** | 55 | **vs general SFT +21/−8, p 0.02**; vs `small-code-py` p 0.002 |
+| `small-code-grpo` (r1) | 30 (6.0%) | 15 | vs its SFT +22/−6, p 0.004; vs `small-code-py-sft` +26/−23, p 0.78 |
+
+- **The specialist's lead is real, and it is not a HumanEval artefact.** On a benchmark
+  written by different people it nearly doubles the general SFT, at p 0.02 — what HumanEval's
+  164 problems could only hint at (p 0.375 greedy, 0.06 sampled).
+- **The failure types tell the same story as the counts:** syntax errors 296 → 55 along the
+  specialist route; the code that remains is mostly *runnable and wrong* (`fail`).
+- **GRPO r1 wins on greedy MBPP and lost on sampled HumanEval's pass@10** — consistent with
+  sharpening: greedy is exactly the decoding that rewards concentrated probability.
+- **The code SFT and GRPO r1 solve almost disjoint sets:** 27 and 30 problems, **4 in
+  common**. Two routes to the same score through different problems is the case for GRPO *on
+  top of* the code SFT (Phase 4 step 4b), not instead of it.
+
 ### 5. Judged by another model
 
 Everything above has an objective answer. That covers a lot and misses the thing you would

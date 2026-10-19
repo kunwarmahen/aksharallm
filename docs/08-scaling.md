@@ -887,6 +887,7 @@ flowchart LR
 | ARC-Easy / PIQA | 49.2 / 64.8% | 48.8 / 65.6% | 49.7 / 65.5% | 48.0 / 63.3% |
 | HumanEval greedy | 3/164 | 3/164 | 5/164 | **8/164** |
 | HumanEval sampled pass@1 / pass@10 | 1.1 / 3.4% | 1.6 / 4.7% | 1.7 / 5.3% | **2.6 / 6.7%** |
+| MBPP greedy (500) | 4 | 10 | 14 | **27** |
 
 - **The continued pretraining did what it was for.** Perplexity on unseen Python 4.78 → 4.33;
   prose rose 0.03 (the line was 0.1); the knowledge suites did not move. It took three
@@ -899,6 +900,9 @@ flowchart LR
   (`humaneval-pass10`, [doc 13](13-eval.md)), the code SFT beats the general SFT by +0.85 pt
   pass@1 paired over the 164 problems (p ≈ 0.06), and the specialist base beats the base by
   +0.55 pt (p ≈ 0.06): two near-independent readings in the same direction.
+- **MBPP settles it** — 500 problems written by different people, where the code SFT scores
+  **27 against the general SFT's 14 (McNemar p 0.02)**. A specialist that improved only on
+  HumanEval would have learned HumanEval; this one improved on both.
 - **And it is still small.** The best checkpoint solves 13 of 164 problems even once in 20
   tries. The route roughly doubled the pass rates; the 300M model is what caps them. The
   folklore that a small specialist beats a general 7B at its specialty is about models a
