@@ -529,6 +529,18 @@ two solve almost disjoint problems (27 and 30 solved, 4 in common; [doc 13](13-e
 on top of the code SFT is the combination nothing has measured yet. Expect what round 1
 showed — greedy pass rates up, nothing the model could not already nearly write.
 
+**Measured 2026-10-20 (302 steps, 00:30–04:30): it did nothing, and the reason is the
+reward's sparsity, not the split.** MBPP-validation solved 10% at step 0 and never beat it
+(9, 9, 7, 6, 8% at steps 100–300), so `grpo_best.pt` *is* step 0 — the code SFT's weights —
+and its MBPP 27/500 and HumanEval 8/164 match the code SFT problem for problem. Training
+samples passed ~3% of the time at temperature 0.8. GRPO learns from the spread *within* a
+group, and a group of 8 that all fail has zero advantage: with p ≈ 0.03 only ~22% of groups
+contain any success at all, and most steps logged `solved 0%` with a gradient norm of ~0.01.
+Round 1 learned because its ten tasks were easy enough to pass often (reward 0.25 → 0.63);
+this set is too hard for the policy. **The fix is to train only where there is signal:**
+measure each training task's pass rate first and keep the tasks the model solves *sometimes*
+(0 < c < n), or raise the group size so a rare success lands in more groups.
+
 **The whole of Phase 3 in one line:** SFT made a chat model; of everything after it, only the
 first GRPO run beat SFT on the judge (11–1, p = 0.006), and nothing moved HumanEval.
 
