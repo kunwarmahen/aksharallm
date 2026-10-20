@@ -1,0 +1,64 @@
+# Phase 4c, the CONTROL arm of the scale experiment: the Python specialist continued on more
+# fresh Python, dense. configs/small-code-py-moe.yaml is identical except for its MoE block,
+# so the difference between the two runs is the experts and nothing else. PLAN.md § Phase 4.
+#
+# Data (CPU + network, built once for both arms):
+#   python -m aksharallm.data.prepare codeparrot-python --out-dir data/py2 \
+#       --tokenizer data/blend/tokenizer.json --val-tokens 0 --skip-docs 1200000 \
+#       --max-train-tokens 1200000000 --train-name codeparrot-fresh2.raw.bin
+#   python -m aksharallm.data.dedup data/py2/codeparrot-fresh2.raw.bin \
+#       --write-kept data/py2/codeparrot-fresh2.bin --against data/blend/codeparrot-python.bin \
+#       --against data/py/codeparrot-fresh.raw.bin --against data/py-heldout/heldout.raw.bin
+# --skip-docs 1200000 starts past every file any run has read, and past the never-seen
+# held-out set (which begins at 1,194,000), so the deciding measurement stays never-seen.
+#
+# Judge both arms on: eval domains --val-bin data/py-heldout/val.bin (never-seen Python),
+# eval domains --val-bin data/blend/val.bin (prose must hold), mbpp, humaneval-pass10.
+
+name: small-code-py-dense
+
+model:
+  vocab_size: 32768
+  d_model: 1024
+  n_layers: 24
+  n_heads: 16
+  n_kv_heads: 4
+  max_seq_len: 1024
+  tie_embeddings: true
+  dropout: 0.0
+
+data:
+  val_bin: data/py/val-python.bin
+  tokenizer: data/blend/tokenizer.json
+  train_sources:
+    - {bin: data/py2/codeparrot-fresh2.bin, weight: 0.70}     # never seen by any run
+    - {bin: data/blend/fineweb-edu-10bt.bin, weight: 0.30}    # replay, so prose holds
+
+optim:
+  lr: 1.0e-4            # the recipe small-code-py used; re-warms from its 1e-5 floor
+  min_lr_ratio: 0.1
+  warmup_steps: 200
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  init: checkpoints/small-code-py/ckpt_best.pt
+  out_dir: checkpoints/small-code-py-dense
+  # 4 x 60 rather than 12 x 20: the same 245,760 tokens a step, at the micro-batch the MoE
+  # arm needs to fit 24 GB. Using it for both keeps the two runs' batch streams identical.
+  batch_size: 4
+  grad_accum: 60
+  seq_len: 1024
+  max_steps: 3000       # 737M tokens = 516M fresh Python + 221M prose replay
+  eval_every: 500
+  eval_batches: 50
+  sample_every: 1000
+  ckpt_every: 250
+  log_every: 50
+  compile: true
+  seed: 2027
+  wandb_project: null
+  resume: auto

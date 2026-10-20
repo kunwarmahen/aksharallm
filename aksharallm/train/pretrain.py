@@ -184,7 +184,18 @@ def init_weights(path, model, cfg: Config, device="cuda") -> tuple[str, int | No
         raise ValueError(f"train.init {path} was trained with tokenizer {theirs}, but this "
                          f"run uses {cfg.data.tokenizer}. Continued pretraining must keep "
                          "the tokenizer its weights were trained with.")
-    distributed.unwrap(model).load_state_dict(ckpt["model"])
+    state = ckpt["model"]
+    raw = distributed.unwrap(model)
+    n_experts = getattr(raw.cfg, "n_experts", 0)
+    if n_experts and not any(k.endswith("router.gate.weight") for k in state):
+        # Sparse upcycling (docs/15): a dense checkpoint into an MoE config. Each FFN becomes
+        # n_experts copies and the router starts at zero, so step 0 computes exactly what the
+        # dense model did. The experts must be full width (`moe_expert_d_ff` = the dense
+        # d_ff), or the copies do not fit -- the strict load below says so loudly.
+        from ..model.moe import upcycle_state_dict
+        state = upcycle_state_dict(state, n_experts)
+        print(f"init       upcycled a dense checkpoint into {n_experts} experts per FFN")
+    raw.load_state_dict(state)
     return str(path), ckpt.get("step")
 
 

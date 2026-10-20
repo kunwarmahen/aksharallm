@@ -38,10 +38,10 @@ def corpus(tmp_path_factory):
 
 
 def config(path: Path, out_dir: Path, corpus: Path, max_steps: int, init: str = "null",
-           lr: float = 1e-3) -> Path:
+           lr: float = 1e-3, model: str = "") -> Path:
     path.write_text(f"""
 name: cpt
-model: {{vocab_size: 8192, d_model: 32, n_layers: 2, n_heads: 4, max_seq_len: 32}}
+model: {{vocab_size: 8192, d_model: 32, n_layers: 2, n_heads: 4, max_seq_len: 32{model}}}
 data:
   train_bin: {corpus / 'train.bin'}
   val_bin: {corpus / 'val.bin'}
@@ -131,3 +131,23 @@ def test_a_checkpoint_from_another_tokenizer_is_refused(tmp_path):
     torch.save({"model": model.state_dict(), "step": 5,
                 "config": {"data": {"tokenizer": str(TOK)}}}, ck)
     assert init_weights(ck, model, cfg, "cpu") == (str(ck), 5)
+
+
+def test_init_upcycles_a_dense_checkpoint_into_an_moe_config(tmp_path, corpus):
+    """Phase 4c's MoE arm starts from the dense specialist. `train.init` must turn each FFN
+    into n_experts copies and a zero router -- with lr 0 nothing moves, so the child's experts
+    are the base's FFN exactly and its router is still all zeros."""
+    base = tmp_path / "base"
+    train(config(tmp_path / "base.yaml", base, corpus, 3, model=", d_ff: 96"))
+    src = torch.load(base / "ckpt_last.pt", map_location="cpu", weights_only=False)["model"]
+    child = tmp_path / "moe"
+    moe = (", d_ff: 96, n_experts: 4, moe_top_k: 1, moe_expert_d_ff: 96")
+    cfg = config(tmp_path / "moe.yaml", child, corpus, 1, init=str(base / "ckpt_last.pt"),
+                 lr=0.0, model=moe)
+    cfg.write_text(cfg.read_text().replace("train:", "train:\n  compile: false", 1))
+    train(cfg)
+    got = torch.load(child / "ckpt_last.pt", map_location="cpu", weights_only=False)["model"]
+    w1 = src["blocks.0.ffn.w1.weight"].t()
+    for e in range(4):
+        assert torch.equal(got["blocks.0.ffn.w1"][e], w1), f"expert {e} is not the dense FFN"
+    assert not got["blocks.0.ffn.router.gate.weight"].any(), "the router must start at zero"

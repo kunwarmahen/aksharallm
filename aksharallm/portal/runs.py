@@ -89,6 +89,9 @@ LAUNCHERS: dict[str, dict] = {
     # Phase 4, the Python specialist: continued pretraining from small-code (`train.init`).
     # A blended config, which experiment.sh checks rather than builds. docs/08.
     "small-code-py": {"script": "scripts/experiment.sh", "args": ["small-code-py"]},
+    # Phase 4c: the scale experiment's two arms (configs/small-code-py-{dense,moe}.yaml).
+    "small-code-py-dense": {"script": "scripts/experiment.sh", "args": ["small-code-py-dense"]},
+    "small-code-py-moe": {"script": "scripts/experiment.sh", "args": ["small-code-py-moe"]},
 }
 
 

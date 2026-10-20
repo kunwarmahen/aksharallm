@@ -139,6 +139,24 @@ mean the copy is subtly wrong, and you would never find out.
 > token picks the same k experts — so a *from-scratch* MoE initialised that way would train
 > k experts and leave the rest dead. From scratch the gate gets the normal 0.02 init.
 
+> **A second trap, only at top-1 (found 2026-10-20, planning the 300M upcycle):**
+> renormalising *one* weight over itself makes it the constant 1, and a constant has no
+> gradient. The router then learns only from the balancing loss — it routes *evenly*, never
+> *well*, and the loss curve cannot tell you. For k = 1 the weight is `p / stopgrad(p)`:
+> still exactly 1 going forward, so the identity above still holds, with gradient
+> ∂ log p — the chosen expert's logit rises when scaling its output up would have helped.
+> Measured on the test setup: router gradient norm **4.2e-7** with plain renormalisation
+> (float rounding, not signal) against **9.8**. `tests/test_moe.py` asserts > 1e-2, because a
+> `> 0` check passed the broken version.
+
+**Upcycling a real checkpoint is one config key.** `train.init` pointed at a *dense*
+checkpoint from an MoE config upcycles it in `pretrain.init_weights` — each FFN copied into
+every expert, the router at zero — so `scripts/experiment.sh small-code-py-moe` needs no
+conversion step. On the 300M Python specialist (`configs/small-code-py-moe.yaml`: 4 experts,
+top-1, full-width): **908M parameters, 299.5M active**, and over 1,024 tokens of never-seen
+Python the upcycled model's loss and every argmax match the dense model's exactly
+(difference 0.0). Phase 4c trains it against a dense arm on identical data (PLAN.md).
+
 ---
 
 ## What it measured
@@ -255,7 +273,7 @@ replaces exactly one component of it.
 | # | file | what to look for |
 |---|---|---|
 | 1 | [`configs/tiny-moe.yaml`](../configs/tiny-moe.yaml) | six lines different from `configs/tiny.yaml`. Diff them — that is the whole experiment |
-| 2 | [`model/moe.py`](../aksharallm/model/moe.py) → `Router.forward` | logits → softmax → top-k → renormalise, and the counts it returns. Then `_balance_loss` (`f_i · P_i`, and why neither term works alone) and `_z_loss` |
+| 2 | [`model/moe.py`](../aksharallm/model/moe.py) → `Router.forward` | logits → softmax → top-k → renormalise (and, at k = 1, `p / stopgrad(p)` so the router still learns), and the counts it returns. Then `_balance_loss` (`f_i · P_i`, and why neither term works alone) and `_z_loss` |
 | 3 | same file → `MoEFeedForward.forward` | the sort: flatten to `N*k` pairs, `argsort` by expert id, one matmul per **contiguous** slice, scatter-add back. The loop is over 8 experts, not over tokens |
 | 4 | same file | `upcycle_state_dict` — copy the trained FFN N times, zero the gate; identity at init, exactly like LoRA's `B = 0`. Then `moe_stats` and `MoEStats.shares` |
 | 5 | [`aksharallm/config.py`](../aksharallm/config.py) | `n_experts`, `moe_top_k`, `moe_expert_d_ff`, `moe_aux_alpha`, `moe_z_alpha`, `moe_every`, plus `is_moe()` / `moe_layer()` |
