@@ -114,7 +114,8 @@ class Router(nn.Module):
     loss is trying to control, so it gives the model a cheap way to collapse that costs it
     almost nothing.
 
-    The routing weights are **renormalised over the chosen k**. That matters beyond taste:
+    The routing weights are **renormalised over the chosen k** (for k = 1, as p / stopgrad(p),
+    so the weight is still 1 but the router still receives a gradient). That matters beyond taste:
     it is what makes sparse upcycling an identity at initialisation. If every expert is a
     copy of the same trained FFN and the k weights sum to 1, the MoE block computes exactly
     what the dense block computed — so training starts from the trained model rather than
@@ -140,7 +141,16 @@ class Router(nn.Module):
         # probabilities, and in bf16 the ones that matter round to each other.
         probs = F.softmax(logits.float(), dim=-1)
         topw, topi = torch.topk(probs, self.top_k, dim=-1)
-        topw = topw / topw.sum(dim=-1, keepdim=True).clamp(min=1e-9)
+        if self.top_k == 1:
+            # Renormalising one weight over itself makes it the constant 1, and a constant
+            # has no gradient: the router would learn only from the balancing loss, i.e.
+            # route *evenly* but never *well* -- and nothing in the loss curve would say so.
+            # p / stopgrad(p) is still exactly 1 in the forward pass (so upcycling stays an
+            # identity), and its gradient is d log p: the chosen expert's logit rises when
+            # scaling its output up would have helped. Found planning the 300M upcycle.
+            topw = topw / topw.detach().clamp(min=1e-9)
+        else:
+            topw = topw / topw.sum(dim=-1, keepdim=True).clamp(min=1e-9)
 
         with torch.no_grad():
             counts = torch.bincount(topi.reshape(-1),

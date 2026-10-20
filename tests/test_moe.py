@@ -461,3 +461,30 @@ train:
     assert again.returncode == 0
     assert "nothing to do" in again.stdout
     assert "raise train.max_steps" in again.stdout
+
+
+def test_top1_weight_is_exactly_one_and_the_router_still_learns():
+    """Renormalising one weight over itself gives the constant 1, which has no gradient: a
+    top-1 router would then learn only from the balancing loss -- routing evenly, never well.
+    p / stopgrad(p) keeps the forward value exactly 1 (so upcycling is still an identity)
+    and gives the gate a gradient from the language-model loss alone."""
+    r = Router(16, 4, top_k=1, aux_alpha=0.0, z_alpha=0.0)
+    torch.nn.init.normal_(r.gate.weight, std=0.5)
+    x = torch.randn(32, 16)
+    w, idx, aux, _ = r(x)
+    assert torch.equal(w, torch.ones_like(w))
+    (w.squeeze(-1) * torch.randn(32)).sum().backward()      # a loss on the output only
+    # Not `> 0`: renormalising one weight over itself has zero gradient only in exact
+    # arithmetic, and float rounding leaves ~4e-7 -- which a `> 0` check accepts. Measured:
+    # 4.2e-7 for the old form against 9.8 for this one, on exactly this setup.
+    assert r.gate.weight.grad is not None and r.gate.weight.grad.norm() > 1e-2
+
+
+def test_top1_upcycle_is_still_an_exact_identity(dense):
+    up = Transformer(cfg(n_experts=4, moe_top_k=1, moe_expert_d_ff=48)).eval()
+    up.load_state_dict(upcycle_state_dict(dense.state_dict(), n_experts=4), strict=True)
+    idx = torch.randint(0, 64, (2, 8))
+    with torch.no_grad():
+        a, _ = dense(idx, full_logits=True)
+        b, _ = up(idx, full_logits=True)
+    assert torch.equal(a, b)
