@@ -174,3 +174,44 @@ def test_a_resumed_run_matches_an_uninterrupted_one(tmp_path, corpus):
         f"a resumed run diverged from an uninterrupted one by {worst:.3e}; "
         f"worst tensor: {max(drift, key=drift.get)}"
     )
+
+
+def test_a_resume_keeps_no_second_copy_of_the_weights(tmp_path, monkeypatch):
+    """`main()` keeps what `load_checkpoint` returns for the whole run. Loaded onto the GPU
+    and returned whole, it kept a second copy of every weight resident: the 908M MoE arm of
+    Phase 4c OOMed on the first forward of every resume (2026-10-23) while fresh starts fit.
+    So: loaded via the CPU, weights and optimizer state stripped -- and still restored exactly."""
+    from aksharallm.config import ModelConfig
+    from aksharallm.model.transformer import Transformer
+    from aksharallm.train import pretrain
+
+    cfg = ModelConfig(vocab_size=64, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2,
+                      max_seq_len=16)
+    torch.manual_seed(0)
+    a = Transformer(cfg)
+    opt_a = torch.optim.AdamW(a.parameters(), lr=1e-2)
+    x = torch.randint(0, 64, (2, 16))
+    _, loss = a(x, targets=x)
+    loss.backward()
+    opt_a.step()
+    path = tmp_path / "ckpt_last.pt"
+    torch.save({"model": a.state_dict(), "optimizer": opt_a.state_dict(), "step": 7,
+                "best_val": 1.5, "data_rng": {"x": 1}}, path)
+
+    seen = []
+    real_load = torch.load
+    monkeypatch.setattr(torch, "load",
+                        lambda *args, **kw: seen.append(kw.get("map_location")) or real_load(*args, **kw))
+    b = Transformer(cfg)
+    opt_b = torch.optim.AdamW(b.parameters(), lr=1e-2)
+    ckpt = pretrain.load_checkpoint(path, b, opt_b, device="cuda")
+
+    assert seen == ["cpu"]                                   # never straight onto the card
+    assert "model" not in ckpt and "optimizer" not in ckpt   # nothing large kept alive
+    assert ckpt["step"] == 7 and ckpt["best_val"] == 1.5 and ckpt["data_rng"] == {"x": 1}
+    for k, v in a.state_dict().items():
+        assert torch.equal(v, b.state_dict()[k]), k
+    sa, sb = opt_a.state_dict()["state"], opt_b.state_dict()["state"]
+    for i in sa:
+        for k in ("exp_avg", "exp_avg_sq"):
+            assert torch.equal(sa[i][k], sb[i][k]), (i, k)

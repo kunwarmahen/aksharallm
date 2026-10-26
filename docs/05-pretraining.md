@@ -197,6 +197,15 @@ Resume with `resume: auto` in the config; it picks up `ckpt_last.pt` if present,
 model weights, optimizer state (Adam's momentum — losing it causes a visible loss spike),
 and the step counter.
 
+**A resume must not cost more memory than a fresh start, and for a while it did.**
+`load_checkpoint` used to load `ckpt_last.pt` straight onto the GPU and return it whole,
+and the trainer keeps that dict for the rest of the run. `load_state_dict` *copies* into the
+model's own tensors, so a second copy of every weight stayed resident all session. The dense
+300M lost 1.2 GB that way and never noticed. The 908M MoE arm of Phase 4c, with ~1 GiB to
+spare, OOMed on the first forward of every resume while fresh starts of the same config
+trained (2026-10-23). It now loads via the CPU and strips the weights and optimizer state
+before returning (`tests/test_determinism.py::test_a_resume_keeps_no_second_copy_of_the_weights`).
+
 Two checkpoints are kept: `ckpt_last.pt` (for resuming) and `ckpt_best.pt` (lowest val
 loss, for using).
 

@@ -160,11 +160,25 @@ def save_checkpoint(path: Path, model, optimizer, cfg: Config, step: int, best_v
 
 
 def load_checkpoint(path, model, optimizer=None, device="cuda"):
-    ckpt = torch.load(path, map_location=device, weights_only=False)
+    """Restore `model` and `optimizer` from `path`; return the checkpoint's small fields
+    (step, best_val, data_rng, ...) with the weights and optimizer state removed.
+
+    Loaded to the CPU, not to `device`, and stripped before returning. The caller keeps the
+    returned dict for the whole run. `load_state_dict` *copies* weights into the model's own
+    tensors, so a checkpoint loaded onto the GPU leaves a second copy of every weight resident
+    for the whole session. That copy cost the dense 300M 1.2 GB nobody noticed. The 908M MoE
+    arm of Phase 4c has 13.5 GiB of state and ~1 GiB to spare, so it OOMed on the first
+    forward of every resume (2026-10-23) while fresh starts from the same config trained fine.
+    The optimizer moves its state to its parameters' device by itself, so CPU costs only
+    the copy.
+    """
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
     raw = distributed.unwrap(model)
-    raw.load_state_dict(ckpt["model"])
-    if optimizer is not None and "optimizer" in ckpt:
-        optimizer.load_state_dict(ckpt["optimizer"])
+    raw.load_state_dict(ckpt.pop("model"))
+    opt_state = ckpt.pop("optimizer", None)
+    if optimizer is not None and opt_state is not None:
+        optimizer.load_state_dict(opt_state)
+    del opt_state
     return ckpt
 
 
