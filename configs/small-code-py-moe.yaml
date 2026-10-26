@@ -57,10 +57,12 @@ optim:
 train:
   init: checkpoints/small-code-py/ckpt_best.pt
   out_dir: checkpoints/small-code-py-moe
-  # 4 x 60 rather than 12 x 20: the same 245,760 tokens a step, at the micro-batch the MoE
-  # arm needs to fit 24 GB. Using it for both keeps the two runs' batch streams identical.
-  batch_size: 4
-  grad_accum: 60
+  # 3 x 80 rather than 12 x 20: the same 245,760 tokens a step, at a micro-batch the MoE arm
+  # fits in 24 GB. 4 x 60 OOMed on 2026-10-21 (20.7 GiB allocated + 0.6 fragmented, a
+  # 512 MiB logits cast refused on the second micro-batch). Both arms use it so their
+  # batch streams stay identical.
+  batch_size: 3
+  grad_accum: 80
   seq_len: 1024
   max_steps: 3000       # 737M tokens = 516M fresh Python + 221M prose replay
   eval_every: 500

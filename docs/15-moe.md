@@ -157,6 +157,44 @@ top-1, full-width): **908M parameters, 299.5M active**, and over 1,024 tokens of
 Python the upcycled model's loss and every argmax match the dense model's exactly
 (difference 0.0). Phase 4c trains it against a dense arm on identical data (PLAN.md).
 
+**Step 0 of an upcycled top-1 run reads `experts 0.25 bal (0-100%, 3 dead)`, and that is
+fine.** With a zero gate all four probabilities tie, so every token goes to whichever expert
+`topk` breaks the tie towards (expert 0 on the GPU, expert 2 on the CPU; the order is not
+specified). The three unpicked experts stay bit-identical, and so do their gate rows, so
+they can only split off one at a time, when the tied group wins some token's argmax. That
+happens almost immediately. Measured 2026-10-21 on `checkpoints/tiny` upcycled the same way
+(4 experts, top-1, lr 1e-4 with 200 warmup steps): **all four in use by step 25**, while
+the LR was still under 1.3e-5, with balance 0.87–0.97 through step 500 and no layer below
+0.43. A run still showing dead experts a few hundred steps in *is* a problem.
+
+**What it costs in memory, measured on the 3090.** 908M parameters is 13.5 GiB of fp32
+weights, gradients and AdamW state before a single activation. At micro-batch 4×1024 the
+first launch OOMed on every attempt: 20.7 GiB allocated plus 0.6 GiB stranded in
+fragments, and a 512 MiB fp32 logits cast refused on the *second* micro-batch, the first one
+that runs with gradients already allocated. A CPU count of the tensors autograd saves had
+predicted 7.9 GiB of activations (0.305 GiB a layer against dense's 0.226), ~21.5 GiB in
+all. The arms now run 3×80 (the same 245,760 tokens a step) with
+`PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`. That fits: 22.2 GB peak over 30 steps,
+balance 0.94 by step 20.
+
+**At this margin, anything else on the card is fatal, and "unloaded" means nothing if
+something keeps asking.** The second night's real launches all died on step 1 while their
+smoke tests passed. Every OOM message named one more process, holding 0.7 to 5.6 GiB with a
+fresh PID each time. It was an Ollama runner, reloaded every ~37 s by another service's
+scheduled requests and fitting itself into whatever VRAM was free while the trainer was
+still allocating. Read the *other processes* in an OOM message before shrinking the batch.
+The third night's OOMs named no other process. Every *resume* carried 3.4 GiB more than a
+fresh run at the same point: a second copy of all 908M weights, kept on the GPU by the trainer (docs/05 §
+checkpointing, fixed 2026-10-23). An upcycled MoE is where that shows first: its total
+parameters, not its active ones, set every one of these bills.
+
+**The first full night (2026-10-24), steps 278 → 844:** 22.2 GB flat, ~27 s/step. The
+router stayed balanced the whole way (0.92–0.98, every expert between 23% and 27% of tokens,
+none dead). That's what the balancing loss is for, and it held on a real 908M model as
+it had on `tiny`. Nights 5 and 6 (to step 1,982) were the same: 0.93–0.99, with no expert
+drifting. A daytime session finished the arm on 2026-10-26 (step 2,999, val 1.1462) with the
+shares still between 24% and 26%: 3,000 steps and no collapse.
+
 ---
 
 ## What it measured
