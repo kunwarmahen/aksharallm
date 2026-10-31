@@ -195,6 +195,24 @@ it had on `tiny`. Nights 5 and 6 (to step 1,982) were the same: 0.93–0.99, wit
 drifting. A daytime session finished the arm on 2026-10-26 (step 2,999, val 1.1462) with the
 shares still between 24% and 26%: 3,000 steps and no collapse.
 
+**Balanced is not the same as better.** The dense control (same data, same batches,
+same schedule) led at every step measured so far: val 1.1833 vs 1.1914 at step 500 and
+1.1780 vs 1.1871 at 1,000, never-seen Python 1.4827 vs 1.4923 at 1,000. It ran at 10.35
+s/step against the MoE's ~26. Two things not to misread along the way: the MoE trainer's
+loss lines include the balance and z-losses (~0.29 at 24 layers, exactly the step-0 gap
+between the arms), so only val and held-out numbers compare; and the full comparison waits
+for both arms' step 3,000 (PLAN.md § 4c).
+
+**The result at step 3,000 (2026-10-29): a tie on what it was for, at 2.5× the cost.**
+Never-seen Python 1.4466 (MoE) vs 1.4470 (dense), from 1.465 for both. MBPP 15 vs 19, sampled
+HumanEval pass@10 4.08% vs 4.91%. No paired test separates the arms (MBPP p 0.34, pass@1 p 0.14,
+pass@10 p 0.40). The dense arm did it at 10.4 s/step and 8.5 GB against the MoE's 25.7 s and
+22.6 GB. So on the 13.8M from scratch, matched *active* parameters won by 4.6% (above), and
+on the 300M, upcycled for 737M tokens of continued training, three times the parameters bought
+nothing measurable. The likely reason is too few tokens for copies of one FFN to diverge
+into specialists: the router stayed near-perfectly balanced, so each expert saw a random
+quarter of the data. It's a hypothesis, untested here. Full table: PLAN.md § 4c result.
+
 ---
 
 ## What it measured

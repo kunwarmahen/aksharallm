@@ -154,6 +154,12 @@ python -m aksharallm.eval small-code-py-sft --suite humaneval-pass10 --limit 0 -
 | `small-code-grpo` (GRPO r1 on the general SFT) | 7/164 | **2.9% ± 1.2** | 4.5% ± 1.6 | 8 |
 | `small-code-r3-grpo` | 5/164 | 1.9% ± 0.8 | 4.5% ± 1.6 | 8 |
 | **`small-code-py-sft`** (specialist + code SFT) | **8/164** | 2.6% ± 0.9 | **6.7% ± 1.8** | **13** |
+| `small-code-py-dense` (4c: +737M tokens, dense) | – | 1.6% ± 0.7 | 4.9% ± 1.6 | 10 |
+| `small-code-py-moe` (4c: same, upcycled 4× top-1) | – | 1.2% ± 0.5 | 4.1% ± 1.5 | 8 |
+
+The two Phase-4c rows (added 2026-10-29) are base checkpoints, so compare them with
+`small-code-py`, not with the SFTs. Neither moved sampled HumanEval: dense vs start
+pass@10 +0.18 pt (p 0.87), dense vs MoE +0.82 pt (p 0.40).
 
 Paired per problem (bootstrap over the 164, sampled pass@1):
 
@@ -215,6 +221,8 @@ python -m aksharallm.eval small-code-py-sft --suite mbpp --limit 0 --label mbpp
 | `small-code-sft` | 14 (2.8%) | 75 | vs base +13/−3, p 0.02 |
 | **`small-code-py-sft`** | **27 (5.4%)** | 55 | **vs general SFT +21/−8, p 0.02**; vs `small-code-py` p 0.002 |
 | `small-code-grpo` (r1) | 30 (6.0%) | 15 | vs its SFT +22/−6, p 0.004; vs `small-code-py-sft` +26/−23, p 0.78 |
+| `small-code-py-dense` (4c, base) | 19 (3.8%) | 133 | **vs `small-code-py` +12/−3, p 0.035**; vs MoE +7/−3, p 0.34 |
+| `small-code-py-moe` (4c, base) | 15 (3.0%) | 140 | vs `small-code-py` +10/−5, p 0.30 |
 
 - **The specialist's lead is real, and it is not a HumanEval artefact.** On a benchmark
   written by different people it nearly doubles the general SFT, at p 0.02 — what HumanEval's
