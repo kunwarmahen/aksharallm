@@ -630,7 +630,7 @@ The panels, in plain terms:
   teacher is loaded by Ollama in another process — so it reports the contention and leaves
   the choice to you. Shells out to `python -m aksharallm.synth`. See
   [doc 14](14-synthetic-data.md).
-- **Learn** — the repo as a course ([doc 16](16-learning-path.md)). Twenty-one lessons, each
+- **Learn** — the repo as a course ([doc 16](16-learning-path.md)). Twenty-two lessons, each
   one *read the doc → open the file → break it → watch a real pytest node go red*. Lessons
   unlock as their prerequisites are finished, a locked one says what is missing, and a lesson
   completes only once its check has been **red and then green** — the check passes on clean

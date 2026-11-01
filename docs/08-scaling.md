@@ -877,6 +877,9 @@ flowchart LR
     B["small-code<br/>never-seen 1.564"] -->|"6,000 steps<br/>70% fresh Python"| P["small-code-py<br/>1.465"]
     P -->|"code SFT<br/>data/sft-code"| S["small-code-py-sft<br/>pass@10 6.7%"]
     B -->|"general SFT"| G["small-code-sft<br/>pass@10 5.3%"]
+    P -->|"+737M fresh Python<br/>dense (4c)"| D["small-code-py-dense<br/>1.447"]
+    P -->|"same, as 4-expert MoE"| M["small-code-py-moe<br/>1.447"]
+    D -->|"same code SFT"| DS["small-code-py-dense-sft<br/>pass@10 7.6%"]
 ```
 
 **Measured (finished 2026-10-10 and 2026-10-18):**
@@ -909,6 +912,47 @@ flowchart LR
   folklore that a small specialist beats a general 7B at its specialty is about models a
   few times this size trained on far more code — it is not what a 300M model on 1B tokens of
   Python does.
+
+### More data, or more parameters? (Phase 4c and the dense SFT, 2026-10-29 and 11-01)
+
+The results above point at the model's size as the cap, so the next experiment asked which
+lever moves it at a price one card can pay: **737M more tokens of fresh Python** (past every
+file any run had read, deduplicated against all of them), given to two copies of
+`small-code-py` that differ in one thing. The dense arm (`configs/small-code-py-dense.yaml`) is
+the same 300M. The MoE arm (`configs/small-code-py-moe.yaml`) is sparse-upcycled into 4 experts
+per layer, top-1: 908M parameters, the same 299.5M active per token ([doc 15](15-moe.md)). Both
+ran 3,000 steps at 3 × 80 (the micro-batch the MoE fits in 24 GB), same data and seed.
+
+| | `small-code-py` (start) | dense | MoE |
+|---|---|---|---|
+| never-seen Python | 1.465 | **1.4470** | **1.4466** |
+| blend prose / Python | 2.794 / 1.231 | 2.808 / 1.221 | 2.811 / 1.223 |
+| MBPP greedy | 10 | **19** (vs start p 0.035) | 15 |
+| HumanEval sampled pass@10 | 4.7% | 4.9% | 4.1% |
+| time per step, peak memory | | 10.4 s, 8.5 GB | 25.7 s, 22.6 GB |
+
+- **More data helped, a little:** never-seen Python fell another 0.018 in both arms.
+- **The experts added nothing to it.** The two arms tie on the loss (0.0004 apart), and no
+  benchmark separates them (MBPP p 0.34). The MoE cost 2.5× the time and 2.7× the memory,
+  and an MoE cannot be quantized here. The likely reason: four copies of one trained FFN
+  need far more than 737M tokens to grow apart.
+
+Then the dense arm got the same code SFT as `small-code-py-sft`
+(`scripts/stage.sh sft small-code-py-dense`, which reads `data/sft-code` for any
+`small-code-py-*` base):
+
+| paired | `small-code-py-sft` | `small-code-py-dense-sft` | test |
+|---|---|---|---|
+| never-seen Python | 1.570 | **1.552** | the base's −0.018, carried through |
+| MBPP greedy | 27 | 28 | +10/−9, p 1.0 |
+| HumanEval greedy / pass@10 | 8/164 / 6.7% | 10/164 / 7.6% | p 0.5 / p 0.39 |
+| judge48 head to head | | | 9–7, 32 ties, p 0.80 |
+
+**Ahead on every number, significant on none.** The extra Python survived SFT as exactly the
+loss gain it had as a base, and 0.02 nats is below what any of these benchmarks can see at
+300M. `small-code-py-dense-sft` is the nominal best Python model; the 300M size is still the
+cap. That is where Phase 4 ends, and why the next lever is a different one: distillation
+([doc 24](24-distillation.md)) for a smaller model, or a bigger one (below).
 
 (For a *different* domain later, the same recipe applies — swap the corpus. For a small
 personal corpus, prefer RAG over pretraining; see below.)

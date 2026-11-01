@@ -110,7 +110,7 @@ grep is one line away from the prose. `tests/test_docs.py` fails if either point
 | 13 | [Evaluation](docs/13-eval.md) | Is the model actually any good? MMLU/ARC/HellaSwag/PIQA scored by log-likelihood, GSM8K, HumanEval executed for real, an LLM-judge — and why 25% on MMLU is not a failure |
 | 14 | [Synthetic data](docs/14-synthetic-data.md) | Making the training set with a local teacher instead of downloading it: a seed grid instead of a temperature, tests that are **executed twice**, near-duplicate detection, and why the rejection tally is the quality signal |
 | 15 | [Mixture of experts](docs/15-moe.md) | More parameters than you compute with: a router, N experts, top-k per token — the load-balancing loss, why upcycling is an identity at init, and the collapse that is invisible in the loss curve |
-| 16 | [The learning path](docs/16-learning-path.md) | The repo as a course: twenty-one lessons that each end in breaking real code and watching a real test go red — and why a lesson only counts once the check has been red *and then* green |
+| 16 | [The learning path](docs/16-learning-path.md) | The repo as a course: twenty-two lessons that each end in breaking real code and watching a real test go red — and why a lesson only counts once the check has been red *and then* green |
 | 17 | [Serving](docs/17-serving.md) | Turning a checkpoint into something you use: a paged KV cache so memory is bounded by what is *used*, continuous batching so thirty conversations share one pass over the weights (50 → 272 tok/s), and an OpenAI-shaped API so existing clients work |
 | 18 | [Looking inside](docs/18-interpretability.md) | Attention maps recomputed from the layer's own inputs, the logit lens (*when* did it decide?), activation patching (which activation actually carries the fact), and a sparse autoencoder that pulls apart superposition |
 | 19 | [Long context](docs/19-long-context.md) | Reading further than the weights were trained for, without retraining anything: RoPE scaling (linear/NTK/YaRN), sliding windows and why they need attention sinks, and the two measurements — loss by position and needle-in-a-haystack — that disagree |
@@ -204,6 +204,7 @@ aksharallm/
 │   │   ├── pretrain.py       next-token prediction (single- or blended-source)
 │   │   ├── sft.py            instruction tuning
 │   │   ├── dpo.py            preference tuning
+│   │   ├── distil.py         distillation: a small student taught by a teacher's distribution
 │   │   ├── schedule.py       learning-rate schedules
 │   │   ├── stopfile.py       the STOP contract: stop now / at step N / at a wall-clock time
 │   │   │                     — shared by pretraining, SFT and QAT
@@ -301,6 +302,13 @@ flowchart LR
 
 Both use identical code. Only the config differs.
 
+**Where the specialist ended up (Phase 4, closed 2026-11-01).** Continued pretraining on
+fresh, deduplicated Python plus a code SFT nearly doubled the general chat model on MBPP
+(27 against 14 of 500, p 0.02). Then 737M more Python tokens helped the loss a little and the
+benchmarks not at all. Spending them on a 4-expert mixture of experts instead bought
+nothing at 2.5× the cost. At 300M, the model's size is the cap. Full tables in
+[docs/08](docs/08-scaling.md) and [docs/13](docs/13-eval.md).
+
 Six days of compute needn't be six days of calendar. `scripts/phase2.sh` launches in the
 background and records its pid; `scripts/stop.sh` stops it cleanly — now, after a set number
 of steps, or at a time you name — and every stop saves at the exact current step, so
@@ -382,6 +390,20 @@ Two consequences change how the project is shaped. A specialisation becomes a **
 a model — one base plus a chat adapter and a Python adapter, swapped at inference, instead
 of two 1.2 GB checkpoints. And DPO's frozen reference model becomes **free**: switch the
 adapter off and the model you are already holding *is* the model you started from.
+
+### A smaller model: distillation
+
+Quantization keeps the model and stores it in fewer bits. [Distillation](docs/24-distillation.md)
+trains a *smaller model* to imitate the big one. At every position the student is shown the
+teacher's whole prediction ("Paris 0.6, Lyon 0.2, ...") as well as the word that actually came
+next, so it learns which wrong answers were nearly right. The two models must share a
+tokenizer, which is checked by comparing the files, because a mismatch trains happily and
+learns nonsense. It runs in the ordinary training loop as one more objective:
+
+```bash
+scripts/experiment.sh tiny-student      # a ~5M student from scratch (the control)
+scripts/experiment.sh tiny-distil       # the same student, taught by the 13.8M tiny
+```
 
 ### What comes after that
 

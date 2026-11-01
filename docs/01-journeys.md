@@ -495,7 +495,9 @@ The expensive routes. Each one is a real research direction rather than a switch
   on the dashboard, and the Configuration panel names the teacher. **Not run yet.**
 - **MoE upcycling** — split the feed-forward layer of a trained model into several experts
   plus a router, so the model has more capacity at the same cost per token. Measured here at
-  13.8M scale: **val 1.4081 against the dense 1.4764**.
+  13.8M scale: **val 1.4081 against the dense 1.4764**. At 300M, upcycled for 737M tokens of
+  continued training, it **tied** the dense control at 2.5× the cost ([doc 15](15-moe.md)):
+  upcycling needs a far longer run than one card affords here.
 - **Specialise it (the Python specialist)** — keep pretraining the base, but on mostly
   Python: fresh code it has never seen, deduplicated against what it has, with 30% prose
   replayed so it does not forget how to write English. This is the route to take when
@@ -528,6 +530,11 @@ The expensive routes. Each one is a real research direction rather than a switch
   sampled (`humaneval-pass10`): here pass@10 **6.7% against the general SFT's 5.3%**. In the
   portal it is `small-code-py` in the run picker, with Start on the dashboard, and the
   sampled suite is a checkbox on the **Eval** tab.
+
+  **Where it stopped:** 737M more fresh Python (`configs/small-code-py-dense.yaml`, then
+  `scripts/stage.sh sft small-code-py-dense`) lowered the loss another 0.018 and moved no
+  benchmark significantly (MBPP 28 vs 27, pass@10 7.6 vs 6.7%). At 300M, the size is the cap
+  ([doc 8](08-scaling.md)).
 - **Scale up** — a bigger model on more tokens. The honest answer to most quality problems,
   and the one that costs the most.
 

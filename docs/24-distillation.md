@@ -166,4 +166,4 @@ out by hand, chunked equal to unchunked, the `T²` scale, ignored positions drop
 both terms, every refusal, a frozen teacher in float/int8/nf4, and one real run through
 `pretrain.main`. Every test that guards a mutation was seen to fail against it first, and
 one gap was found that way: no test covered the soft term ignoring masked positions, so one
-was added.
+was added. Break the `T²` on purpose in [lesson 22](lessons/22-distillation.md).
