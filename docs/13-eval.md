@@ -156,10 +156,16 @@ python -m aksharallm.eval small-code-py-sft --suite humaneval-pass10 --limit 0 -
 | **`small-code-py-sft`** (specialist + code SFT) | **8/164** | 2.6% ± 0.9 | **6.7% ± 1.8** | **13** |
 | `small-code-py-dense` (4c: +737M tokens, dense) | – | 1.6% ± 0.7 | 4.9% ± 1.6 | 10 |
 | `small-code-py-moe` (4c: same, upcycled 4× top-1) | – | 1.2% ± 0.5 | 4.1% ± 1.5 | 8 |
+| `small-code-py-dense-sft` (4c dense arm + the same code SFT) | 10/164 | 2.9% ± 1.0 | 7.6% ± 1.9 | 15 |
 
 The two Phase-4c rows (added 2026-10-29) are base checkpoints, so compare them with
 `small-code-py`, not with the SFTs. Neither moved sampled HumanEval: dense vs start
 pass@10 +0.18 pt (p 0.87), dense vs MoE +0.82 pt (p 0.40).
+
+The last row (added 2026-11-01) gives the dense arm the same code SFT as `small-code-py-sft`,
+so those two compare directly. It is ahead on every number and significant on none: greedy
+10 vs 8 (+2/−0, p 0.5), sampled pass@1 +0.34 pt [−0.15, +0.95] (p 0.20), pass@10 +0.91 pt
+(p 0.39), 15 problems solved at least once against 13 (10 shared).
 
 Paired per problem (bootstrap over the 164, sampled pass@1):
 
@@ -223,6 +229,7 @@ python -m aksharallm.eval small-code-py-sft --suite mbpp --limit 0 --label mbpp
 | `small-code-grpo` (r1) | 30 (6.0%) | 15 | vs its SFT +22/−6, p 0.004; vs `small-code-py-sft` +26/−23, p 0.78 |
 | `small-code-py-dense` (4c, base) | 19 (3.8%) | 133 | **vs `small-code-py` +12/−3, p 0.035**; vs MoE +7/−3, p 0.34 |
 | `small-code-py-moe` (4c, base) | 15 (3.0%) | 140 | vs `small-code-py` +10/−5, p 0.30 |
+| `small-code-py-dense-sft` (4c dense + code SFT) | 28 (5.6%) | 67 | vs `small-code-py-sft` +10/−9, p 1.0 |
 
 - **The specialist's lead is real, and it is not a HumanEval artefact.** On a benchmark
   written by different people it nearly doubles the general SFT, at p 0.02 — what HumanEval's
@@ -234,6 +241,9 @@ python -m aksharallm.eval small-code-py-sft --suite mbpp --limit 0 --label mbpp
 - **The code SFT and GRPO r1 solve almost disjoint sets:** 27 and 30 problems, **4 in
   common**. Two routes to the same score through different problems is the case for GRPO *on
   top of* the code SFT (Phase 4 step 4b), not instead of it.
+- **A better base did not make a better SFT on MBPP** (2026-11-01). The dense arm's +12/−3
+  over `small-code-py` as a base became 28 vs 27 after the same code SFT, +10/−9: the two
+  SFTs solve different problems at the same rate.
 
 ### 5. Judged by another model
 
