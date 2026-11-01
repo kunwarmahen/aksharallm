@@ -115,9 +115,47 @@ scripts/experiment.sh tiny-distil       # the same student, taught by tiny
 Or press **Start** on either run in the portal's dashboard. Its Configuration panel shows
 the teacher, temperature and α for the distilled run.
 
-**Not run yet.** The CPU smoke run behaves as expected: the hard term starts at 9.09
-against ln(8,192) = 9.01, which is what an untrained student should score. The first real
-result belongs here.
+### Measured (2026-11-01, on the 3090)
+
+| | control (`tiny-student`) | distilled (`tiny-distil`) | teacher (`tiny`) |
+|---|---|---|---|
+| parameters | 5.3M | 5.3M | 13.8M |
+| final val loss | 1.6595 | **1.6341** | 1.4722 |
+| perplexity | 5.26 | **5.13** | 4.36 |
+| throughput | 974k tok/s | 213k tok/s | |
+| wall clock, 8,000 steps | 7 min | 31 min | |
+
+The val gap at every evaluation (distilled minus control):
+
+| step | 500 | 1,000 | 2,000 | 3,000 | 4,000 | 5,000 | 6,000 | 7,000 | 7,999 |
+|---|---|---|---|---|---|---|---|---|---|
+| gap | −0.071 | **−0.109** | −0.100 | −0.077 | −0.064 | −0.050 | −0.038 | −0.031 | **−0.025** |
+
+```mermaid
+flowchart LR
+    E["step 1,000<br/>gap −0.109"] --> M["step 4,000<br/>gap −0.064"] --> L["step 7,999<br/>gap −0.025"]
+```
+
+- **The teacher helped, and the student ended 1.5% better.** On the same data, seed and
+  steps, the distilled student's val loss is 0.025 lower. That is about 14% of the way from
+  the control to the teacher (0.025 of 0.187).
+- **Most of the help came early, and it shrinks.** The gap was largest at step 1,000 and
+  fell at every evaluation after it. The teacher's distribution is most useful while the
+  student knows little; as the student converges on the same data, the hard labels catch up.
+  The run ends before the gap does, so a longer run would probably narrow it further.
+- **It cost 4.6× the wall clock.** Each batch also runs the 13.8M teacher (2.6× the
+  student's size) and two fp32 softmaxes over 8,192 tokens, recomputed in backward. The same
+  31 minutes would train the control for about 37,000 steps instead of 8,000. So at *equal
+  compute*, rather than equal steps, this experiment does not show distillation winning, and
+  it was not designed to test that.
+- **The knowledge suites can't see it:** ARC-Easy 26.6 vs 25.4%, PIQA 51.0 vs 52.6%, all
+  within about one standard error of chance at 5M parameters.
+
+**Reading.** Distillation makes a small model better per training step, most of all early
+on. When steps are cheap and the data is plentiful, as with a 5M student on TinyStories,
+more steps of plain training can buy the same thing. The case for it gets stronger at the
+300M scale, where steps are expensive and the student will see far fewer tokens than it
+could use. That is the experiment worth running next, with a matched-compute control.
 
 ### Reading a run
 

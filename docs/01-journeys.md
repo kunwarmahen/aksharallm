@@ -492,7 +492,9 @@ The expensive routes. Each one is a real research direction rather than a switch
   **How you know it worked:** the distilled run's **val** loss ends below the control's.
   Both are the student's plain cross-entropy, so they compare directly; the training losses
   do not (the distilled one is a mix). In the portal, both are in the run picker with Start
-  on the dashboard, and the Configuration panel names the teacher. **Not run yet.**
+  on the dashboard, and the Configuration panel names the teacher. **Measured:** val 1.6341
+  against the control's 1.6595 (−0.025, largest early at −0.109 by step 1,000), at 4.6× the
+  wall clock ([doc 24](24-distillation.md)).
 - **MoE upcycling** — split the feed-forward layer of a trained model into several experts
   plus a router, so the model has more capacity at the same cost per token. Measured here at
   13.8M scale: **val 1.4081 against the dense 1.4764**. At 300M, upcycled for 737M tokens of
