@@ -170,11 +170,42 @@ The step line carries both halves: `| kd 1.234 | ce 2.345`.
 - **Throughput and MFU count the student only.** Every batch also costs a teacher forward
   pass, so tokens per second are lower than the control's for the same student.
 
-## What comes after the TinyStories pair
+## The real one: 300M into ~100M, with a third arm
 
-1. **The real one: the 300M base → a ~100M student**, then SFT on the student. This was
-   agreed in this order on 2026-08-01: distil the base first, because the base is what the
-   quantized 300M is compared against.
+The TinyStories pair left one question open: was the teacher worth its cost? So the 300M
+version has **three arms**, all the same ~101M student (d 768, 12 layers) on the teacher's own
+85/15 blend, the same seed and the same val split:
+
+| arm | config | steps | teacher | asks |
+|---|---|---|---|---|
+| control | `configs/small-student.yaml` | 2,000 | none | |
+| distilled | `configs/small-distil.yaml` | 2,000 | `small-code` (300M, val 2.548) | does the teacher help, step for step? |
+| matched compute | `configs/small-student-long.yaml` | 5,800 | none | is it worth its cost, hour for hour? |
+
+```mermaid
+flowchart LR
+    C["control<br/>2,000 steps"] ---|"same steps"| D["distilled<br/>2,000 steps<br/>+ teacher"]
+    D ---|"same GPU time"| L["control, long<br/>5,800 steps"]
+```
+
+The third arm's step count comes from a measurement, not a guess. On the 3090 the student
+alone runs **3.5 s/step** (70k tok/s, 10.2 GB); distilled it runs **10.2 s/step** (24k tok/s,
+12.5 GB) with the teacher compiled. That is 2.9×, so 5,800 steps of plain training cost the
+same GPU time as 2,000 distilled ones. Compiling the teacher saved only 8% (11.1 → 10.2 s);
+most of the remaining cost is the two fp32 softmaxes over a 32,768-token vocabulary.
+
+2,000 steps is about 490M tokens, roughly 5 per parameter: undertrained on purpose, because
+the TinyStories pair showed the teacher helps most early. The three arms run in night windows
+(`logs/queue/distil-nights.sh`, about three nights), then each is scored with `eval domains`
+on the blend (prose and Python separately) and the fast suite. Each also has a Start button
+in the portal.
+
+**Not run yet.** The result belongs here.
+
+## After that
+
+1. **SFT on the student**, if it is worth keeping. This order was agreed on 2026-08-01:
+   distil the base first, because the base is what the quantized 300M is compared against.
 2. **Distilled ~100M vs `gptq-nf4-g64` of the 300M at a matched ~205 MB** (doc 11). Two ways
    to make the same model small, compared at the same file size.
 3. **A 4-bit teacher vs a bf16 teacher** for the same student (`teacher_quant: nf4`).
@@ -197,7 +228,7 @@ One new file and four places that had to notice it.
 | 4 | same file → `load_teacher` and `DistilObjective` | frozen, eval mode, optional `int8`/`nf4` through `quant/convert.py`; loaded at the first batch; the `kd`/`ce` stats |
 | 5 | [`aksharallm/config.py`](../aksharallm/config.py) → `DistilConfig` | `teacher`, `temperature`, `alpha`, `teacher_quant`, `chunk` |
 | 6 | [`train/pretrain.py`](../aksharallm/train/pretrain.py) → `objective_for` | the one branch that picks this objective when `distil.teacher` is set |
-| 7 | [`portal/runs.py`](../aksharallm/portal/runs.py) | the two `LAUNCHERS` entries, and the `teacher` row in `_config_summary` |
+| 7 | [`portal/runs.py`](../aksharallm/portal/runs.py) | the `LAUNCHERS` entries for both experiments, and the `teacher` row in `_config_summary` |
 
 What pins it: `tests/test_distil.py`, 19 tests. They cover the loss against the KL written
 out by hand, chunked equal to unchunked, the `T²` scale, ignored positions dropping out of

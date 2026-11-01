@@ -1,0 +1,56 @@
+# Distillation at the real scale, the CONTROL arm (docs/24): a ~101M student trained from
+# scratch on the same 85/15 blend as the 300M small-code. configs/small-distil.yaml is this
+# file plus a `distil:` block (teacher = small-code), and configs/small-student-long.yaml is
+# this file with more steps: the same wall-clock compute the distilled arm spends, because a
+# teacher forward pass on every batch is not free. Three arms, one question each:
+#
+#   small-student      vs small-distil      does the teacher help, step for step?
+#   small-student-long vs small-distil      is it worth its cost, hour for hour?
+#
+# Same seed (so the same batches, gotcha 16), same schedule shape, same val split as the
+# teacher, so all three val losses -- and the teacher's 2.548 -- go on one axis.
+
+name: small-student
+
+model:
+  vocab_size: 32768       # the blend tokenizer -- the teacher's, which distillation requires
+  d_model: 768            # small-code is 1024 x 24 (300M); this is ~101M, 3x smaller
+  n_layers: 12
+  n_heads: 12
+  n_kv_heads: 4
+  max_seq_len: 1024
+  tie_embeddings: true
+  dropout: 0.0
+
+data:
+  val_bin: data/blend/val.bin
+  tokenizer: data/blend/tokenizer.json
+  train_sources:
+    - {bin: data/blend/fineweb-edu-10bt.bin, weight: 0.85}
+    - {bin: data/blend/codeparrot-python.bin, weight: 0.15}
+
+optim:
+  lr: 6.0e-4              # a 3x smaller model takes a higher LR than the 300M's 3e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 300
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/small-student
+  batch_size: 16
+  grad_accum: 15          # 16 * 15 * 1024 = 245,760 tokens/step, as small-code
+  seq_len: 1024
+  max_steps: 2000         # ~492M tokens, ~5 per parameter: the undertrained regime a teacher should help most
+  eval_every: 500
+  eval_batches: 50
+  sample_every: 1000
+  ckpt_every: 250
+  log_every: 20
+  compile: true
+  seed: 1337
+  wandb_project: null
+  resume: auto

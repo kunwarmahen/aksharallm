@@ -236,6 +236,12 @@ class DistilObjective:
         if self.teacher is None:
             self.teacher = load_teacher(self.path, self.d.teacher_quant, device)
             self.teacher_params = sum(p.numel() for p in self.teacher.parameters())
+            if self.cfg.train.compile and torch.device(device).type == "cuda" \
+                    and not self.d.teacher_quant:
+                # The teacher runs a forward pass on every batch, so it is half the step.
+                # Compiled like the student; a quantized teacher is left alone, because
+                # QuantLinear's dequantize is not something dynamo should be trusted with.
+                self.teacher = torch.compile(self.teacher)
         return self.teacher
 
     def batch(self, dataset, batch_size: int):

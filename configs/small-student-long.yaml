@@ -1,0 +1,50 @@
+# Distillation at the real scale, the MATCHED-COMPUTE arm (docs/24): the same ~101M student as
+# configs/small-student.yaml, from scratch, given as many steps as the distilled arm costs in
+# GPU time. If this beats small-distil, the teacher was not worth its forward passes.
+# Note the schedule stretches with the budget (cosine over 5,800 steps), as it would for anyone
+# who chose to spend that compute on plain training.
+
+name: small-student-long
+
+model:
+  vocab_size: 32768       # the blend tokenizer -- the teacher's, which distillation requires
+  d_model: 768            # small-code is 1024 x 24 (300M); this is ~101M, 3x smaller
+  n_layers: 12
+  n_heads: 12
+  n_kv_heads: 4
+  max_seq_len: 1024
+  tie_embeddings: true
+  dropout: 0.0
+
+data:
+  val_bin: data/blend/val.bin
+  tokenizer: data/blend/tokenizer.json
+  train_sources:
+    - {bin: data/blend/fineweb-edu-10bt.bin, weight: 0.85}
+    - {bin: data/blend/codeparrot-python.bin, weight: 0.15}
+
+optim:
+  lr: 6.0e-4              # a 3x smaller model takes a higher LR than the 300M's 3e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 300
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/small-student-long
+  batch_size: 16
+  grad_accum: 15          # 16 * 15 * 1024 = 245,760 tokens/step, as small-code
+  seq_len: 1024
+  max_steps: 5800         # 2,000 x 2.9: the distilled arm measured 10.2 s/step against 3.5 (2026-11-01), so this is the same GPU time
+  eval_every: 500
+  eval_batches: 50
+  sample_every: 1000
+  ckpt_every: 250
+  log_every: 20
+  compile: true
+  seed: 1337
+  wandb_project: null
+  resume: auto

@@ -76,6 +76,11 @@ LAUNCHERS: dict[str, dict] = {
     # Distillation (docs/24): the same ~5M student, from scratch and taught by `tiny`.
     "tiny-student": {"script": "scripts/experiment.sh", "args": ["tiny-student"]},
     "tiny-distil": {"script": "scripts/experiment.sh", "args": ["tiny-distil"]},
+    # ...and at the real scale: a ~101M student, taught by the 300M base, and a control given
+    # the distilled arm's GPU time.
+    "small-student": {"script": "scripts/experiment.sh", "args": ["small-student"]},
+    "small-distil": {"script": "scripts/experiment.sh", "args": ["small-distil"]},
+    "small-student-long": {"script": "scripts/experiment.sh", "args": ["small-student-long"]},
     # Audio and vision: a different launcher, the same pid/meta/log contract. docs/21, 22.
     "codec-synth": {"script": "scripts/audio.sh", "args": ["codec-synth"]},
     "codec-lj": {"script": "scripts/audio.sh", "args": ["codec-lj"]},
