@@ -528,6 +528,9 @@ function renderConfig(s) {
   if (c.error) add('problem', c.error);
   add('architecture', c.arch);
   add('vocab', c.vocab_size == null ? null : fmt.int(c.vocab_size));
+  /* A distillation run (docs/24): its loss is half the teacher's distribution, so the panel
+   * says whose. */
+  add('teacher', c.teacher ? code(c.teacher) : null);
   /* tokens/step only when the run is counted in tokens: a recogniser's batch is seconds of
    * audio, and "0 tokens" for it read as a broken config. */
   add('batch', c.batch && (c.tokens_per_step

@@ -118,6 +118,7 @@ grep is one line away from the prose. `tests/test_docs.py` fails if either point
 | 21 | [Audio](docs/21-audio.md) | The same transformer, on sound: an RVQ-VAE codec that turns speech into fifty integers a second, the delay pattern that keeps eight codebooks honest in one stream, and TTS/ASR as one model with the sequence written in two orders — plus the bitrate ladder you judge with your ears |
 | 22 | [Vision](docs/22-vision.md) | A picture into a model that has never seen one: patches instead of a codec, a two-layer projector that is the whole of LLaVA, and a corpus whose captions are known exactly so the answer can be *scored* rather than admired — plus the double shift that trained to a loss of 0.003 and captioned everything `'w green'` |
 | 23 | [Speech recognition](docs/23-speech-recognition.md) | Dictation that is still right on day two: a from-scratch Conformer trained with a from-scratch CTC (bit-identical to PyTorch's in float64), measured against a published list of what a dictation app gets wrong once used — and the first check found our own model writing words on silence until it was shown clips with nothing to say. Then the dictation layer: a punctuation tagger that cannot write a word of its own, corrections that teach it your names (8% → 54% after one fix), and a keyboard shortcut that types into any app |
+| 24 | [Distillation](docs/24-distillation.md) | A small model taught by a big one: the teacher's whole next-token distribution as a second target, softened by a temperature and scaled by T² so the temperature does not quietly turn it down. Only between models that share a tokenizer, checked by the file's contents rather than its size. A fourth objective in the one training loop, with the logits computed in recomputed chunks because they, not the weights, are the memory |
 
 ---
 
@@ -388,7 +389,7 @@ In order, all written from scratch: **GRPO** ✅ (RL on a reward the code sandbo
 verifies) → **quantization** ✅ → **LoRA/QLoRA** ✅ → a **real eval harness** ✅ (MMLU, ARC,
 HellaSwag, PIQA, GSM8K, HumanEval and a model-judged suite — [docs/13](docs/13-eval.md)) →
 **synthetic data** ✅ ([docs/14](docs/14-synthetic-data.md)) → **mixture of experts** ✅
-([docs/15](docs/15-moe.md)) → **distillation** → **diffusion training** ✅
+([docs/15](docs/15-moe.md)) → **distillation** ✅ ([docs/24](docs/24-distillation.md)) → **diffusion training** ✅
 ([docs/20](docs/20-diffusion.md)) → **audio** → export and serving ✅, with **speculative
 decoding** ✅, an **interpretability tab** ✅, **FlashAttention written in Triton** ✅
 ([docs/04](docs/04-model.md)) and **long context** ✅ ([docs/19](docs/19-long-context.md)).

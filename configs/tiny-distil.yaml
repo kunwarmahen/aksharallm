@@ -1,0 +1,56 @@
+# Distillation experiment, the DISTILLED arm (docs/24): the same ~5M student as
+# configs/tiny-student.yaml, trained on the fully trained 13.8M `tiny` (val 1.472) as teacher.
+# Everything but the `distil:` block is identical to the control, so the val-loss gap between
+# the two runs is what the teacher bought.
+#
+#   scripts/experiment.sh tiny-distil
+
+name: tiny-distil
+
+model:
+  vocab_size: 8192        # the TinyStories tokenizer -- the teacher's, which distillation requires
+  d_model: 256            # tiny is 384 x 6 layers (13.8M); this is ~5.2M, 2.6x smaller
+  n_layers: 4
+  n_heads: 4
+  n_kv_heads: 4
+  max_seq_len: 512
+  tie_embeddings: true
+  dropout: 0.0
+
+data:
+  train_bin: data/tinystories/train.bin
+  val_bin: data/tinystories/val.bin
+  tokenizer: data/tinystories/tokenizer.json
+
+optim:
+  lr: 1.0e-3
+  min_lr_ratio: 0.1
+  warmup_steps: 200
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/tiny-distil
+  batch_size: 48
+  grad_accum: 2           # 49,152 tokens/step, as tiny
+  seq_len: 512
+  max_steps: 8000         # ~393M tokens, as tiny
+  eval_every: 500
+  eval_batches: 40
+  sample_every: 1000
+  ckpt_every: 1000
+  log_every: 20
+  compile: true
+  seed: 1337
+  wandb_project: null
+  resume: auto
+
+distil:
+  teacher: checkpoints/tiny/ckpt_best.pt   # step 7,999, val 1.472, same tokenizer (checked)
+  temperature: 2.0
+  alpha: 0.5              # half the teacher's distribution, half the real next token
+  teacher_quant: null     # "nf4" asks whether a 4-bit teacher hurts the student
+  chunk: 128

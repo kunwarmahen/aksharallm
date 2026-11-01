@@ -88,6 +88,7 @@ DOC_HINTS = (
     ("aksharallm/train/resume", "docs/06-posttraining.md"),
     ("aksharallm/train/runlog", "docs/10-running-and-watching.md"),
     ("aksharallm/train/report", "docs/10-running-and-watching.md"),
+    ("aksharallm/train/distil", "docs/24-distillation.md"),
     ("aksharallm/train", "docs/05-pretraining.md"),
     ("aksharallm/eval", "docs/13-eval.md"),
     ("aksharallm/quant", "docs/11-quantization.md"),

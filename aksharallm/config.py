@@ -279,6 +279,35 @@ class DiffusionConfig:
 
 
 @dataclass
+class DistilConfig:
+    """Knowledge distillation from a trained teacher. Ignored unless `teacher` is set.
+
+    See docs/24. The student trains on the teacher's whole next-token distribution as well
+    as the one-hot next token, so it learns "this was a close second" -- which is exactly
+    what a single label cannot say.
+    """
+
+    #: The teacher checkpoint (a path, or `<run>/<file>.pt` under checkpoints/). Must share
+    #: the student's tokenizer: logit distillation compares probabilities *per token id*, and
+    #: an id means a different string to a different tokenizer (gotcha 3). Refused, not
+    #: warned about, because a mismatch still produces a plausible-looking loss curve.
+    teacher: str | None = None
+    #: Softmax temperature for both distributions. 1 = the teacher's real distribution; higher
+    #: flattens it so the small probabilities -- the "dark knowledge" -- carry weight.
+    temperature: float = 2.0
+    #: Weight on the distillation term; the hard next-token cross-entropy gets 1 - alpha.
+    #: alpha = 0 is ordinary pretraining, which is what the from-scratch control runs.
+    alpha: float = 0.5
+    #: Load the teacher quantized: null (bf16 on the card), "int8" or "nf4" (RTN, ours).
+    #: Saves memory for the student, and asks whether a quantized teacher hurts the student.
+    teacher_quant: str | None = None
+    #: Positions per chunk when computing the two softmaxes. The logits are the memory, not
+    #: the weights: at (8, 1024, 32768) one fp32 copy is 1 GB and the loss needs several.
+    #: Chunks are recomputed in backward, so only one chunk's fp32 work is ever alive.
+    chunk: int = 128
+
+
+@dataclass
 class Config:
     name: str = "tiny"
     model: ModelConfig = field(default_factory=ModelConfig)
@@ -286,6 +315,7 @@ class Config:
     optim: OptimConfig = field(default_factory=OptimConfig)
     train: TrainConfig = field(default_factory=TrainConfig)
     diffusion: DiffusionConfig = field(default_factory=DiffusionConfig)
+    distil: DistilConfig = field(default_factory=DistilConfig)
 
 
 def _build(cls, raw: dict[str, Any]):

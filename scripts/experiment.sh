@@ -14,6 +14,8 @@
 #   scripts/experiment.sh tiny-moe          # the MoE experiment (configs/tiny-moe.yaml)
 #   scripts/experiment.sh tiny-diffusion    # the masked diffusion experiment (docs/20)
 #   scripts/experiment.sh tiny              # re-run the dense baseline
+#   scripts/experiment.sh tiny-student      # distillation control: ~5M student, no teacher
+#   scripts/experiment.sh tiny-distil       # the same student taught by tiny (docs/24)
 #   scripts/experiment.sh small-code-py     # the Python specialist (continued pretraining
 #                                           # from small-code; 300M, so nights not hours)
 #

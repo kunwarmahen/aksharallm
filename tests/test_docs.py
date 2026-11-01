@@ -43,7 +43,7 @@ def section_of(text: str) -> str:
 
 
 def test_there_are_twentyfour_chapters():
-    assert len(CHAPTERS) == 24, [p.name for p in CHAPTERS]
+    assert len(CHAPTERS) == 25, [p.name for p in CHAPTERS]
 
 
 @pytest.mark.parametrize("doc", CHAPTERS, ids=lambda p: p.stem)

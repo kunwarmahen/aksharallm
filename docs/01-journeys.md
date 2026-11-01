@@ -409,6 +409,7 @@ Two different problems that sound the same.
 |---|---|---|
 | The model is too big to *store or load* | **quantize** | 4-bit weights, ~3x smaller |
 | Fine-tuning it does not *fit in memory* | **LoRA / QLoRA** | 4,791 MB → 327 MB to train |
+| You want a *smaller model*, not smaller weights | **distillation** | a student a fraction of the size, taught by the big one (Route 5) |
 
 ```bash
 python -m aksharallm.quant small-code --bits 4 --group 64
@@ -480,7 +481,18 @@ is a capability that only appears with scale; you cannot get it by asking.
 The expensive routes. Each one is a real research direction rather than a switch.
 
 - **Distillation** — train a small model to copy a big one's *probabilities*, not just its
-  answers. Needs a finished teacher. **Not built in this repo yet.**
+  answers. Both models must share a tokenizer, so here it is between our own models. Start
+  with the controlled pair: the same ~5M student from scratch and taught by `tiny`.
+
+  ```bash
+  scripts/experiment.sh tiny-student      # the control: no teacher
+  scripts/experiment.sh tiny-distil       # the same student, taught by tiny (val 1.472)
+  ```
+
+  **How you know it worked:** the distilled run's **val** loss ends below the control's.
+  Both are the student's plain cross-entropy, so they compare directly; the training losses
+  do not (the distilled one is a mix). In the portal, both are in the run picker with Start
+  on the dashboard, and the Configuration panel names the teacher. **Not run yet.**
 - **MoE upcycling** — split the feed-forward layer of a trained model into several experts
   plus a router, so the model has more capacity at the same cost per token. Measured here at
   13.8M scale: **val 1.4081 against the dense 1.4764**.
@@ -519,8 +531,8 @@ The expensive routes. Each one is a real research direction rather than a switch
 - **Scale up** — a bigger model on more tokens. The honest answer to most quality problems,
   and the one that costs the most.
 
-📖 [chapter 15 — mixture of experts](15-moe.md) · [chapter 8 — scaling](08-scaling.md) ·
-[chapter 14 — synthetic data](14-synthetic-data.md)
+📖 [chapter 24 — distillation](24-distillation.md) · [chapter 15 — mixture of experts](15-moe.md) ·
+[chapter 8 — scaling](08-scaling.md) · [chapter 14 — synthetic data](14-synthetic-data.md)
 
 ---
 

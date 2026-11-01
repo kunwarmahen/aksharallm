@@ -11,10 +11,11 @@ measurement so you can tell when you've made things slower.
 
 None of that machinery knows what the loss means, so the loss is a swappable object -- see
 `ARObjective` and `objective_for` below. The second implementation is masked diffusion
-(`aksharallm/diffusion/objective.py`), and it reuses every line of this loop.
+(`aksharallm/diffusion/objective.py`), and it reuses every line of this loop. So does
+knowledge distillation (`train/distil.py`).
 
 Read with: docs/05-pretraining.md -- the chapter this implements; it ends with the order to read
-these files in. See also docs/20-diffusion.md.
+these files in. See also docs/20-diffusion.md and docs/24-distillation.md.
 """
 
 from __future__ import annotations
@@ -292,7 +293,8 @@ class ARObjective:
 
 
 def objective_for(cfg: Config):
-    """Pick the objective from the config. One key decides it: `model.causal`.
+    """Pick the objective from the config: `model.causal`, `model.tag_classes`, or
+    `distil.teacher` decide it, and an ordinary run sets none of them.
 
     Imported late so that `aksharallm.diffusion` — which imports the model and the sampler —
     is only loaded by a run that needs it, and so that neither package depends on the other
@@ -301,6 +303,11 @@ def objective_for(cfg: Config):
     if cfg.model.is_diffusion:
         from ..diffusion.objective import DiffusionObjective
         return DiffusionObjective(cfg)
+    if cfg.distil.teacher:
+        # The fourth: knowledge distillation (docs/24). Next-token prediction with a teacher's
+        # whole distribution as a second target. Same loop, same validation number.
+        from .distil import DistilObjective
+        return DistilObjective(cfg)
     if cfg.model.is_tagger:
         # The third objective: the dictation punctuation tagger (docs/23). Same loop.
         from ..dictate.tagger import TaggerObjective

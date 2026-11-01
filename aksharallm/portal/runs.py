@@ -73,6 +73,9 @@ LAUNCHERS: dict[str, dict] = {
     "tiny": {"script": "scripts/experiment.sh", "args": ["tiny"]},
     "tiny-diffusion": {"script": "scripts/experiment.sh",
                        "args": ["tiny-diffusion"]},   # docs/20
+    # Distillation (docs/24): the same ~5M student, from scratch and taught by `tiny`.
+    "tiny-student": {"script": "scripts/experiment.sh", "args": ["tiny-student"]},
+    "tiny-distil": {"script": "scripts/experiment.sh", "args": ["tiny-distil"]},
     # Audio and vision: a different launcher, the same pid/meta/log contract. docs/21, 22.
     "codec-synth": {"script": "scripts/audio.sh", "args": ["codec-synth"]},
     "codec-lj": {"script": "scripts/audio.sh", "args": ["codec-lj"]},
@@ -921,7 +924,15 @@ class RunStore:
         except Exception as exc:  # a half-edited YAML must not blank the whole dashboard
             return {"error": f"{type(exc).__name__}: {exc}"}
         m, t, o = cfg.model, cfg.train, cfg.optim
+        d = cfg.distil
+        teacher = None
+        if d.teacher:
+            # The one field a distillation run adds, and the one that decides what its loss
+            # means: without it the panel shows an ordinary pretraining run.
+            teacher = (f"{d.teacher} · T={d.temperature:g} · alpha={d.alpha:g}"
+                       + (f" · teacher in {d.teacher_quant}" if d.teacher_quant else ""))
         return {
+            "teacher": teacher,
             "path": str(path.relative_to(self.root)),
             "arch": f"d={m.d_model} L={m.n_layers} H={m.n_heads} KV={m.n_kv_heads} "
                     f"ff={m.d_ff} ctx={m.max_seq_len}",
