@@ -18,7 +18,7 @@
 #   TOK=path/to/tokenizer.json   override the tokenizer (else inferred from base_run)
 #   DATA=smoltalk|ultrafeedback  override the dataset recipe
 #   SFT_DIR=data/sft-code          SFT from an already-built data dir; default data/sft, or
-#                                  data/sft-code for small-code-py (the code mix, data.mix_sft)
+#                                  data/sft-code for small-code-py* (the code mix, data.mix_sft)
 #   SEQ=1024   EPOCHS=2   LR=...   extra trainer args passed through
 #   BS=8  ACCUM=8                  SFT micro-batch and accumulation (BS*ACCUM*SEQ = tokens/step)
 #   MICRO=8                        GRPO completions scored at once (memory only)
@@ -68,7 +68,7 @@ LAUNCH_META=$RUN_DIR/launch.meta
 # directories, so an unknown base fails without littering checkpoints/ with an empty dir.
 if [ -z "${TOK:-}" ]; then
     case "$BASE_RUN" in
-        small-code|small-code-py) TOK=data/blend/tokenizer.json ;;   # -py: continued pretraining, same tokenizer (gotcha 3)
+        small-code|small-code-py|small-code-py-*) TOK=data/blend/tokenizer.json ;;   # -py*: continued pretraining, same tokenizer (gotcha 3)
         small)      TOK=data/fineweb/tokenizer.json ;;
         tiny)       TOK=data/tinystories/tokenizer.json ;;
         *) echo "ERROR: cannot infer tokenizer for base '$BASE_RUN'; set TOK=..." >&2; exit 1 ;;
@@ -138,7 +138,7 @@ case "$STAGE" in
         # sets + ~30% SmolTalk, HumanEval-decontaminated). Decided here, not by the caller,
         # so the portal's button, the scheduler and a typed command all agree.
         case "$BASE_RUN" in
-            small-code-py) SFT_DEFAULT=data/sft-code ;;
+            small-code-py|small-code-py-*) SFT_DEFAULT=data/sft-code ;;   # incl. the 4c arms
             *)             SFT_DEFAULT=data/sft ;;
         esac
         SFT_DIR=${SFT_DIR:-$SFT_DEFAULT}

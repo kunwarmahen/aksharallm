@@ -819,6 +819,7 @@ python -m aksharallm.data.mix_sft --part data/sft-parts/self-oss-instruct \
     --part data/sft-parts/magicoder-python --part data/sft:0.32 \
     --out-dir data/sft-code --tokenizer data/blend/tokenizer.json
 scripts/stage.sh sft small-code-py        # reads data/sft-code for this base, by default
+scripts/stage.sh sft small-code-py-dense  # ...and for any small-code-py-* base (the 4c arms)
 ```
 
 | part | what it is | blocks kept |
