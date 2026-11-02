@@ -202,7 +202,31 @@ the TinyStories pair showed the teacher helps most early. The three arms run in 
 on the blend (prose and Python separately) and the fast suite. Each also has a Start button
 in the portal.
 
-**Not run yet.** The result belongs here.
+### Night 1 (2026-11-02)
+
+| | `small-student` (control) | `small-distil` |
+|---|---|---|
+| steps | 0 → 1,999, **done** | 0 → 840 |
+| speed | 3.14 s/step, 78k tok/s | 9.26 s/step, 26.5k tok/s |
+| peak memory | 10.1 GB | 12.4 GB |
+| val at step 500 | **4.2113** | 4.2914 |
+| val at 1,000 / 1,500 / 1,999 | 3.6457 / 3.4506 / **3.3705** | – |
+
+- **At step 500 the distilled student is *behind*, by 0.080.** That is the opposite of the
+  TinyStories pair, where it led by 0.071 at the same point. One evaluation is not a result;
+  the next comes at step 1,000. Two candidate reasons to check against the curve: with
+  `alpha = 0.5` the real next token gets half the weight it gets in the control, and the
+  teacher's T = 2 distribution over 32,768 tokens is far flatter than over 8,192.
+- **On its training batches it is level or slightly ahead:** its hard term `ce` against the
+  control's training loss is 4.384 vs 4.377 at step 480 and 3.769 vs 3.836 at step 840. The
+  soft term `kd` fell from 9.23 to 1.53 over those 840 steps.
+- **The cost ratio held:** 9.26 / 3.14 = 2.95, against the 2.9 that set the matched-compute
+  arm at 5,800 steps.
+- Both students are a long way from the teacher's 2.560. At about 5 tokens per parameter they
+  are meant to be.
+
+Expected: `small-distil` finishes on night 2, `small-student-long` runs through night 3, and
+the final evaluations follow.
 
 ## After that
 
