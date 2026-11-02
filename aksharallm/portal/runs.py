@@ -158,6 +158,21 @@ def _cmdline(pid: int) -> str:
             return ""
 
 
+def exec_cmdline(argv: list[str]) -> str:
+    """What `_cmdline` will read for a process we exec'd with `argv`: each argument followed
+    by a space, exactly as /proc/<pid>/cmdline renders after the NULs become spaces.
+
+    A launcher records this as the job's identity, so a later liveness check can tell our job
+    from a stranger on a recycled pid. It used to read /proc right after `Popen`, which races
+    the child's exec: a forked child that has not exec'd yet still shows the *parent's*
+    command line. On a loaded machine that lost the race, every later check saw `/bin/sh -c
+    ...`, decided the pid had been recycled, and reported a running job as finished with no
+    exit code -- `lost`. It failed the pre-flight suite on 2026-11-02 and cost a night's
+    training run ten minutes. The parent knows the argv it exec'd; nothing needs reading.
+    """
+    return "".join(f"{a} " for a in argv)
+
+
 #: A top-level section that some trainer in this repo would recognise — the cheap, text-only
 #: test for "this is a run and not a settings file". `model:` is a language model, `codec:`
 #: and `audiolm:` are docs/21, `vision:` is docs/22, `asr:` is docs/23. Deliberately not a

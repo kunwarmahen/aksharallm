@@ -568,6 +568,7 @@ class Dictation:
 import re as _re  # noqa: E402
 import subprocess as _subprocess  # noqa: E402
 import sys as _sys  # noqa: E402
+from .runs import exec_cmdline  # noqa: E402
 
 _WORD = _re.compile(r"^[a-z']{1,40}$")
 
@@ -817,10 +818,9 @@ class AsrJobs:
             proc = _subprocess.Popen(["/bin/sh", "-c", script], cwd=self.root,
                                      stdin=_subprocess.DEVNULL, stdout=fh,
                                      stderr=_subprocess.STDOUT, start_new_session=True)
-        try:
-            cmdline = Path(f"/proc/{proc.pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
-        except OSError:
-            cmdline = ""
+        # Computed, not read from /proc: a child that has not exec'd yet shows the parent's
+        # command line, and every later check would then call this job lost (runs.exec_cmdline).
+        cmdline = exec_cmdline(["/bin/sh", "-c", script])
         cur = {"job": job, "kind": argv[0], "label": label, "state": "running", "pid": proc.pid,
                "started": time.time(), "cmdline": cmdline,
                # What to type to do the same thing from a terminal — shown in the panel.

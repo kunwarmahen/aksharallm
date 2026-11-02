@@ -46,23 +46,8 @@ from ..eval import sources
 from ..eval import suites as suites_mod
 from ..infer.checkpoints import CheckpointStore, InferError
 from ..infer.engine import InferConfig, plan_device
-from .runs import RunError, _alive, _cmdline, _read_int, repo_root
+from .runs import RunError, _alive, _cmdline, _read_int, exec_cmdline, repo_root
 
-
-def _proc_cmdline(pid: int) -> str:
-    """A just-launched process's command line, from /proc and nowhere else.
-
-    `runs._cmdline` falls back to shelling out to `ps`, which is right when identifying a
-    stranger's pid and wrong here: this process is one we started a microsecond ago, so
-    either /proc has it or the platform has no /proc and the recorded command line is the
-    best available. The fallback would also shell out on every single job start — through
-    `subprocess.Popen`, which is exactly what a test stubs.
-    """
-    try:
-        return Path(f"/proc/{pid}/cmdline").read_bytes().replace(
-            b"\0", b" ").decode(errors="replace")
-    except OSError:
-        return ""
 
 _JOB_RE = re.compile(r"^[0-9]{8}-[0-9]{6}-[A-Za-z0-9_.-]+$")
 #: A suite name from the browser is interpolated into a command line, so it is checked
@@ -545,8 +530,10 @@ class EvalJobs:
                 cmd, cwd=self.root, env={**os.environ}, stdin=subprocess.DEVNULL,
                 stdout=fh, stderr=subprocess.STDOUT, start_new_session=True)
         self.pid_file.write_text(str(proc.pid))
-        # The job's identity, read back from /proc in the same shape `_pid()` reads any other
+        # The job's identity, in the shape `_pid()` will read back from /proc for any other
         # pid — so a job this panel launched is recognised as live whatever module it runs.
+        # Computed from the argv, never read from /proc here: that races the exec
+        # (`runs.exec_cmdline`).
         # Without it `_pid()` fell back to `"aksharallm.eval" in <cmdline>`, and a dedup scan
         # runs `aksharallm.data.dedup`: the scan was invisible the moment it started. Not
         # merely cosmetic — an invisible job holds no lock, so every click started another
@@ -554,7 +541,7 @@ class EvalJobs:
         # called it **failed** while it was still running.
         current = {"job": job, "state": "running", "pid": proc.pid,
                    "started": time.time(), "cmd": " ".join(cmd[2:]),
-                   "cmdline": _proc_cmdline(proc.pid) or " ".join(cmd), **meta}
+                   "cmdline": exec_cmdline(cmd), **meta}
         self.current_file.write_text(json.dumps(current))
         return {"ok": True, "action": "start", **current}
 

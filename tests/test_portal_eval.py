@@ -604,14 +604,13 @@ def test_a_launched_job_is_recognised_whatever_module_it_runs(repo, monkeypatch)
         launched["cmd"] = cmd
         return Proc()
 
-    # A live process whose command line names dedup, not eval. Both readers answer the
-    # same, which is what /proc does on the machine this runs on — `_proc_cmdline` at
-    # launch and `_cmdline` when checking liveness later.
-    live = "python -u -m aksharallm.data.dedup corpus.bin "
+    # A live process whose command line names dedup, not eval: /proc shows the argv that
+    # was exec'd, which is what the liveness check reads later.
+    from aksharallm.portal.runs import exec_cmdline
     monkeypatch.setattr("aksharallm.portal.evals.subprocess.Popen", fake_popen)
     monkeypatch.setattr("aksharallm.portal.evals._alive", lambda pid: pid == 424242)
-    monkeypatch.setattr("aksharallm.portal.evals._cmdline", lambda pid: live)
-    monkeypatch.setattr("aksharallm.portal.evals._proc_cmdline", lambda pid: live)
+    monkeypatch.setattr("aksharallm.portal.evals._cmdline",
+                        lambda pid: exec_cmdline(launched["cmd"]))
 
     jobs = EvalJobs(repo)
     jobs.start_audit({"kind": "dedup", "source": "data/blend/corpus.bin"})
@@ -638,3 +637,34 @@ def test_a_head_to_head_launches_versus_on_two_different_checkpoints(repo, spy_p
     with pytest.raises(RunError):
         EvalJobs(repo).start_audit({"kind": "versus", "first": "tiny/ckpt_best.pt",
                                     "second": "tiny/ckpt_last.pt", "suite": "mmlu"})
+
+
+def test_a_job_is_recognised_before_and_after_its_child_execs(repo, monkeypatch):
+    """The launch identity must not be read from /proc right after `Popen`: a forked child
+    that has not exec'd yet shows the PARENT's command line, so the recorded identity never
+    matched again and a running job read as `lost` (it failed the pre-flight suite on
+    2026-11-02). Here /proc answers with the parent's command line at launch, then the
+    exec'd one, as on a loaded machine."""
+    from aksharallm.portal.runs import exec_cmdline
+    (repo / "data" / "blend").mkdir(parents=True)
+    (repo / "data" / "blend" / "corpus.bin").write_bytes(b"\x01\x00" * 64)
+    launched = {}
+
+    class Proc:
+        pid = 434343
+
+    def fake_popen(cmd, **kw):
+        launched["cmd"] = cmd
+        return Proc()
+
+    parent = "python -m aksharallm.portal --lan "
+    reads = iter([parent])          # the first /proc read, if anything still does one
+    monkeypatch.setattr("aksharallm.portal.evals.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("aksharallm.portal.evals._alive", lambda pid: pid == 434343)
+    monkeypatch.setattr("aksharallm.portal.evals._cmdline",
+                        lambda pid: next(reads, None) or exec_cmdline(launched["cmd"]))
+    jobs = EvalJobs(repo)
+    jobs.start_audit({"kind": "dedup", "source": "data/blend/corpus.bin"})
+    next(reads, None)               # whatever launch did, /proc now shows the exec'd child
+    st = jobs.status()
+    assert st["running"] is True and st["current"]["state"] == "running"
