@@ -179,7 +179,7 @@ version has **three arms**, all the same ~101M student (d 768, 12 layers) on the
 | arm | config | steps | teacher | asks |
 |---|---|---|---|---|
 | control | `configs/small-student.yaml` | 2,000 | none | |
-| distilled | `configs/small-distil.yaml` | 2,000 | `small-code` (300M, val 2.548) | does the teacher help, step for step? |
+| distilled | `configs/small-distil.yaml` | 2,000 | `small-code-py` (300M, blend val 2.560) | does the teacher help, step for step? |
 | matched compute | `configs/small-student-long.yaml` | 5,800 | none | is it worth its cost, hour for hour? |
 
 ```mermaid
@@ -187,6 +187,8 @@ flowchart LR
     C["control<br/>2,000 steps"] ---|"same steps"| D["distilled<br/>2,000 steps<br/>+ teacher"]
     D ---|"same GPU time"| L["control, long<br/>5,800 steps"]
 ```
+
+The teacher is `small-code-py`, the base continued for 6,000 steps on fresh Python with 30% prose replayed ([doc 8](08-scaling.md)). The base checkpoint itself was deleted to free disk; on the blend's val split the two are close (2.560 against 2.548: prose 2.794 vs 2.763, Python 1.231 vs 1.246), so the substitute teaches the same mix almost as well and Python slightly better.
 
 The third arm's step count comes from a measurement, not a guess. On the 3090 the student
 alone runs **3.5 s/step** (70k tok/s, 10.2 GB); distilled it runs **10.2 s/step** (24k tok/s,

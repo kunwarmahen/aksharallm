@@ -1,5 +1,5 @@
 # Distillation at the real scale, the DISTILLED arm (docs/24): the same ~101M student as
-# configs/small-student.yaml, taught by the finished 300M base (small-code, val 2.548). Only the
+# configs/small-student.yaml, taught by the 300M small-code-py (blend val 2.560). Only the
 # `distil:` block differs from the control. Measured 2026-11-01: 10.2 s/step against the
 # control's 3.5 (teacher compiled), 12.5 GB peak -- which is why configs/small-student-long.yaml
 # exists, with 2.9x the steps.
@@ -50,7 +50,7 @@ train:
   resume: auto
 
 distil:
-  teacher: checkpoints/small-code/ckpt_best.pt   # step 39,999, val 2.548, same tokenizer (checked)
+  teacher: checkpoints/small-code-py/ckpt_best.pt   # small-code continued on Python (70/30), blend val 2.560; small-code itself was deleted 2026-11-01
   temperature: 2.0
   alpha: 0.5
   teacher_quant: null
