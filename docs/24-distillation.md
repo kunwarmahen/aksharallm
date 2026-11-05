@@ -241,26 +241,66 @@ in the portal.
   while the teacher's soft targets are still being learned.
 - Final step: `kd` 1.11, `ce` 3.31; 9.29 s/step at the end. It closed about **11%** of the gap between the control (3.3705)
   and the teacher (2.560): 0.089 of 0.81.
-- **Per step, the teacher helped. Per hour is not answered yet:** `small-student-long`, the
-  same student given the distilled arm's GPU time, reached step 1,212 of 5,800 (3.14 s/step,
-  10.1 GB). Its val at step 1,000 is 3.6603, a little above the control's 3.6457, as expected
-  from a cosine schedule stretched over 5,800 steps (its learning rate is still high). What
-  counts is its final number against 3.2812.
+- **Per step, the teacher helped.** Per hour was the third arm's question, answered below.
 - Two launch hiccups, both recovered within ten minutes: the matched-compute arm's first
   smoke test OOMed at 03:39 because another process held 18 GB of the card, and the failure
   counter had carried over from night 1 (fixed in the queue). Night 3 (11-04) was lost to a
   reboot at 23:06 on 11-03, which killed the queue; it was re-armed for 11-05.
 
-Expected: the matched-compute arm needs about 4 more hours (4,588 steps × 3.14 s), so one
-night, then the final evaluations of all three arms.
+### Night 4 (2026-11-05): per hour, the teacher lost
+
+`small-student-long` ran steps 1,212 → 5,799 in 4 h 10 m (00:32 → 04:41, 3.14 s/step), and the
+queue then scored all three arms on the card in about a minute (`logs/eval/domains-*-20261105-*`,
+`logs/eval/20261105-*-distil-100m.json`).
+
+| | control | distilled | matched compute |
+|---|---|---|---|
+| steps / GPU time | 2,000 / ~1.7 h | 2,000 / ~5.1 h | 5,800 / ~5.1 h |
+| val (the run's own split) | 3.3705 | 3.2812 | **3.0616** |
+| prose loss (fineweb-edu, 85%) | 3.6155 | 3.5293 | **3.3010** |
+| Python loss (codeparrot, 15%) | 2.1384 | 2.0466 | **1.8124** |
+| perplexity (fast suite, 200 windows) | 29.55 | 27.04 | **21.70** |
+| ARC-Easy (n 500, ± 2.2) | 39.0% | 41.0% | **44.2%** |
+| PIQA (n 1,000, ± 1.6) | 55.7% | 58.7% | **59.6%** |
+
+```mermaid
+flowchart LR
+    C["control<br/>2,000 steps<br/>val 3.3705"] -->|"+ teacher, 2.9x the time<br/>-0.089"| D["distilled<br/>val 3.2812"]
+    C -->|"same 2.9x time, no teacher<br/>-0.309"| L["matched compute<br/>val 3.0616"]
+```
+
+- **Spending the teacher's cost on more plain steps was worth 3.5× as much as the teacher**:
+  −0.309 against −0.089 on val, and the same order on prose, on Python and on perplexity. At
+  this scale the honest summary is that the distilled arm is better per *step* and clearly
+  worse per *GPU hour*.
+- **The benchmarks agree, paired item by item (exact McNemar):** distilled vs control is
+  ARC-Easy +34/−24 (p 0.24) and PIQA +74/−44 (**p 0.007**). Matched compute vs control is ARC
+  +46/−20 (p 0.002) and PIQA +82/−43 (p 0.001). Matched compute vs distilled is ARC +47/−31
+  (p 0.09) and PIQA +63/−54 (p 0.46). So the teacher's PIQA gain is real against the control,
+  and nothing says the distilled arm beats the long one on any suite.
+- **The stretched schedule cost nothing early.** At step 2,000 the long arm read **3.3680**,
+  level with the control's final 3.3705, even though its learning rate was still near peak.
+  Steps 2,000 → 5,800 then bought another 0.306, still falling at the end (3.0677 at 5,500).
+- **Why the teacher lost here when it "won" on TinyStories:** it never did win per hour there
+  either (4.6× the time for −0.025). The 300M arms just make it measurable. A teacher pays when
+  data is the limit and compute is not. These students saw 490M tokens out of a 10B blend, so
+  every extra hour bought fresh tokens. The plain arm's 5,800 steps are ~1.4B tokens, still
+  ~14 per parameter, well short of where more data stops helping.
+- What this does **not** rule out: a cheaper teacher. The forward pass of a 300M teacher and
+  two fp32 softmaxes over 32,768 tokens is what costs 2.9×. Precomputed top-k teacher logits
+  or an NF4 teacher (item 3 below) would move the ratio, and a data-limited regime (a few
+  epochs over a small corpus) is where the soft targets should pay.
 
 ## After that
 
-1. **SFT on the student**, if it is worth keeping. This order was agreed on 2026-08-01:
+1. **SFT on a student**, if one is worth keeping. This order was agreed on 2026-08-01:
    distil the base first, because the base is what the quantized 300M is compared against.
-2. **Distilled ~100M vs `gptq-nf4-g64` of the 300M at a matched ~205 MB** (doc 11). Two ways
-   to make the same model small, compared at the same file size.
-3. **A 4-bit teacher vs a bf16 teacher** for the same student (`teacher_quant: nf4`).
+   After night 4 the ~100M worth keeping is `small-student-long`, not the distilled arm.
+2. **A ~100M vs `gptq-nf4-g64` of the 300M at a matched ~205 MB** (doc 11). Two ways to make
+   the same model small, compared at the same file size. Run it with the best ~100M
+   (`small-student-long`) and the distilled one side by side.
+3. **A 4-bit teacher vs a bf16 teacher** for the same student (`teacher_quant: nf4`). Now
+   also a cost question: does it lower the 2.9× enough to change night 4's answer?
 
 Not built: initialising the student from the teacher's layers (worth testing against from
 scratch), and an MoE student (refused, because its load-balancing loss lives on a path this

@@ -494,7 +494,10 @@ The expensive routes. Each one is a real research direction rather than a switch
   do not (the distilled one is a mix). In the portal, both are in the run picker with Start
   on the dashboard, and the Configuration panel names the teacher. **Measured:** val 1.6341
   against the control's 1.6595 (−0.025, largest early at −0.109 by step 1,000), at 4.6× the
-  wall clock ([doc 24](24-distillation.md)).
+  wall clock. **At 300M → ~100M** it helped per step (val 3.2812 vs 3.3705) and **lost per
+  hour**: the same student given the teacher's 2.9× GPU time as plain steps reached
+  **3.0616**, and won on prose, Python, ARC-Easy and PIQA too. So check a distillation run
+  against a matched-compute control, not only a matched-steps one ([doc 24](24-distillation.md)).
 - **MoE upcycling** — split the feed-forward layer of a trained model into several experts
   plus a router, so the model has more capacity at the same cost per token. Measured here at
   13.8M scale: **val 1.4081 against the dense 1.4764**. At 300M, upcycled for 737M tokens of

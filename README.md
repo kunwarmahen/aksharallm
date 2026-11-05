@@ -405,6 +405,12 @@ scripts/experiment.sh tiny-student      # a ~5M student from scratch (the contro
 scripts/experiment.sh tiny-distil       # the same student, taught by the 13.8M tiny
 ```
 
+Measured at real scale (300M into a ~101M student, 2,000 steps): the taught student beats
+the untaught one step for step (val 3.2812 vs 3.3705), but the teacher makes each step 2.9×
+slower. Given that time as plain training steps instead, the same student reaches **3.0616**
+and wins on every measure. Per GPU hour, here, the teacher was not worth it
+([docs/24](docs/24-distillation.md) § "The real one").
+
 ### What comes after that
 
 In order, all written from scratch: **GRPO** ✅ (RL on a reward the code sandbox actually
