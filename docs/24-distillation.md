@@ -225,8 +225,34 @@ in the portal.
 - Both students are a long way from the teacher's 2.560. At about 5 tokens per parameter they
   are meant to be.
 
-Expected: `small-distil` finishes on night 2, `small-student-long` runs through night 3, and
-the final evaluations follow.
+### Night 2 (2026-11-03): the distilled arm finished, and finished ahead
+
+| step | control | distilled | gap |
+|---|---|---|---|
+| 500 | 4.2113 | 4.2914 | +0.080 |
+| 1,000 | 3.6457 | **3.5613** | −0.084 |
+| 1,500 | 3.4506 | **3.3585** | −0.092 |
+| 1,999 (final) | 3.3705 | **3.2812** | **−0.089** |
+
+- **Behind at step 500, ahead from step 1,000, and the lead held** rather than shrinking. On
+  TinyStories the gap peaked early and closed to a third of its size by the end; here it is
+  as large at the last evaluation as at any. The early deficit is consistent with the first
+  reason guessed on night 1: with `alpha = 0.5` the student sees half the hard-label gradient
+  while the teacher's soft targets are still being learned.
+- Final step: `kd` 1.11, `ce` 3.31; 9.29 s/step at the end. It closed about **11%** of the gap between the control (3.3705)
+  and the teacher (2.560): 0.089 of 0.81.
+- **Per step, the teacher helped. Per hour is not answered yet:** `small-student-long`, the
+  same student given the distilled arm's GPU time, reached step 1,212 of 5,800 (3.14 s/step,
+  10.1 GB). Its val at step 1,000 is 3.6603, a little above the control's 3.6457, as expected
+  from a cosine schedule stretched over 5,800 steps (its learning rate is still high). What
+  counts is its final number against 3.2812.
+- Two launch hiccups, both recovered within ten minutes: the matched-compute arm's first
+  smoke test OOMed at 03:39 because another process held 18 GB of the card, and the failure
+  counter had carried over from night 1 (fixed in the queue). Night 3 (11-04) was lost to a
+  reboot at 23:06 on 11-03, which killed the queue; it was re-armed for 11-05.
+
+Expected: the matched-compute arm needs about 4 more hours (4,588 steps × 3.14 s), so one
+night, then the final evaluations of all three arms.
 
 ## After that
 
