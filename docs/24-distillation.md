@@ -155,7 +155,8 @@ flowchart LR
 on. When steps are cheap and the data is plentiful, as with a 5M student on TinyStories,
 more steps of plain training can buy the same thing. The case for it gets stronger at the
 300M scale, where steps are expensive and the student will see far fewer tokens than it
-could use. That is the experiment worth running next, with a matched-compute control.
+could use. That was the next experiment, with a matched-compute control, and the
+prediction did not hold: at 300M the teacher still lost per GPU hour (§ "Night 4" below).
 
 ### Reading a run
 
@@ -198,7 +199,7 @@ most of the remaining cost is the two fp32 softmaxes over a 32,768-token vocabul
 
 2,000 steps is about 490M tokens, roughly 5 per parameter: undertrained on purpose, because
 the TinyStories pair showed the teacher helps most early. The three arms run in night windows
-(`logs/queue/distil-nights.sh`, about three nights), then each is scored with `eval domains`
+(`logs/queue/distil-nights.sh`; it took four, one lost to a reboot), then each is scored with `eval domains`
 on the blend (prose and Python separately) and the fast suite. Each also has a Start button
 in the portal.
 
@@ -301,6 +302,13 @@ flowchart LR
    (`small-student-long`) and the distilled one side by side.
 3. **A 4-bit teacher vs a bf16 teacher** for the same student (`teacher_quant: nf4`). Now
    also a cost question: does it lower the 2.9× enough to change night 4's answer?
+
+Items 1 and 2 are queued for the night of 2026-11-06 (`logs/queue/student-nights.sh`):
+`stage.sh sft small-student-long` on SmolTalk, then `eval domains` / `--suite fast` /
+`judge48` on the result. Then `small-code-py` is quantized to `gptq-nf4-g64`, calibrated on
+its own Python val split so nothing it is scored on was fitted, and the float and 4-bit
+versions get the same `domains` + `fast` the student arms have. `small-code`'s own weights
+were deleted, so `small-code-py` (blend val 2.560 vs 2.548) stands in for the 300M.
 
 Not built: initialising the student from the teacher's layers (worth testing against from
 scratch), and an MoE student (refused, because its load-balancing loss lives on a path this

@@ -50,6 +50,14 @@ def load_model(ckpt_path: str, device: str = "cuda") -> tuple[Transformer, dict]
     careful about whose GPU it is.
     """
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    # A quantized checkpoint needs its QuantLinears built before the weights load (the same
+    # branch Engine._build has). Without it, `eval domains`, `interp`, `serve` and
+    # speculative decoding all refused a gptq-nf4 .pt that the Eval tab could score. Float32
+    # for the unquantized parts, matching the float path below.
+    from ..quant.convert import build_from_checkpoint, is_quantized_checkpoint
+
+    if is_quantized_checkpoint(ckpt):
+        return build_from_checkpoint(ckpt, device=device, dtype=torch.float32), ckpt
     mcfg = ModelConfig(**ckpt["model_config"])
     model = Transformer(mcfg).to(device)
     model.load_state_dict(ckpt["model"])

@@ -369,6 +369,34 @@ def test_loading_quantized_weights_into_a_float_model_fails_loudly(tmp_path):
         plain.load_state_dict(ckpt["model"])
 
 
+def test_the_plain_loader_accepts_a_quantized_checkpoint(tmp_path):
+    """`infer.cli.load_model` is what `eval domains`, interp, serve and speculative decoding
+    load through. It must take a quantized .pt and give the same logits the quantized model
+    gave before saving -- the per-domain comparison of a 4-bit 300M against a ~100M student
+    at the same file size depends on it."""
+    from aksharallm.infer.cli import load_model
+
+    torch.manual_seed(9)
+    cfg = tiny_cfg()
+    model = Transformer(cfg)
+    model.eval()
+    src = _fake_checkpoint(model, cfg)
+    scheme = QuantScheme(bits=4, group_size=64)
+    report = quantize_model(model, scheme)
+    x = torch.randint(0, 128, (1, 12))
+    with torch.no_grad():
+        before, _ = model(x, targets=x)
+    path = tmp_path / "q.pt"
+    save_quantized(path, model, scheme, report, src, source_path="orig.pt")
+
+    loaded, ckpt = load_model(str(path), device="cpu")
+    assert any(isinstance(m, QuantLinear) for m in loaded.modules())
+    assert ckpt["quant"]["scheme"]["bits"] == 4
+    with torch.no_grad():
+        after, _ = loaded(x, targets=x)
+    assert torch.allclose(before, after, atol=1e-5)
+
+
 def test_apply_quant_metadata_rebuilds_the_right_shapes(tmp_path):
     cfg = tiny_cfg()
     model = Transformer(cfg)
