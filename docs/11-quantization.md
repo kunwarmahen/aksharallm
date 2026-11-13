@@ -456,6 +456,25 @@ And three things the NF4 rows add:
 3. **The best 4-bit configuration is GPTQ-NF4 g64**: +0.173 at 2.87×. The grid and the
    rounding algorithm are independent axes, and stacking them works.
 
+### Against a smaller model of the same size (2026-11-06)
+
+The question this chapter left open: at the same file size, is a 4-bit 300M better than a
+~100M trained small? Measured with `eval domains` on the blend's validation split (every row
+reads the same tokens), the 300M being `small-code-py` (the finished base's weights were
+deleted; blend val 2.560 vs 2.548), GPTQ-NF4 g64 calibrated on its own Python val split:
+
+| model | on disk | prose | Python | ARC-Easy | PIQA |
+|---|---|---|---|---|---|
+| 300M bf16 | 599 MB | 2.794 | 1.231 | 48.8% | 65.6% |
+| **300M gptq-nf4-g64** | **209 MB** | **2.828** | **1.247** | **49.0%** | **64.3%** |
+| ~100M, plain, matched compute | ~202 MB | 3.301 | 1.812 | 44.2% | 59.6% |
+| ~100M, distilled from the 300M | ~202 MB | 3.529 | 2.047 | 41.0% | 58.7% |
+
+4 bits cost +0.034 nats of prose; being a third the size costs +0.47. The benchmark gaps to
+the best ~100M are significant paired (ARC-Easy 56–32, p 0.014; PIQA 109–62, p 0.0004); the
+gaps to bf16 are not (ARC 5–4; PIQA 14–27, p 0.06). **To make a small model here, quantize
+the big one.** The training side of the comparison is in [doc 24](24-distillation.md).
+
 ## The fused kernel, and an honest performance story
 
 Notice the `tok/s` column above: **every quantized model is slower than bf16**. That is not

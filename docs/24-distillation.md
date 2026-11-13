@@ -300,15 +300,60 @@ flowchart LR
 2. **A ~100M vs `gptq-nf4-g64` of the 300M at a matched ~205 MB** (doc 11). Two ways to make
    the same model small, compared at the same file size. Run it with the best ~100M
    (`small-student-long`) and the distilled one side by side.
-3. **A 4-bit teacher vs a bf16 teacher** for the same student (`teacher_quant: nf4`). Now
-   also a cost question: does it lower the 2.9× enough to change night 4's answer?
+3. ~~**A 4-bit teacher vs a bf16 teacher** for the same student (`teacher_quant: nf4`).~~
+   **Not pursued** (the user's call, 2026-11-12: not on this card). `teacher_quant` stays
+   built and tested; it is simply unmeasured at 300M.
 
-Items 1 and 2 are queued for the night of 2026-11-06 (`logs/queue/student-nights.sh`):
-`stage.sh sft small-student-long` on SmolTalk, then `eval domains` / `--suite fast` /
-`judge48` on the result. Then `small-code-py` is quantized to `gptq-nf4-g64`, calibrated on
-its own Python val split so nothing it is scored on was fitted, and the float and 4-bit
-versions get the same `domains` + `fast` the student arms have. `small-code`'s own weights
-were deleted, so `small-code-py` (blend val 2.560 vs 2.548) stands in for the 300M.
+Items 1 and 2 ran on the night of 2026-11-06 (`logs/queue/student-nights.sh`, ALL DONE on
+the 7th after one job lost its memory to a model that loaded between jobs). `small-code`'s
+own weights were deleted, so `small-code-py` (blend val 2.560 vs 2.548) stands in for the
+300M. Its 4-bit copy was calibrated on its own Python val split, so nothing it is scored on
+was fitted.
+
+### Measured: the ~100M against a 4-bit 300M at the same size
+
+| ~200 MB on disk | prose | Python | ARC-Easy | PIQA |
+|---|---|---|---|---|
+| `small-distil` (101M, bf16) | 3.529 | 2.047 | 41.0% | 58.7% |
+| `small-student-long` (101M, bf16, ~202 MB) | 3.301 | 1.812 | 44.2% | 59.6% |
+| `small-code-py` **gptq-nf4-g64** (**209 MB**) | **2.828** | **1.247** | **49.0%** | **64.3%** |
+| `small-code-py` float (599 MB of weights) | 2.794 | 1.231 | 48.8% | 65.6% |
+
+Loss is `eval domains` on the blend's validation split, so every row reads the same tokens.
+(The fast suite's perplexity row is *not* comparable across these: the 300M's run scores its
+own Python val split, the students the blend.)
+
+- **The 4-bit 300M wins by a margin nothing else in this chapter came close to:** 0.47 nats
+  on prose and 0.57 on Python over the best student. Paired against it: ARC-Easy 56–32
+  (McNemar p 0.014), PIQA 109–62 (p 0.0004).
+- **4 bits cost almost nothing:** +0.034 prose, +0.016 Python, ARC 5–4 (p 1.0), PIQA
+  14–27 (p 0.06, the one borderline number). 2.87× smaller; GPTQ took 46 s.
+- **So on this hardware, a small model is made by quantizing the big one.** Distillation
+  bought −0.089 per step and lost per GPU hour; quantization buys 2.87× for +0.03 in under a
+  minute. A distilled student would have to be trained far longer than ours to close 0.47
+  nats.
+
+```mermaid
+flowchart LR
+    T["300M · 599 MB<br/>prose 2.794"] -->|"GPTQ NF4 g64<br/>46 s"| Q["4-bit 300M · 209 MB<br/>prose 2.828"]
+    T -->|"distil, 2,000 steps<br/>~5.1 h"| D["~100M · ~202 MB<br/>prose 3.529"]
+    S["plain ~100M, 5,800 steps<br/>same GPU time"] --> P["~100M · ~202 MB<br/>prose 3.301"]
+```
+
+### Measured: chat-tuning the best student
+
+`stage.sh sft small-student-long` (SmolTalk, same recipe as the 300M's chat model): 1,448
+steps in 32 min, val **1.860** (the 300M's chat model: 1.422).
+
+| | prose | Python | ppl | ARC-Easy | PIQA |
+|---|---|---|---|---|---|
+| `small-student-long` | 3.301 | 1.812 | 21.70 | 44.2% | 59.6% |
+| `small-student-long-sft` | 3.445 | 1.927 | 24.96 | 44.4% | 58.7% |
+
+The fine-tune cost +0.144 prose / +0.115 Python, the same toll it took on the 300M
+(+0.14 / +0.105), and moved no benchmark past its error bar: a 100M forgets no more than a
+300M does. `judge48`: **1.23/5** (the 300M's chat model, on the 12-prompt set: 1.42). It
+chats, badly, which is about what 100M buys.
 
 Not built: initialising the student from the teacher's layers (worth testing against from
 scratch), and an MoE student (refused, because its load-balancing loss lives on a path this

@@ -409,7 +409,9 @@ Measured at real scale (300M into a ~101M student, 2,000 steps): the taught stud
 the untaught one step for step (val 3.2812 vs 3.3705), but the teacher makes each step 2.9×
 slower. Given that time as plain training steps instead, the same student reaches **3.0616**
 and wins on every measure. Per GPU hour, here, the teacher was not worth it
-([docs/24](docs/24-distillation.md) § "The real one").
+([docs/24](docs/24-distillation.md) § "The real one"). And at the same file size, the 300M
+quantized to 4 bits (209 MB) beats every ~100M by a wide margin (prose loss 2.83 vs 3.30), so
+a small *file* is better made by quantizing than by training small.
 
 ### What comes after that
 

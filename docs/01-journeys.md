@@ -498,6 +498,8 @@ The expensive routes. Each one is a real research direction rather than a switch
   hour**: the same student given the teacher's 2.9× GPU time as plain steps reached
   **3.0616**, and won on prose, Python, ARC-Easy and PIQA too. So check a distillation run
   against a matched-compute control, not only a matched-steps one ([doc 24](24-distillation.md)).
+  And if the goal is only a *small file*, Route 3's quantization wins outright: the 300M at
+  4 bits (209 MB) beat the best ~100M (~202 MB) by 0.47 nats of prose ([doc 11](11-quantization.md)).
 - **MoE upcycling** — split the feed-forward layer of a trained model into several experts
   plus a router, so the model has more capacity at the same cost per token. Measured here at
   13.8M scale: **val 1.4081 against the dense 1.4764**. At 300M, upcycled for 737M tokens of
