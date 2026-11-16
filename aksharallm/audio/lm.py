@@ -52,7 +52,7 @@ import torch.nn.functional as F
 
 from ..config import ModelConfig
 from ..model.transformer import Transformer
-from .delay import special_ids, undelay, valid_mask
+from .delay import delay, special_ids, undelay, valid_mask
 
 
 @dataclass
@@ -65,8 +65,9 @@ class AudioLMConfig:
 
     codebook_size: int = 1024
     n_codebooks: int = 8
-    #: Frames of audio the model can see. The real context is `max_frames + n_codebooks − 1`
-    #: audio positions plus `max_text` text positions, and `model.max_seq_len` must cover it.
+    #: Frames of audio the model can see. The real context is `max_frames + n_codebooks`
+    #: audio positions (the frames, `n_codebooks − 1` of delay, and the BOS column every
+    #: sequence starts from) plus `max_text` text positions; `model.max_seq_len` must cover it.
     max_frames: int = 500  # 10 s at 50 frames/s
     max_text: int = 0  # > 0 turns on the text path (TTS / ASR)
     text_vocab_size: int = 0
@@ -74,7 +75,7 @@ class AudioLMConfig:
 
     @property
     def audio_positions(self) -> int:
-        return self.max_frames + self.n_codebooks - 1
+        return self.max_frames + self.n_codebooks   # + N - 1 of delay + the BOS column
 
     @property
     def vocab_per_book(self) -> int:
@@ -99,7 +100,8 @@ class AudioLM(nn.Module):
         if body_cfg.max_seq_len < need:
             raise ValueError(
                 f"model.max_seq_len={body_cfg.max_seq_len} cannot hold {cfg.max_frames} frames "
-                f"+ {cfg.n_codebooks - 1} of delay + {cfg.max_text} of text = {need} positions"
+                f"+ {cfg.n_codebooks - 1} of delay + 1 BOS + {cfg.max_text} of text = {need} "
+                "positions"
             )
         self.body = Transformer(body_cfg)
 
@@ -214,6 +216,31 @@ def make_targets(delayed: torch.Tensor, n_frames: int, pad_id: int) -> torch.Ten
     n_codebooks = delayed.shape[1]
     mask = valid_mask(n_codebooks, n_frames, device=delayed.device)
     return torch.where(mask.unsqueeze(0), delayed, torch.full_like(delayed, -100))
+
+
+def training_pair(codes: torch.Tensor, pad_id: int, bos_id: int,
+                  n_frames: list[int] | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+    """Undelayed codes `(B, N, T)` -> `(inputs, targets)`, both `(B, N, T + N)`.
+
+    The inputs are `[BOS column] + delay(codes)`: exactly the layout `generate` and
+    `speech.speak` build, which start from a BOS column and predict every column after it.
+    Training without that column (as this repo did until 2026-11-15) meant the first real
+    column was never a target, and at generation time it was predicted from a BOS embedding
+    that had never been trained. Nothing in the loss could show it; the first frame of every
+    sample came from an untrained context.
+
+    `n_frames` gives each row's real length when `codes` is right-padded (with `pad_id`) to
+    a common `T`; every cell past a row's own delay triangle is then `-100` too.
+    """
+    b, n, t = codes.shape
+    d = delay(codes, pad_id)
+    inputs = torch.cat([d.new_full((b, n, 1), bos_id), d], dim=-1)
+    targets = torch.full_like(inputs, -100)
+    for i, ti in enumerate(n_frames or [t] * b):
+        s = ti + n - 1
+        mask = valid_mask(n, ti, device=codes.device)
+        targets[i, :, 1:1 + s] = torch.where(mask, d[i, :, :s], torch.full_like(d[i, :, :s], -100))
+    return inputs, targets
 
 
 @torch.no_grad()

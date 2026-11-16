@@ -279,3 +279,185 @@ def test_transcribe_stops_at_eos_and_returns_a_string():
     codes = torch.randint(0, SIZE, (1, BOOKS, 8))
     out = transcribe(model, codes, tok, max_chars=12)
     assert isinstance(out, str) and len(out) <= 12
+
+
+# ---------------------------------------------------------------------------------------
+# training sees the layout generation uses
+# ---------------------------------------------------------------------------------------
+
+
+def _memorise(model, inputs_fn, steps=300, lr=3e-3):
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.0)
+    model.train()
+    for _ in range(steps):
+        loss = inputs_fn()
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    return float(loss)
+
+
+def test_greedy_generation_reproduces_a_memorised_clip():
+    """`generate` starts from a BOS column and predicts every column after it. Training on
+    `delay(codes)` alone never made the first real column a target and never trained the BOS
+    embedding, so a model that had memorised a clip perfectly still could not say its first
+    frame. `training_pair` prepends the column; a memorised clip must then come back exactly."""
+    from aksharallm.audio.lm import training_pair
+    torch.manual_seed(0)
+    model = AudioLM(tiny())
+    codes = torch.randint(0, SIZE, (1, BOOKS, 8))
+
+    def step():
+        inputs, targets = training_pair(codes, PAD_ID, BOS_ID)
+        return model(inputs, targets=targets)[1]
+
+    assert _memorise(model, step) < 0.05
+    out = generate(model, 8, top_k=1, generator=torch.Generator().manual_seed(0))
+    assert torch.equal(out, codes)
+
+
+def test_training_pair_masks_each_row_to_its_own_length():
+    from aksharallm.audio.lm import training_pair
+    codes = torch.randint(0, SIZE, (2, BOOKS, 6))
+    codes[1, :, 4:] = PAD_ID                                 # row 1 is 4 frames, padded
+    inputs, targets = training_pair(codes, PAD_ID, BOS_ID, n_frames=[6, 4])
+    assert inputs.shape == targets.shape == (2, BOOKS, 6 + BOOKS)
+    assert (inputs[:, :, 0] == BOS_ID).all() and (targets[:, :, 0] == -100).all()
+    for i, t in enumerate([6, 4]):
+        assert int((targets[i] != -100).sum()) == BOOKS * t   # every real code, once
+
+
+def _two_utterances():
+    tok = CharTokenizer.from_texts(["ab", "cab d"])
+    texts = [tok.encode("ab"), tok.encode("cab d")]
+    g = torch.Generator().manual_seed(1)
+    clips = [torch.randint(0, SIZE, (BOOKS, 9), generator=g),
+             torch.randint(0, SIZE, (BOOKS, 5), generator=g)]
+    return tok, texts, clips
+
+
+@pytest.mark.parametrize("text_first", [True, False])
+def test_a_ragged_batch_scores_what_its_rows_score_alone(text_first):
+    """A short sentence must not have pads between its text and its audio, which is what
+    padding the two blocks separately does. Token-weighted, because the loss is a mean over
+    every supervised cell in the batch."""
+    from aksharallm.audio.speech import utterance_loss
+    torch.manual_seed(0)
+    tok, texts, clips = _two_utterances()
+    model = AudioLM(tiny(text_vocab=tok.vocab_size, max_text=8)).eval()
+    together = utterance_loss(model, clips, texts, text_first)
+    n = [BOOKS * c.shape[-1] if text_first else len(t) - 1 for c, t in zip(clips, texts)]
+    alone = sum(float(utterance_loss(model, [c], [t], text_first)) * k
+                for c, t, k in zip(clips, texts, n)) / sum(n)
+    assert float(together) == pytest.approx(alone, abs=1e-5)
+
+
+def test_a_memorised_utterance_is_spoken_from_its_own_text_and_transcribed_back():
+    """End to end through `speak` and `transcribe`, which build the layout their own way: if
+    training laid the rows out differently, a perfectly memorised pair would not come back."""
+    from aksharallm.audio.speech import utterance_loss
+    torch.manual_seed(0)
+    tok, texts, clips = _two_utterances()
+    model = AudioLM(tiny(text_vocab=tok.vocab_size, max_text=8))
+    _memorise(model, lambda: utterance_loss(model, clips, texts, True)
+              + utterance_loss(model, clips, texts, False), steps=400)
+    for clip, ids, text in zip(clips, texts, ["ab", "cab d"]):
+        spoken = speak(model, ids, clip.shape[-1], top_k=1)
+        assert torch.equal(spoken[0], clip)
+        assert transcribe(model, clip.unsqueeze(0), tok) == text
+
+
+# ---------------------------------------------------------------------------------------
+# the trainer, end to end, as TTS
+# ---------------------------------------------------------------------------------------
+
+
+def _tts_corpus(tmp_path, transcripts):
+    """A tiny codec checkpoint plus a codes directory with transcripts beside it."""
+    import json as _json
+    from dataclasses import asdict
+    import numpy as np
+    from aksharallm.audio.codec import Codec, CodecConfig
+    from aksharallm.audio.dataset import Manifest
+
+    ccfg = CodecConfig(channels=8, strides=(2, 4, 5), dim=16, n_codebooks=BOOKS,
+                       codebook_size=SIZE)
+    torch.manual_seed(0)
+    torch.save({"codec": asdict(ccfg), "model": Codec(ccfg).state_dict(), "stage": "codec"},
+               tmp_path / "codec.pt")
+    codes_dir = tmp_path / "codes"
+    codes_dir.mkdir()
+    rng = np.random.default_rng(0)
+    lens = [6, 9, 5, 8, 7, 6]
+    names = [f"c{i}.wav" for i in range(len(lens))]
+    with open(codes_dir / "codes.bin", "wb") as f:
+        for t in lens:
+            f.write(rng.integers(0, SIZE, (BOOKS, t)).astype("<i2").tobytes())
+    Manifest(sample_rate=16000, offsets=[int(x) for x in np.cumsum([0] + lens)], names=names,
+             sources=[{}] * len(lens), seconds=0.0, built="test").save(codes_dir / "manifest.json")
+    (codes_dir / "transcripts.json").write_text(_json.dumps(dict(zip(names, transcripts))))
+    return codes_dir
+
+
+def test_the_trainer_runs_tts_end_to_end_and_a_resume_keeps_its_tokenizer(tmp_path):
+    """Through `train_lm.main()`. The tokenizer is the text embedding's index (gotcha 3): a
+    resume must use the one it trained with, even when the corpus has since gained a
+    character, or every id after that character silently means a different letter."""
+    import yaml
+    from aksharallm.audio import train_lm
+
+    codes_dir = _tts_corpus(tmp_path, ["ab", "ba ab", "a", "abba", "b a", "bab"])
+    cfg = {"name": "tts-test",
+           "audiolm": {"codebook_size": SIZE, "n_codebooks": BOOKS, "max_frames": 12,
+                       "max_text": 10, "model": {"d_model": 32, "n_layers": 2, "n_heads": 4,
+                                                 "n_kv_heads": 2, "max_seq_len": 32}},
+           "data": {"codes": str(codes_dir), "codec": str(tmp_path / "codec.pt"),
+                    "task": "tts", "val_clips": 2},
+           "train": {"out_dir": str(tmp_path / "out"), "batch_size": 3, "max_steps": 3,
+                     "eval_every": 2, "eval_batches": 1, "sample_every": 2, "ckpt_every": 0,
+                     "log_every": 1}}
+    (tmp_path / "tts.yaml").write_text(yaml.safe_dump(cfg))
+    assert train_lm.main([str(tmp_path / "tts.yaml")]) == 0
+
+    blob = torch.load(tmp_path / "out" / "ckpt_last.pt", weights_only=False)
+    assert blob["task"] == "tts" and blob["tokenizer"]["alphabet"] == " ab"
+    assert (tmp_path / "out" / "samples" / "step000002.wav").exists()
+    assert (tmp_path / "out" / "samples" / "step000002.txt").read_text().strip() in {"b a", "bab"}
+
+    # The corpus gains a "c". A rebuilt tokenizer would shift every id; the resume must not.
+    (codes_dir / "transcripts.json").write_text(
+        (codes_dir / "transcripts.json").read_text().replace('"a"', '"ca"'))
+    cfg["train"]["max_steps"] = 4
+    (tmp_path / "tts.yaml").write_text(yaml.safe_dump(cfg))
+    assert train_lm.main([str(tmp_path / "tts.yaml")]) == 0
+    blob = torch.load(tmp_path / "out" / "ckpt_last.pt", weights_only=False)
+    assert blob["step"] == 3 and blob["tokenizer"]["alphabet"] == " ab"
+
+
+def test_the_tts_ladder_judges_each_row_against_the_plain_words_of_the_text():
+    """original / codec / tts, one judge, one reference: LJSpeech text with its punctuation
+    stripped to what a recogniser writes. Each row's WER is its own; the TTS is spoken at
+    the clip's real length."""
+    from aksharallm.audio.speech import plain_words, tts_ladder
+    assert plain_words("Mr. Smith's, 'dog' -- ran!") == "mr smith's 'dog' ran"
+
+    tok = CharTokenizer.from_texts(["the cat.", "a dog!"])
+    model = AudioLM(tiny(text_vocab=tok.vocab_size, max_text=12))
+    clips = [torch.randint(0, SIZE, (BOOKS, 6)), torch.randint(0, SIZE, (BOOKS, 4))]
+    utts = [(clips[0], tok.encode("the cat.")), (clips[1], tok.encode("a dog!"))]
+
+    class Codec:
+        def decode(self, codes):                 # one sample per frame, tagged by length
+            return torch.zeros(1, codes.shape[-1])
+
+    heard = {"original": ["the cat", "a dog"], "codec": ["the cat", "a fog"],
+             "tts": ["bat", "a dog dog dog dog"]}
+    calls = iter(heard)
+    lengths = []
+    rep = tts_ladder(model, tok, Codec(), utts, [torch.zeros(9).numpy()] * 2,
+                     lambda ws: (lengths.append([len(w) for w in ws]), heard[next(calls)])[1])
+    assert lengths[2] == [6, 4]                  # the TTS row was spoken at the real lengths
+    assert rep["rows"]["original"]["wer"] == 0.0
+    assert rep["rows"]["codec"]["wer"] == pytest.approx(0.25)     # 0/2 and 1/2 words
+    assert rep["rows"]["tts"]["items"][0]["ref"] == "the cat"
+    assert rep["rows"]["tts"]["runaway"] == 1    # 3 insertions over 2 words: WER 1.5

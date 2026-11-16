@@ -32,6 +32,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from ..config import ModelConfig, OptimConfig, config_to_dict, load_into
@@ -40,10 +41,11 @@ from ..train.pretrain import claim_pid_file
 from ..train.schedule import get_lr
 from .codec import load_codec
 from .config import AudioTrainConfig
-from .dataset import CodeDataset
-from .delay import delay
+from .dataset import CodeDataset, UtteranceDataset, normalise_text
 from .io import write_wav
-from .lm import AudioLM, AudioLMConfig, generate, make_targets
+from .lm import AudioLM, AudioLMConfig, generate, training_pair
+from .speech import speak, transcribe, utterance_loss
+from .text import CharTokenizer, load_transcripts
 
 
 @dataclass
@@ -52,6 +54,12 @@ class AudioLMDataConfig:
     codec: str = "checkpoints/codec-synth/ckpt_best.pt"
     window_frames: int = 200  # 4 s at 50 frames/s
     val_clips: int = 16
+    #: "audio" = continue sound (windows of codes); "tts" = text -> audio and "asr" = audio
+    #: -> text, both over whole utterances with their transcripts (`speech.utterance_loss`).
+    task: str = "audio"
+    #: Where the transcripts are found for tts/asr (`text.load_transcripts`): the packed
+    #: corpus the codes were made from. Empty = the codes directory.
+    corpus: str = ""
 
 
 @dataclass
@@ -71,14 +79,25 @@ def load_audiolm_config(path, overrides=None) -> AudioLMRunConfig:
 
 
 @torch.no_grad()
-def evaluate(model: AudioLM, ds: CodeDataset, pad_id: int, batch_size: int, batches: int) -> float:
+def evaluate(model: AudioLM, ds, pad_id: int, batch_size: int, batches: int,
+             task: str = "audio", seed: int = 0) -> float:
+    """Mean loss over `batches` validation batches -- the SAME batches every time.
+
+    The sampler is re-seeded on each call. Without it every evaluation drew different clips
+    and "best val" partly recorded the easiest draw (the diffusion validation paid for this
+    lesson first: docs/20).
+    """
     was = model.training
     model.eval()
+    ds.rng = np.random.default_rng(seed)
     total = 0.0
     for _ in range(batches):
-        codes = ds.batch(batch_size)
-        d = delay(codes, pad_id)
-        _, loss = model(d, targets=make_targets(d, codes.shape[-1], pad_id))
+        if task == "audio":
+            inputs, targets = training_pair(ds.batch(batch_size), pad_id, model.bos_id)
+            _, loss = model(inputs, targets=targets)
+        else:
+            clips, texts = ds.batch(batch_size)
+            loss = utterance_loss(model, clips, texts, text_first=task == "tts")
         total += float(loss)
     model.train(was)
     return total / max(batches, 1)
@@ -111,25 +130,44 @@ def main(argv=None) -> int:
             "mean different sounds."
         )
 
-    train_ds = CodeDataset(cfg.data.codes, cfg.data.window_frames, device,
-                           n_codebooks=cfg.audiolm.n_codebooks, seed=cfg.train.seed,
-                           split="train", val_clips=cfg.data.val_clips)
-    val_ds = CodeDataset(cfg.data.codes, cfg.data.window_frames, device,
-                         n_codebooks=cfg.audiolm.n_codebooks, seed=cfg.train.seed + 1,
-                         split="val", val_clips=cfg.data.val_clips)
+    task = cfg.data.task
+    if task not in ("audio", "tts", "asr"):
+        raise SystemExit(f"data.task must be audio, tts or asr, not {task!r}")
+    start_step, best = 0, float("inf")
+    ckpt_last = out_dir / "ckpt_last.pt"
+    resume = str(ckpt_last) if cfg.train.resume == "auto" and ckpt_last.is_file() else (
+        cfg.train.resume if cfg.train.resume != "auto" else None
+    )
+    blob = torch.load(resume, map_location=device, weights_only=False) if resume else None
+
+    tok = None
+    if task == "audio":
+        train_ds = CodeDataset(cfg.data.codes, cfg.data.window_frames, device,
+                               n_codebooks=cfg.audiolm.n_codebooks, seed=cfg.train.seed,
+                               split="train", val_clips=cfg.data.val_clips)
+        val_ds = CodeDataset(cfg.data.codes, cfg.data.window_frames, device,
+                             n_codebooks=cfg.audiolm.n_codebooks, seed=cfg.train.seed + 1,
+                             split="val", val_clips=cfg.data.val_clips)
+    else:
+        transcripts = load_transcripts(cfg.data.corpus or cfg.data.codes)
+        # The tokenizer IS the text embedding's index (gotcha 3), so a resume reuses the
+        # one it trained with rather than rebuilding it from whatever the corpus says today.
+        tok = (CharTokenizer.from_dict(blob["tokenizer"]) if blob and "tokenizer" in blob
+               else CharTokenizer.from_texts(normalise_text(t) for t in transcripts.values()))
+        cfg.audiolm.text_vocab_size = tok.vocab_size
+        kw = dict(n_codebooks=cfg.audiolm.n_codebooks, max_frames=cfg.audiolm.max_frames,
+                  max_text=cfg.audiolm.max_text, val_clips=cfg.data.val_clips)
+        train_ds = UtteranceDataset(cfg.data.codes, transcripts, tok, split="train",
+                                    seed=cfg.train.seed, **kw)
+        val_ds = UtteranceDataset(cfg.data.codes, transcripts, tok, split="val",
+                                  seed=cfg.train.seed + 1, **kw)
 
     model = AudioLM(cfg.audiolm).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.optim.lr,
                             betas=(cfg.optim.beta1, cfg.optim.beta2),
                             weight_decay=cfg.optim.weight_decay)
 
-    start_step, best = 0, float("inf")
-    ckpt_last = out_dir / "ckpt_last.pt"
-    resume = str(ckpt_last) if cfg.train.resume == "auto" and ckpt_last.is_file() else (
-        cfg.train.resume if cfg.train.resume != "auto" else None
-    )
     if resume:
-        blob = torch.load(resume, map_location=device, weights_only=False)
         model.load_state_dict(blob["model"])
         if "optimizer" in blob:
             opt.load_state_dict(blob["optimizer"])
@@ -137,16 +175,24 @@ def main(argv=None) -> int:
         best = float(blob.get("best_val", float("inf")))
         print(f"resumed {resume} at step {start_step}, best val {best:.4f}")
 
-    uniform = math.log(cfg.audiolm.codebook_size)
+    # ASR supervises text, so "knows nothing" is uniform over the characters instead.
+    uniform = math.log(tok.vocab_size if task == "asr" else cfg.audiolm.codebook_size)
     print(f"=== {cfg.name} ===")
     print(f"model      {model.num_params() / 1e6:.2f}M params, "
           f"{cfg.audiolm.n_codebooks} heads x {cfg.audiolm.codebook_size} codes")
     print(f"codec      {cfg.data.codec} ({codec.cfg.describe()})")
-    print(f"window     {cfg.data.window_frames} frames = "
-          f"{cfg.data.window_frames / codec.cfg.frames_per_second:.1f}s -> "
-          f"{cfg.data.window_frames + cfg.audiolm.n_codebooks - 1} positions after the delay")
+    if task == "audio":
+        print(f"window     {cfg.data.window_frames} frames = "
+              f"{cfg.data.window_frames / codec.cfg.frames_per_second:.1f}s -> "
+              f"{cfg.data.window_frames + cfg.audiolm.n_codebooks} positions with the delay + BOS")
+    else:
+        print(f"task       {task}: whole utterances up to {cfg.audiolm.max_frames} frames "
+              f"({cfg.audiolm.max_frames / codec.cfg.frames_per_second:.1f}s) and "
+              f"{cfg.audiolm.max_text} characters; {tok.vocab_size} text ids")
+        print(f"dropped    train " + ", ".join(f"{v} {k.replace('_', ' ')}"
+                                               for k, v in train_ds.dropped.items()))
     print(f"corpus     {len(train_ds)} train clips / {len(val_ds)} val")
-    print(f"expect     step-0 loss ~= ln({cfg.audiolm.codebook_size}) = {uniform:.4f}")
+    print(f"expect     step-0 loss ~= ln({tok.vocab_size if task == 'asr' else cfg.audiolm.codebook_size}) = {uniform:.4f}")
     print(f"device     {device}")
 
     claim_pid_file(out_dir)
@@ -170,7 +216,10 @@ def main(argv=None) -> int:
         stop_at = start_step + cfg.train.stop_after - 1
     run_t0 = time.time()
     stop_by = None if cfg.train.stop_after_s is None else run_t0 + cfg.train.stop_after_s
-    tokens_per_step = cfg.train.batch_size * cfg.data.window_frames * cfg.audiolm.n_codebooks
+    # Utterances vary in length, so a text task counts the codes it actually saw.
+    tokens_per_step = cfg.train.batch_size * cfg.audiolm.n_codebooks * (
+        cfg.data.window_frames if task == "audio" else cfg.audiolm.max_frames)
+    seen = 0
 
     log_session("session_start", pid=os.getpid(), start_step=start_step,
                 max_steps=cfg.train.max_steps, stop_at=stop_at, stop_by=stop_by,
@@ -183,6 +232,8 @@ def main(argv=None) -> int:
                     last_step=cfg.train.max_steps - 1, steps=0)
         return 0
 
+    # Saved with every checkpoint: a text model is unusable without the ids it learned.
+    extra = {"task": task, **({"tokenizer": tok.to_dict()} if tok else {})}
     model.train()
     t0 = time.time()
     prev_log_step = start_step - 1
@@ -195,12 +246,18 @@ def main(argv=None) -> int:
         for g in opt.param_groups:
             g["lr"] = lr
 
-        codes = train_ds.batch(cfg.train.batch_size)
-        d = delay(codes, model.pad_id)
-        targets = make_targets(d, codes.shape[-1], model.pad_id)
         with torch.autocast(device_type=device.split(":")[0], dtype=torch.bfloat16,
                             enabled=device.startswith("cuda")):
-            _, loss = model(d, targets=targets)
+            if task == "audio":
+                # [BOS] + delayed codes: the layout generation starts from (lm.training_pair).
+                d, targets = training_pair(train_ds.batch(cfg.train.batch_size),
+                                           model.pad_id, model.bos_id)
+                _, loss = model(d, targets=targets)
+                seen += tokens_per_step
+            else:
+                clips, texts = train_ds.batch(cfg.train.batch_size)
+                loss = utterance_loss(model, clips, texts, text_first=task == "tts")
+                seen += sum(int(c.numel()) for c in clips)
 
         opt.zero_grad(set_to_none=True)
         loss.backward()
@@ -215,7 +272,7 @@ def main(argv=None) -> int:
             n_steps = max(1, step - prev_log_step)
             rec = {"step": step, "loss": float(loss), "ema": ema, "lr": lr,
                    "grad_norm": float(grad_norm), "s_per_step": dt / n_steps,
-                   "tok_per_sec": n_steps * tokens_per_step / max(dt, 1e-9),
+                   "tok_per_sec": seen / max(dt, 1e-9),
                    "ppl": math.exp(min(float(loss), 20)),
                    "time": time.time(), "elapsed": time.time() - run_t0}
             logf.write(json.dumps(rec) + "\n")
@@ -223,27 +280,27 @@ def main(argv=None) -> int:
             print(f"step {step:>6}  loss {float(loss):>7.4f} (ema {ema:>7.4f})  "
                   f"ppl {rec['ppl']:>7.1f}  {rec['tok_per_sec']:>8.0f} tok/s  lr {lr:.2e}"
                   + ("   <- uniform" if abs(float(loss) - uniform) < 0.02 else ""))
-            t0, prev_log_step = time.time(), step
+            t0, prev_log_step, seen = time.time(), step, 0
 
         if cfg.train.eval_every and step > start_step and step % cfg.train.eval_every == 0:
             val = evaluate(model, val_ds, model.pad_id, cfg.train.batch_size,
-                           cfg.train.eval_batches)
+                           cfg.train.eval_batches, task, cfg.train.seed + 1)
             improved = val < best
             if improved:
                 best = val
-                _save(model, cfg, step, best, out_dir / "ckpt_best.pt")
+                _save(model, cfg, step, best, out_dir / "ckpt_best.pt", **extra)
             logf.write(json.dumps({"step": step, "time": time.time(), "val_loss": val}) + "\n")
             logf.flush()
             print(f"           val {val:.4f}{'  *best*' if improved else ''}")
             t0 = time.time()
 
         if cfg.train.sample_every and step > start_step and step % cfg.train.sample_every == 0:
-            path = _sample(model, codec, out_dir, step, cfg)
+            path = _sample(model, codec, out_dir, step, cfg, val_ds, tok)
             print(f"           sample -> {path}")
             t0 = time.time()
 
         if cfg.train.ckpt_every and step > start_step and step % cfg.train.ckpt_every == 0:
-            _save(model, cfg, step, best, ckpt_last, optimizer=opt.state_dict())
+            _save(model, cfg, step, best, ckpt_last, optimizer=opt.state_dict(), **extra)
             t0 = time.time()
 
         request = None if stop_now["now"] else stopfile.read(stop_file)
@@ -258,8 +315,8 @@ def main(argv=None) -> int:
         if why:
             break
 
-    _save(model, cfg, step, best, ckpt_last, optimizer=opt.state_dict())
-    _sample(model, codec, out_dir, step, cfg)
+    _save(model, cfg, step, best, ckpt_last, optimizer=opt.state_dict(), **extra)
+    _sample(model, codec, out_dir, step, cfg, val_ds, tok)
     reason = why or "max_steps"
     log_session("session_end", reason=reason, last_step=step, trained_to=step,
                 steps=step - start_step + 1, elapsed=time.time() - run_t0, best_val=best)
@@ -276,11 +333,32 @@ def _save(model: AudioLM, cfg: AudioLMRunConfig, step: int, best: float, path: P
 
 
 @torch.no_grad()
-def _sample(model: AudioLM, codec, out_dir: Path, step: int, cfg: AudioLMRunConfig) -> Path:
-    """Generate a few seconds and decode it through the codec, so it can be listened to."""
-    frames = min(cfg.audiolm.max_frames, int(3 * codec.cfg.frames_per_second))
+def _sample(model: AudioLM, codec, out_dir: Path, step: int, cfg: AudioLMRunConfig,
+            val_ds=None, tok=None) -> Path:
+    """Write something to listen to (or read): the loss says nothing about either.
+
+    audio: a few seconds of continuation. tts: the first validation sentence, spoken at its
+    real length, with the text beside it. asr: that clip transcribed, printed under the truth.
+    """
     device = next(model.parameters()).device
-    codes = generate(model, frames, device=device)
+    task = cfg.data.task
+    if task in ("tts", "asr"):
+        clip, ids = val_ds.get(0)
+        ref = tok.decode(ids[1:-1])
+        if task == "asr":
+            hyp = transcribe(model, clip.unsqueeze(0), tok, device=device)
+            path = out_dir / "samples" / f"step{step:06d}.txt"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"truth: {ref}\nheard: {hyp}\n")
+            print(f"           truth  {ref}\n           heard  {hyp}")
+            model.train()
+            return path
+        codes = speak(model, ids, clip.shape[-1], device=device)
+        (out_dir / "samples").mkdir(parents=True, exist_ok=True)
+        (out_dir / "samples" / f"step{step:06d}.txt").write_text(ref + "\n")
+    else:
+        frames = min(cfg.audiolm.max_frames, int(3 * codec.cfg.frames_per_second))
+        codes = generate(model, frames, device=device)
     wave = codec.decode(codes.to(device))[0].float().cpu().numpy()
     path = out_dir / "samples" / f"step{step:06d}.wav"
     write_wav(path, wave, codec.cfg.sample_rate)

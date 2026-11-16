@@ -590,7 +590,10 @@ say how far from audiobook speech it still works, and the 460-hour run is the fi
 [chapter 23 § Using it, step by step](23-speech-recognition.md).)
 
 ```bash
-scripts/audio.sh codec-lj                          # train the speech codec
+scripts/audio.sh codec-lj                          # train the speech codec (done: 2.60 dB at 4 kbps)
+python -m aksharallm.audio encode checkpoints/codec-lj/ckpt_best.pt --corpus data/audio/lj --out data/audio/lj-codes
+scripts/audio.sh audiolm-lj                        # text-to-speech in LJSpeech's voice
+python -m aksharallm.audio tts-report checkpoints/audiolm-lj/ckpt_best.pt   # judged by asr-libri460
 python -m aksharallm.vision caption vision-shapes  # caption held-out images and score them
 scripts/audio.sh asr-synth                         # a recogniser, no download, minutes
 python -m aksharallm.asr fetch train-clean-100     # then pack it, and scripts/audio.sh asr-libri100

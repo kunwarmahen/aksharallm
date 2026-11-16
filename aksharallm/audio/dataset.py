@@ -353,6 +353,59 @@ class CodeDataset:
         return torch.from_numpy(self._clip_view(i).astype(np.int64))
 
 
+class UtteranceDataset:
+    """Whole utterances with their transcripts, for TTS and ASR. `batch` -> `(clips, texts)`.
+
+    Not windows: a sentence's audio has to be all of that sentence, or the text and the
+    sound disagree about what was said. So clips longer than `max_frames`, or whose text is
+    longer than `max_text` ids, are dropped rather than cut, and the count is reported.
+    The validation clips are the last `val_clips` of the manifest, the same rule
+    `CodeDataset` uses, so the two kinds of run hold out the same audio.
+    """
+
+    def __init__(self, codes_dir: str | Path, transcripts: dict[str, str], tokenizer, *,
+                 n_codebooks: int, max_frames: int, max_text: int, split: str = "train",
+                 val_clips: int = 16, seed: int | None = None):
+        self.base = CodeDataset(codes_dir, 1, "cpu", n_codebooks=n_codebooks, seed=seed,
+                                split=split, val_clips=val_clips)
+        names, off = self.base.manifest.names, self.base.manifest.offsets
+        self.items, self.dropped = [], {"no_transcript": 0, "too_long_audio": 0,
+                                        "too_long_text": 0}
+        for i in self.base.clips:
+            text = transcripts.get(Path(names[i]).name)
+            if text is None:
+                self.dropped["no_transcript"] += 1
+                continue
+            ids = tokenizer.encode(normalise_text(text))
+            if off[i + 1] - off[i] > max_frames:
+                self.dropped["too_long_audio"] += 1
+            elif len(ids) > max_text:
+                self.dropped["too_long_text"] += 1
+            else:
+                self.items.append((i, ids))
+        if not self.items:
+            raise ValueError(f"no {split} utterance fits {max_frames} frames / {max_text} ids")
+        self.rng = np.random.default_rng(seed)
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def get(self, j: int) -> tuple[torch.Tensor, list[int]]:
+        i, ids = self.items[j]
+        return self.base.clip(i), ids
+
+    def batch(self, batch_size: int) -> tuple[list[torch.Tensor], list[list[int]]]:
+        picks = self.rng.choice(len(self.items), size=batch_size)
+        pairs = [self.get(int(j)) for j in picks]
+        return [c for c, _ in pairs], [t for _, t in pairs]
+
+
+def normalise_text(text: str) -> str:
+    """Lower case, whitespace collapsed. Case carries no sound, and a smaller alphabet is a
+    smaller table to learn; punctuation stays, because a comma is a pause."""
+    return " ".join(text.lower().split())
+
+
 # ---------------------------------------------------------------------------------------
 # a corpus that needs no download
 # ---------------------------------------------------------------------------------------

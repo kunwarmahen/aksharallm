@@ -201,6 +201,22 @@ That is a **bad codec** — 1,500 steps is a smoke test, and the numbers are her
 machinery works and the ladder is monotone, not to claim quality. `configs/codec-lj.yaml`
 budgets 150,000 steps.
 
+**The real one, `codec-lj`, measured 2026-11-15** (150,000 steps, finished 2026-08-10;
+`audio report checkpoints/codec-lj/ckpt_best.pt --corpus data/audio/lj --clips 16`, on
+held-out LJSpeech clips):
+
+| codebooks | kbps | vs PCM | convergence | MCD dB |
+|---|---|---|---|---|
+| 1 | 0.50 | 512× | 0.371 | 6.31 |
+| 2 | 1.00 | 256× | 0.286 | 4.23 |
+| 4 | 2.00 | 128× | 0.226 | 3.11 |
+| 8 | 4.00 | 64× | 0.191 | **2.60** |
+
+At 4 kbps the MCD is **2.60 dB**, inside the under-4 "very close" band, and every
+codebook is in use: 61–70% of the 1,024 entries, perplexity 620–720, no collapse anywhere.
+One codebook alone (0.5 kbps) is already at the edge of "recognisably degraded". This is
+the first codec in this repo good enough to build on, and `audiolm-lj` (Part 4) does.
+
 ---
 
 ## Part 3 — the delay pattern
@@ -327,6 +343,65 @@ Two traps here, both guarded:
 > constructed distortions rather than against a published toolchain, it is a number to
 > compare *our* checkpoints with, not one to put beside a paper's.
 
+### Two layout bugs, found before the first real run
+
+Neither showed on the synthetic corpus, and both are gotcha 2's family: the model trains on
+one arrangement of the sequence and generation uses another.
+
+1. **Generation starts from a BOS column that training never contained.** `generate` and
+   `speak` begin with `[BOS]` in every codebook and predict each column after it. Training
+   fed `delay(codes)` alone, so the first real column was never a target and the BOS
+   embedding was never trained. A model that had *memorised* a clip could not regenerate
+   it. `lm.training_pair` now prepends the column, and
+   `test_greedy_generation_reproduces_a_memorised_clip` fails without it. Every audio LM
+   sample written before 2026-11-15 began from an untrained context.
+2. **Padding went between a sentence and its audio.** `tts_batch` padded the texts to one
+   width and then appended the audio, so a short sentence had `[PAD]`s between its last
+   letter and its first frame, and the audio started at a different position in each row.
+   `speak` never sees those pads. The synthetic corpus's texts were all one length and hid
+   it. LJSpeech runs from 1 to 10 seconds. `speech.utterance_loss` lays out each row the
+   way inference does, `[text][BOS + audio]`, padded only at the end. A ragged batch now
+   scores exactly what its rows score one at a time, and a memorised pair comes back
+   through `speak` and `transcribe`.
+
+### TTS on LJSpeech: `audiolm-lj`
+
+`data.task: tts` makes the trainer read whole utterances with their transcripts
+(`dataset.UtteranceDataset`, never windows, because the audio has to be all of the sentence)
+and train with `utterance_loss`. The character tokenizer is built from the transcripts
+(lower-cased, punctuation kept: a comma is a pause) and saved in every checkpoint. A resume
+reuses the saved one, because the tokenizer is the text embedding's index (gotcha 3).
+
+```bash
+.venv/bin/python -m aksharallm.audio encode checkpoints/codec-lj/ckpt_best.pt \
+    --corpus data/audio/lj --out data/audio/lj-codes        # once, ~1 h on the CPU
+scripts/audio.sh audiolm-lj                                 # 42.3M, 60k steps
+.venv/bin/python -m aksharallm.audio tts-report checkpoints/audiolm-lj/ckpt_best.pt
+```
+
+The config is sized from the corpus: the longest clip is 505 frames and the longest
+transcript 189 characters, so `max_frames: 512` and `max_text: 192` drop nothing.
+
+**How it is scored: one independent judge, three rows.** The intelligibility trap above
+assumed the audio LM's own ASR as the judge. This repo has a better one now: the dictation
+recogniser (`asr-libri460`, 5.25% WER on test-clean; [doc 23](23-speech-recognition.md)),
+trained on other data by another objective. `tts-report` speaks held-out sentences and has
+it transcribe three versions of each:
+
+```mermaid
+flowchart LR
+  R["held-out LJSpeech<br/>recording"] --> J["asr-libri460<br/>(the judge)"]
+  R --> C["codec-lj<br/>encode + decode"] --> J
+  T["its transcript"] --> M["audiolm-lj<br/>speak"] --> D["codec decode"] --> J
+  J --> W["WER per row:<br/>original / codec / tts"]
+```
+
+Each row reads against the one above it: **original** is the judge's own error on this
+voice, **codec** adds what 4 kbps loses, **tts** adds what the model gets wrong. The TTS is
+given each sentence's *real* duration (`speak` needs a frame count, and there is no stop
+token), which a deployed system would not have, and the report says so. WAVs of all three
+are written side by side, because intelligibility is still not quality.
+
 ### The corpus that makes this measurable
 
 `synth_corpus` writes **its own transcripts**, because we chose the vowel sequence and
@@ -399,7 +474,7 @@ are that chapter's model, unchanged, over different integers.
 | 8 | [`audio/measure.py`](../aksharallm/audio/measure.py) | the table at the top — what each metric cannot see — then `cepstrum`'s relative floor |
 | 9 | [`audio/delay.py`](../aksharallm/audio/delay.py) | the ASCII diagram, then `delay` and `undelay`. Twelve lines, and trap 4 |
 | 10 | [`audio/lm.py`](../aksharallm/audio/lm.py) | `AudioLM.__init__` (why the body's own head is unused), then `forward`'s shift — it happens on the *delayed* sequence, which is the whole trick |
-| 11 | [`audio/text.py`](../aksharallm/audio/text.py) · [`audio/speech.py`](../aksharallm/audio/speech.py) | why character level; then `tts_batch` against `asr_batch` — one flag apart |
+| 11 | [`audio/text.py`](../aksharallm/audio/text.py) · [`audio/speech.py`](../aksharallm/audio/speech.py) | why character level; then `utterance_loss`, where TTS and ASR are one flag apart and each row is laid out the way `speak`/`transcribe` lay it out; then `tts_ladder`, the three-row score |
 | 12 | [`aksharallm/audio/__main__.py`](../aksharallm/audio/__main__.py) · [`portal/audio.py`](../aksharallm/portal/audio.py) | the two front ends, over one set of functions |
 
 What pins it: [`tests/test_audio.py`](../tests/test_audio.py) and

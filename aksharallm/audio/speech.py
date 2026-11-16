@@ -41,9 +41,10 @@ these files in. See also docs/06-posttraining.md.
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 
 from .delay import delay, undelay
-from .lm import AudioLM, make_targets
+from .lm import AudioLM
 from .text import BOS, EOS, PAD, CharTokenizer, character_error_rate, word_error_rate
 
 
@@ -63,19 +64,88 @@ def pad_text(batch: list[list[int]], device="cpu") -> tuple[torch.Tensor, torch.
     return ids.to(device), tgt.to(device)
 
 
+def utterance_loss(model: AudioLM, clips: list[torch.Tensor], texts: list[list[int]],
+                   text_first: bool = True) -> torch.Tensor:
+    """The loss for a batch of whole utterances of *different* lengths. TTS or ASR.
+
+    `clips[i]` is undelayed codes `(N, T_i)`; `texts[i]` is that clip's character ids.
+
+    **Each row is laid out exactly as inference lays it out, and padded only at its end:**
+
+        TTS  [text_i][BOS + delayed audio_i][pad ...]     loss on the audio
+        ASR  [delayed audio_i][text_i][pad ...]           loss on the text
+
+    The obvious batch -- pad the texts to one width and the audio to another, then
+    concatenate the two blocks -- puts `[PAD]`s *between* a short sentence and its audio, and
+    starts the audio at a different position in every row. `speak` and `transcribe` never
+    see those pads, so the model would learn a layout it is never asked to use. On the
+    synthetic corpus every clip was the same length and nothing showed it; LJSpeech runs from
+    one second to ten. Right-padding the combined row needs no attention mask under a causal
+    mask, for the reason `pad_text` gives. `tests/test_audiolm.py` asserts a ragged batch
+    scores exactly what its rows score one at a time.
+    """
+    from .delay import valid_mask
+
+    n, pad, bos = model.cfg.n_codebooks, model.pad_id, model.bos_id
+    dev = model.embeds[0].weight.device
+    b = len(clips)
+    frames = [int(c.shape[-1]) for c in clips]
+    width = max(frames)
+    codes = torch.full((b, n, width), pad, dtype=torch.long, device=dev)
+    for i, c in enumerate(clips):
+        codes[i, :, : frames[i]] = c.to(dev)
+    d = delay(codes, pad)                                         # (B, N, W + N - 1)
+    if text_first:  # TTS starts the audio from a BOS column, as `speak` does
+        d = torch.cat([d.new_full((b, n, 1), bos), d], dim=-1)
+    lead = 1 if text_first else 0
+    a_len = [t + n - 1 + lead for t in frames]                    # audio positions per row
+
+    tid, ttgt = pad_text(texts, dev)
+    t_len = [len(t) for t in texts]
+    audio_x, text_x = model.embed_audio(d), model.embed_text(tid)
+
+    total = [a + t for a, t in zip(a_len, t_len)]
+    x = audio_x.new_zeros((b, max(total), audio_x.shape[-1]))
+    a_at, t_at = [], []                                           # where each part starts
+    for i in range(b):
+        first, second = (t_len[i], a_len[i]) if text_first else (a_len[i], t_len[i])
+        a0 = first if text_first else 0
+        t0 = 0 if text_first else first
+        x[i, a0 : a0 + a_len[i]] = audio_x[i, : a_len[i]]
+        x[i, t0 : t0 + t_len[i]] = text_x[i, : t_len[i]]
+        a_at.append(a0)
+        t_at.append(t0)
+    hidden, _ = model.body(None, inputs_embeds=x, return_hidden=True)
+
+    def gather(starts, width_):
+        idx = torch.tensor(starts, device=dev).unsqueeze(1) + torch.arange(width_, device=dev)
+        idx = idx.clamp(max=hidden.shape[1] - 1)    # past a row's end: targets are -100
+        return hidden.gather(1, idx.unsqueeze(-1).expand(-1, -1, hidden.shape[-1]))
+
+    if text_first:
+        tgt = torch.full_like(d, -100)
+        for i, t in enumerate(frames):
+            s = t + n - 1
+            m = valid_mask(n, t, device=dev)
+            tgt[i, :, 1 : 1 + s] = torch.where(m, d[i, :, 1 : 1 + s],
+                                               torch.full_like(d[i, :, 1 : 1 + s], -100))
+        h = gather(a_at, d.shape[-1])
+        logits = torch.stack([head(h) for head in model.heads], dim=2)   # (B, S, N, V)
+        return F.cross_entropy(logits[:, :-1].reshape(-1, model.cfg.codebook_size).float(),
+                               tgt[:, :, 1:].permute(0, 2, 1).reshape(-1), ignore_index=-100)
+    h = gather(t_at, tid.shape[1])
+    return F.cross_entropy(model.text_head(h)[:, :-1].reshape(-1, model.cfg.text_vocab_size).float(),
+                           ttgt[:, 1:].reshape(-1), ignore_index=-100)
+
+
 def tts_batch(model: AudioLM, codes: torch.Tensor, texts: list[list[int]]):
     """Loss for text -> audio. Supervises the audio only; the text is context."""
-    d = delay(codes, model.pad_id)
-    ids, _ = pad_text(texts, codes.device)
-    return model(d, text=ids, targets=make_targets(d, codes.shape[-1], model.pad_id),
-                 text_first=True)
+    return None, utterance_loss(model, list(codes), texts, text_first=True)
 
 
 def asr_batch(model: AudioLM, codes: torch.Tensor, texts: list[list[int]]):
     """Loss for audio -> text. Supervises the text only; the audio is context."""
-    d = delay(codes, model.pad_id)
-    ids, tgt = pad_text(texts, codes.device)
-    return model(d, text=ids, text_targets=tgt, text_first=False)
+    return None, utterance_loss(model, list(codes), texts, text_first=False)
 
 
 # ---------------------------------------------------------------------------------------
@@ -203,3 +273,65 @@ def intelligibility(asr_model, tokenizer, codec, tts_codes, reference: str, devi
         "cer": character_error_rate(reference, hypothesis),
         "measures": "intelligibility, not quality",
     }
+
+
+def plain_words(text: str) -> str:
+    """What a recogniser can be compared against: lower case letters, apostrophes, spaces.
+    LJSpeech's transcripts carry punctuation the recogniser never writes."""
+    import re
+    return " ".join(re.sub(r"[^a-z' ]+", " ", text.lower()).split())
+
+
+def load_tts(path, device: str = "cpu"):
+    """`(model, tokenizer, blob)` for an audio LM trained with `data.task: tts`."""
+    from ..config import ModelConfig
+    from .lm import AudioLMConfig
+
+    blob = torch.load(path, map_location=device, weights_only=False)
+    if blob.get("stage") != "audiolm" or blob.get("task") != "tts":
+        raise ValueError(f"{path} is not a TTS audio LM (stage={blob.get('stage')!r}, "
+                         f"task={blob.get('task')!r})")
+    shape = dict(blob["audiolm"])
+    shape["model"] = ModelConfig(**shape["model"])
+    model = AudioLM(AudioLMConfig(**shape)).to(device)
+    model.load_state_dict(blob["model"])
+    model.eval()
+    return model, CharTokenizer.from_dict(blob["tokenizer"]), blob
+
+
+@torch.no_grad()
+def tts_ladder(model, tok, codec, utterances, originals, transcribe_fn, *, temperature=0.8,
+               seed=0, device="cpu", keep=None) -> dict:
+    """The same sentences three ways, judged by one independent recogniser.
+
+        original   the recording itself            -> the judge's own error on this voice
+        codec      the recording through the codec -> what the codec loses
+        tts        the model speaking the text     -> what the TTS gets wrong
+
+    Each row is only readable against the one above it. The TTS is given each sentence's
+    **real duration** (`speak` needs a frame count, and this model has no stop token), which
+    is an advantage a deployed system would not have, and the report says so.
+
+    `utterances` is `[(codes (N, T), text ids)]`, `originals` the matching float waveforms,
+    `transcribe_fn(list_of_waves) -> list_of_str`. `keep(j, name, wave)` is called for each
+    waveform, so the caller can write them out to listen to.
+    """
+    gen = torch.Generator(device=device).manual_seed(seed)
+    refs, waves = [], {"original": [], "codec": [], "tts": []}
+    for j, ((codes, ids), orig) in enumerate(zip(utterances, originals)):
+        refs.append(plain_words(tok.decode(ids[1:-1])))
+        recon = codec.decode(codes.unsqueeze(0).to(device))[0].float().cpu().numpy()
+        spoken = speak(model, ids, codes.shape[-1], temperature=temperature, device=device,
+                       generator=gen)
+        tts = codec.decode(spoken.to(device))[0].float().cpu().numpy()
+        for name, w in (("original", orig), ("codec", recon), ("tts", tts)):
+            waves[name].append(w)
+            if keep:
+                keep(j, name, w)
+    rows = {}
+    for name, ws in waves.items():
+        hyps = [plain_words(h) for h in transcribe_fn(ws)]
+        rows[name] = {**asr_report(list(zip(refs, hyps))),
+                      "items": [{"ref": r, "hyp": h} for r, h in zip(refs, hyps)]}
+    return {"n": len(refs), "temperature": temperature, "seed": seed,
+            "duration": "the real recording's (given, not predicted)", "rows": rows}

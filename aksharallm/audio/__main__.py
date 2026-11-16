@@ -246,6 +246,61 @@ def cmd_codec_report(args) -> int:
     return 0
 
 
+def cmd_tts_report(args) -> int:
+    """`tts_ladder` over held-out LJSpeech-style sentences, WAVs written, JSON in logs/audio."""
+    import json as _json
+    from ..asr.__main__ import resolve as resolve_asr
+    from ..asr.measure import transcribe as asr_transcribe
+    from ..asr.train import load_recognizer
+    from .codec import load_codec
+    from .dataset import Manifest, UtteranceDataset
+    from .speech import load_tts, tts_ladder
+    from .text import load_transcripts
+
+    device = "cuda" if torch.cuda.is_available() and not args.cpu else "cpu"
+    model, tok, blob = load_tts(args.checkpoint, device)
+    codec = load_codec(blob["codec"], device)
+    data = blob["config"]["data"]
+    corpus = Path(data.get("corpus") or data["codes"])
+    val = UtteranceDataset(data["codes"], load_transcripts(corpus), tok, split="val",
+                           n_codebooks=model.cfg.n_codebooks, max_frames=model.cfg.max_frames,
+                           max_text=model.cfg.max_text, val_clips=data["val_clips"])
+    src = Manifest.load(corpus / "manifest.json")
+    samples = np.memmap(corpus / "audio.bin", dtype="<i2", mode="r")
+    by_name = {n: i for i, n in enumerate(src.names)}
+    names = val.base.manifest.names
+    n = min(args.n, len(val))
+    utts, origs = [], []
+    for j in range(n):
+        i = by_name[names[val.items[j][0]]]
+        utts.append(val.get(j))
+        origs.append(samples[src.offsets[i]:src.offsets[i + 1]].astype(np.float32) / 32768.0)
+
+    run = Path(args.checkpoint).parent.name
+    out_dir = Path(args.out_dir or f"logs/audio/tts-{run}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    asr_model, _ = load_recognizer(resolve_asr(args.asr), device)
+    print(f"tts         {args.checkpoint} (step {blob.get('step')}), {n} held-out sentences")
+    print(f"judge       {args.asr}, greedy\ndevice      {device}\n")
+    rep = tts_ladder(model, tok, codec, utts, origs,
+                     lambda ws: asr_transcribe(asr_model, ws, device),
+                     temperature=args.temperature, seed=args.seed, device=device,
+                     keep=lambda j, kind, w: write_wav(out_dir / f"{j:02d}-{kind}.wav", w,
+                                                       codec.cfg.sample_rate))
+    print(f"{'row':>9} {'WER':>7} {'CER':>7} {'runaway':>8}")
+    for kind, row in rep["rows"].items():
+        print(f"{kind:>9} {row['wer'] * 100:>6.1f}% {row['cer'] * 100:>6.1f}% {row['runaway']:>8}")
+    ex = rep["rows"]["tts"]["items"][0]
+    print(f"\n  e.g. said  {ex['ref']}\n       heard {ex['hyp']}")
+    print("  The TTS row is given each sentence's real duration. Intelligibility is not quality:")
+    print(f"  listen to {out_dir}/NN-tts.wav beside NN-original.wav.")
+    path = Path("logs/audio") / f"tts-{run}-step{blob.get('step')}.json"
+    path.write_text(_json.dumps({"checkpoint": str(args.checkpoint), "step": blob.get("step"),
+                                 "judge": args.asr, **rep}, indent=1))
+    print(f"wrote {path}")
+    return 0
+
+
 def cmd_codec_reconstruct(args) -> int:
     from .codec import load_codec
     from .features import MelConfig, magnitude
@@ -377,6 +432,17 @@ def main(argv=None) -> int:
     s.add_argument("wav")
     s.add_argument("--frames", type=int, default=16)
     s.set_defaults(fn=cmd_codec_tokens)
+
+    s = sub.add_parser("tts-report", help="TTS, judged by the dictation recogniser: "
+                                          "original vs codec vs spoken, on held-out sentences")
+    s.add_argument("checkpoint", help="an audio LM trained with data.task: tts")
+    s.add_argument("--asr", default="asr-libri460", help="the recogniser that judges (run or .pt)")
+    s.add_argument("--n", type=int, default=20, help="held-out sentences to speak")
+    s.add_argument("--temperature", type=float, default=0.8)
+    s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--out-dir", default=None, help="WAVs to listen to (default logs/audio/tts-<run>)")
+    s.add_argument("--cpu", action="store_true", help="force the CPU (a run has the card)")
+    s.set_defaults(fn=cmd_tts_report)
 
     args = p.parse_args(argv)
     return args.fn(args)
