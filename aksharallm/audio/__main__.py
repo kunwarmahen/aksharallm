@@ -194,7 +194,12 @@ def cmd_encode(args) -> int:
     device = "cuda" if torch.cuda.is_available() and not args.cpu else "cpu"
     codec = load_codec(args.checkpoint, device)
     encode_corpus(codec, args.corpus, args.out)
-    print("\nnow train the audio LM:  scripts/audio.sh audiolm-synth")
+    # Name the config that reads these codes rather than always pointing at the smoke one.
+    import yaml
+    users = [c.stem for c in sorted(Path("configs").glob("audiolm-*.yaml"))
+             if ((yaml.safe_load(c.read_text()) or {}).get("data") or {}).get("codes") == args.out]
+    print("\nnow train the audio LM:  " + (" or ".join(f"scripts/audio.sh {u}" for u in users)
+                                         or f"a configs/audiolm-*.yaml with data.codes: {args.out}"))
     return 0
 
 
