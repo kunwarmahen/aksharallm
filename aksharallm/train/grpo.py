@@ -335,6 +335,84 @@ def humaneval_names() -> set[str]:
             if l.strip()}
 
 
+def probe_passes(prompts, k: int, sample, decode) -> list[int]:
+    """How many of `k` sampled completions pass, for every training prompt.
+
+    `sample(list_of_prompt_ids)` returns groups of `k` `(full, gen)` pairs, the shape both
+    samplers produce. The probe uses the trainer's own sampler, temperature and reward, so
+    "learnable" below means exactly what the update will see.
+    """
+    return [sum(rfn(text, decode(gen)) >= 1.0 for _, gen in grp)
+            for (_, text, rfn), grp in zip(prompts, sample([p for p, _, _ in prompts]))]
+
+
+def learnable(passes: list[int], k: int) -> list[int]:
+    """Indices of the prompts worth training on: solved sometimes, not always.
+
+    A group's advantages are its rewards minus their mean, so a group that all fails or all
+    passes has advantage zero everywhere and contributes nothing to the update but its cost.
+    Phase 4b ran MBPP-train unfiltered: ~3% of completions passed, most groups were all-zero,
+    and the held-out score never beat step 0. Filtering is the fix it named.
+    """
+    return [i for i, p in enumerate(passes) if 0 < p < k]
+
+
+def filter_prompts(prompts, args, sample, decode, out_dir: Path):
+    """Keep the learnable prompts, probing once and caching the counts in the run directory.
+
+    Cached because the list must not change on a resume: the prompt sampler's saved RNG
+    state picks *indices* into it, so a re-probe that kept a different set would silently
+    feed the run different tasks. The cache is used only when everything that decides the
+    counts matches; anything else re-probes and says why.
+    """
+    key = {"init": str(Path(args.init).resolve()), "k": args.filter,
+           "temperature": args.temperature, "top_k": args.top_k, "top_p": args.top_p,
+           "max_new_tokens": args.max_new_tokens, "tasks": [t for _, t, _ in prompts]}
+    path = out_dir / "probe.json"
+    passes = None
+    if path.exists():
+        saved = json.loads(path.read_text())
+        if saved.get("key") == key:
+            passes = saved["passes"]
+            print(f"filter     probe counts from {path}")
+        else:
+            print(f"filter     {path} was made with other settings; probing again")
+    if passes is None:
+        t0 = time.time()
+        print(f"filter     probing {len(prompts)} tasks x {args.filter} samples ...", flush=True)
+        passes = probe_passes(prompts, args.filter, sample, decode)
+        path.write_text(json.dumps({"key": key, "passes": passes,
+                                    "seconds": round(time.time() - t0, 1)}))
+    keep = learnable(passes, args.filter)
+    never = sum(p == 0 for p in passes)
+    always = sum(p == args.filter for p in passes)
+    print(f"filter     {len(keep)} of {len(prompts)} kept (0 < pass < {args.filter}); "
+          f"{never} never solved, {always} always solved")
+    if not keep:
+        raise SystemExit("no learnable tasks: nothing was solved sometimes but not always")
+    return [prompts[i] for i in keep]
+
+
+def task_set_of(args) -> dict:
+    """Everything that decides which prompts a run trains and is judged on."""
+    return {"reward": args.reward, "tasks": args.tasks, "holdout": args.holdout,
+            "filter": args.filter, "chat": args.chat}
+
+
+def check_task_set(saved: dict | None, now: dict, path) -> None:
+    """Refuse a resume that would train on different tasks from the run it continues."""
+    if saved is None:
+        print(f"resume     {path} predates task bookkeeping; cannot check it trains on the "
+              "same tasks")
+        return
+    if saved != now:
+        diff = ", ".join(f"{k} {saved.get(k)!r} -> {now.get(k)!r}"
+                         for k in sorted(set(saved) | set(now)) if saved.get(k) != now.get(k))
+        raise SystemExit(f"refusing to resume {path}: it trained on other tasks ({diff}). "
+                         "Pass the same settings, or start a new run (--resume none, or "
+                         "STAGE_RUN=<name>-grpo with stage.sh).")
+
+
 def split_holdout(tasks, n):
     from ..infer.tasks import split_holdout as split
     return split(tasks, n) if n > 0 else (list(tasks), [])
@@ -385,6 +463,10 @@ def main():
                     help="tasks never trained on, scored greedily every --eval-every steps; "
                          "the best checkpoint is chosen on them (default 20 with --tasks, "
                          "0 without)")
+    ap.add_argument("--filter", type=int, default=0, metavar="K",
+                    help="before training, sample K completions per task and keep only the "
+                         "tasks solved sometimes but not always (0 = off); cached in "
+                         "<out-dir>/probe.json")
     ap.add_argument("--eval-every", type=int, default=50)
     ap.add_argument("--best-window", type=int, default=20,
                     help="without a holdout, 'best' is the mean reward over this many steps "
@@ -505,12 +587,19 @@ def main():
     # make the run measure itself against itself, so the KL collapses toward zero and the
     # policy is free to wander arbitrarily far from the SFT model — while the logged `kl`
     # still looks small. Nothing about the numbers would tell you.
+    #
+    # What the run trains on is part of its identity. Phase 4b was resumed twice without
+    # TASKS=mbpp (stage.sh's default is the synth set): the later sessions trained on other
+    # tasks, scored another held-out set, and -- the rule having changed -- replaced
+    # grpo_best.pt with the result, while the log read as one continuous run.
+    task_set = task_set_of(args)
     resumed = resume.resolve(args.resume, out_dir / "grpo_last.pt")
     start_step, resumed_state = 0, None
     if resumed:
         prev = resume.load(resumed, policy, optimizer, args.device)
         resumed_state = prev.get("grpo_progress") or {}
         start_step = int(resumed_state.get("step", prev.get("step", -1))) + 1
+        check_task_set(resumed_state.get("task_set"), task_set, resumed)
     ctx = (torch.autocast("cuda", dtype=torch.bfloat16)
            if args.device.startswith("cuda") else torch.autocast("cpu", enabled=False))
 
@@ -606,6 +695,28 @@ def main():
                                 max_batch=args.prompts_per_step * args.group_size,
                                 max_new=args.max_new_tokens)
     print(f"sampler    {'batched (one pass per step)' if sampler else 'serial (one sequence at a time)'}")
+
+    if args.filter and args.reward == "code" and start_step < args.steps:
+        cap = args.prompts_per_step * args.group_size
+
+        def probe_sample(pids_list):
+            policy.eval()
+            out = []
+            with torch.no_grad():
+                if sampler is not None:
+                    per = max(1, cap // args.filter)
+                    for i in range(0, len(pids_list), per):
+                        out += sample_groups_batched(
+                            sampler, pids_list[i:i + per], args.filter, args.max_new_tokens,
+                            args.temperature, args.top_k, args.top_p, tok.eos_id)
+                else:
+                    out = [sample_group(policy, pids, args.filter, args.max_new_tokens,
+                                        args.temperature, args.top_k, args.top_p, tok.eos_id,
+                                        args.device) for pids in pids_list]
+            policy.train()
+            return out
+
+        prompts = filter_prompts(prompts, args, probe_sample, tok.decode, out_dir)
 
     why = None
     announced = None
@@ -728,11 +839,11 @@ def main():
         elif not held_out and len(recent) >= args.best_window:
             score = sum(recent[-args.best_window:]) / args.best_window
         progress = {**resume.step_progress(step, rng.bit_generator.state, best_reward),
-                    "best_rule": best_rule}
+                    "best_rule": best_rule, "task_set": task_set}
         if score is not None and score > best_reward:
             best_reward = score
             progress = {**resume.step_progress(step, rng.bit_generator.state, best_reward),
-                    "best_rule": best_rule}
+                    "best_rule": best_rule, "task_set": task_set}
             save_checkpoint(out_dir / "grpo_best.pt", policy, optimizer,
                             _rebuild_cfg(ckpt, mcfg, args), step, best_reward,
                             extra={"grpo_progress": progress})
@@ -749,7 +860,7 @@ def main():
                     _rebuild_cfg(ckpt, mcfg, args), last_step, best_reward,
                     extra={"grpo_progress": {**resume.step_progress(
                         last_step, rng.bit_generator.state, best_reward),
-                        "best_rule": best_rule}})
+                        "best_rule": best_rule, "task_set": task_set}})
     # Clear the honoured request: a stop file left behind would end the *next* run at step 0.
     if why and stop_file.exists():
         stop_file.unlink(missing_ok=True)

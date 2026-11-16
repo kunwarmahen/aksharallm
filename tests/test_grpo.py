@@ -468,3 +468,131 @@ def test_an_mbpp_reference_body_earns_full_reward_and_a_wrong_one_none(fake_mbpp
     reward = CodeReward(task)
     assert reward(task.prompt, "    return a + b\n") == 1.0
     assert reward(task.prompt, "    return a - b\n") == 0.0
+
+
+# ---- --filter: train only on tasks the model solves sometimes ----------------------------
+
+def test_learnable_keeps_only_tasks_solved_sometimes_but_not_always():
+    from aksharallm.train.grpo import learnable
+    assert learnable([0, 1, 4, 7, 8, 3], k=8) == [1, 2, 3, 5]
+
+
+def _probe_setup(tmp_path, k=4):
+    """Three prompts whose sampled completions pass 0, 2 and k times out of k."""
+    from argparse import Namespace
+    passing = {"never": 0, "some": 2, "always": k}
+    prompts = [([i], name, lambda _p, c: 1.0 if c == "ok" else 0.0)
+               for i, name in enumerate(passing)]
+    calls = []
+
+    def sample(pids_list):
+        calls.append(list(pids_list))
+        names = list(passing)
+        return [[(None, "ok" if j < passing[names[p[0]]] else "no") for j in range(k)]
+                for p in pids_list]
+
+    args = Namespace(init=str(tmp_path / "init.pt"), filter=k, temperature=0.8, top_k=50,
+                     top_p=0.95, max_new_tokens=64)
+    return prompts, sample, calls, args
+
+
+def test_the_filter_keeps_the_learnable_task_and_caches_the_probe(tmp_path):
+    from aksharallm.train.grpo import filter_prompts
+    prompts, sample, calls, args = _probe_setup(tmp_path)
+    kept = filter_prompts(prompts, args, sample, lambda g: g, tmp_path)
+    assert [t for _, t, _ in kept] == ["some"]
+    assert json.loads((tmp_path / "probe.json").read_text())["passes"] == [0, 2, 4]
+    # A resume must train on the same list, so the second call reads the cache.
+    again = filter_prompts(prompts, args, sample, lambda g: g, tmp_path)
+    assert [t for _, t, _ in again] == ["some"] and len(calls) == 1
+
+
+def test_a_probe_made_with_other_settings_is_not_reused(tmp_path):
+    from aksharallm.train.grpo import filter_prompts
+    prompts, sample, calls, args = _probe_setup(tmp_path)
+    filter_prompts(prompts, args, sample, lambda g: g, tmp_path)
+    args.temperature = 1.0                  # the counts depend on it
+    filter_prompts(prompts, args, sample, lambda g: g, tmp_path)
+    assert len(calls) == 2
+
+
+def test_main_probes_before_training_and_refuses_when_nothing_is_learnable(tmp_path, monkeypatch):
+    """Through `main()`: an untrained model solves nothing, so every group would be all-zero
+    and the run would spend its whole budget on updates with zero advantage. It must stop
+    before step 0 and say why, having written the probe it decided on."""
+    import sys
+    from aksharallm.config import ModelConfig
+    from aksharallm.model.transformer import Transformer
+    from aksharallm.tokenizer.tokenizer import train_bpe
+    from aksharallm.train import grpo
+
+    tok = tmp_path / "tok.json"
+    train_bpe(iter(["def f(x):\n    return x * 2\n", "Write a Python function."] * 40),
+              vocab_size=300, out_path=tok)
+    cfg = dict(vocab_size=300, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2,
+               max_seq_len=256, tie_embeddings=True)
+    torch.manual_seed(0)
+    torch.save({"model": Transformer(ModelConfig(**cfg)).state_dict(), "model_config": cfg,
+                "config": {}, "step": 0}, tmp_path / "init.pt")
+    data = tmp_path / "synth"
+    data.mkdir()
+    (data / "samples.jsonl").write_text("\n".join(json.dumps(r) for r in _synth_rows()) + "\n")
+    out = tmp_path / "out"
+    monkeypatch.setattr(sys, "argv", [
+        "grpo", "--init", str(tmp_path / "init.pt"), "--tokenizer", str(tok),
+        "--out-dir", str(out), "--tasks", str(data), "--holdout", "1", "--filter", "2",
+        "--steps", "2", "--group-size", "2", "--prompts-per-step", "2",
+        "--max-new-tokens", "6", "--device", "cpu", "--sampler", "serial"])
+    monkeypatch.setattr(grpo, "humaneval_names", lambda: {"intersperse"})
+    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32",
+                        torch.backends.cuda.matmul.allow_tf32)
+    monkeypatch.setattr(torch.backends.cudnn, "allow_tf32", torch.backends.cudnn.allow_tf32)
+    with pytest.raises(SystemExit, match="no learnable tasks"):
+        grpo.main()
+    probe = json.loads((out / "probe.json").read_text())
+    assert probe["key"]["k"] == 2 and set(probe["passes"]) == {0}
+    assert not any("step" in json.loads(l) and "reward" in json.loads(l)
+                   for l in (out / "grpo_log.jsonl").read_text().splitlines())
+
+
+def test_a_resume_on_different_tasks_is_refused(tmp_path, monkeypatch):
+    """Phase 4b was resumed without TASKS=mbpp and quietly finished on the synth set, with
+    grpo_best.pt replaced by the result. Same settings resume; different ones refuse."""
+    import sys
+    from aksharallm.config import ModelConfig
+    from aksharallm.model.transformer import Transformer
+    from aksharallm.tokenizer.tokenizer import train_bpe
+    from aksharallm.train import grpo
+
+    tok = tmp_path / "tok.json"
+    train_bpe(iter(["def f(x):\n    return x * 2\n", "Write a Python function."] * 40),
+              vocab_size=300, out_path=tok)
+    cfg = dict(vocab_size=300, d_model=32, n_layers=2, n_heads=4, n_kv_heads=2,
+               max_seq_len=256, tie_embeddings=True)
+    torch.manual_seed(0)
+    torch.save({"model": Transformer(ModelConfig(**cfg)).state_dict(), "model_config": cfg,
+                "config": {}, "step": 0}, tmp_path / "init.pt")
+    data = tmp_path / "synth"
+    data.mkdir()
+    (data / "samples.jsonl").write_text("\n".join(json.dumps(r) for r in _synth_rows()) + "\n")
+    monkeypatch.setattr(grpo, "humaneval_names", lambda: {"intersperse"})
+    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32",
+                        torch.backends.cuda.matmul.allow_tf32)
+    monkeypatch.setattr(torch.backends.cudnn, "allow_tf32", torch.backends.cudnn.allow_tf32)
+
+    def run(steps, holdout):
+        monkeypatch.setattr(sys, "argv", [
+            "grpo", "--init", str(tmp_path / "init.pt"), "--tokenizer", str(tok),
+            "--out-dir", str(tmp_path / "out"), "--tasks", str(data), "--holdout", holdout,
+            "--steps", str(steps), "--group-size", "2", "--prompts-per-step", "2",
+            "--max-new-tokens", "6", "--device", "cpu", "--sampler", "serial",
+            "--resume", "auto"])
+        grpo.main()
+
+    run(1, "1")
+    run(2, "1")                                  # same tasks: resumes at step 1
+    starts = [json.loads(l) for l in (tmp_path / "out" / "grpo_log.jsonl").read_text()
+              .splitlines() if '"session_start"' in l]
+    assert [s["start_step"] for s in starts] == [0, 1]
+    with pytest.raises(SystemExit, match="other tasks.*holdout"):
+        run(3, "2")

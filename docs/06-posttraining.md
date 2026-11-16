@@ -541,6 +541,52 @@ this set is too hard for the policy. **The fix is to train only where there is s
 measure each training task's pass rate first and keep the tasks the model solves *sometimes*
 (0 < c < n), or raise the group size so a rare success lands in more groups.
 
+### Round 5: train only where there is signal (`--filter K`)
+
+That fix, made into a flag (built 2026-11-15). `--filter 8` (`FILTER=8` with `stage.sh`) first
+samples 8 completions for every training task, with the trainer's own sampler, temperature
+and reward, and keeps only the tasks that passed **sometimes but not always**:
+
+```mermaid
+flowchart LR
+  T["MBPP-train, 337"] --> P["probe: 8 samples each,<br/>same sampler + reward"]
+  P -->|"0 of 8"| N["never solved:<br/>every group all-zero"]
+  P -->|"8 of 8"| A["always solved:<br/>every group all-one"]
+  P -->|"1 to 7 of 8"| K["learnable:<br/>the only groups with spread"]
+  K --> G["GRPO trains on these"]
+  N -.dropped.-> X(( ))
+  A -.dropped.-> X
+```
+
+Both dropped kinds have the same problem: a group's advantages are its rewards minus their
+mean, so a group that is all one value contributes **nothing** to the update except its
+cost. The trainer prints how many of each it found, and refuses to start if none are
+learnable (an untrained model, for instance), rather than spending its whole budget on
+updates of size zero.
+
+The counts are cached in `<run>/probe.json`, keyed on everything that decides them (the init
+checkpoint, K, temperature, top-k/p, the token budget and the task list). The cache is not
+about saving the hour the probe takes. A resume **must** train on the same list, because the
+prompt sampler's saved RNG state picks *indices* into it, and a re-probe that kept a
+different set would silently feed the run different tasks.
+
+**A bug found while building it: a resume could change the tasks.** 4b's own log has two later
+sessions (10-22 and 10-27) that resumed `small-code-py-grpo` without `TASKS=mbpp`. `stage.sh`
+then defaulted to the synth set, and held-out jumped from 8% (of 90 MBPP-validation tasks) to
+60% (of 20 synth ones). Because the best rule had changed, `grpo_best.pt` was replaced by the
+synth-trained policy. The result above was measured on 10-20 and stands, but the `.pt` in
+that directory is no longer the one it describes. A run's task settings (`reward`, `tasks`,
+`holdout`, `filter`, `chat`) are now saved with its progress, and a resume that would change
+them is refused with the difference spelled out. Start a new run instead (`STAGE_RUN=`).
+
+**Round 5 runs on the dense code SFT** (`small-code-py-dense-sft`, the nominal best Python
+model) into its own directory, `small-code-py-dense-grpo`, from `logs/queue/loose-ends.sh`:
+
+```bash
+STAGE_RUN=small-code-py-dense-grpo TASKS=mbpp HOLDOUT=0 FILTER=8 \
+    scripts/stage.sh grpo small-code-py-dense
+```
+
 **The whole of Phase 3 in one line:** SFT made a chat model; of everything after it, only the
 first GRPO run beat SFT on the judge (11–1, p = 0.006), and nothing moved HumanEval.
 
@@ -804,7 +850,7 @@ Three stages, three trainers, and they share the pretraining loop's shape — re
 
 | # | file | what to look for |
 |---|---|---|
-| 6 | [`aksharallm/train/grpo.py`](../aksharallm/train/grpo.py) | `group_advantages` first (the group is its own baseline), then `grpo_loss` — the PPO clip and the k3 KL estimator |
+| 6 | [`aksharallm/train/grpo.py`](../aksharallm/train/grpo.py) | `group_advantages` first (the group is its own baseline), then `grpo_loss` — the PPO clip and the k3 KL estimator; then `learnable` / `filter_prompts` (round 5: why an all-equal group is wasted) and `check_task_set` (a resume may not change the tasks) |
 | 7 | same file | `CodeReward` / `SubstringReward` behind the `RewardFn` protocol, then `sample_group` → `build_batch` → `main` |
 | 8 | [`aksharallm/infer/sandbox.py`](../aksharallm/infer/sandbox.py) | `run_program` — the reward itself. Read its docstring on what the isolation is and is not |
 | 9 | [`scripts/stage.sh`](../scripts/stage.sh) | the gate: which checkpoint each stage requires before it will start ([doc 10](10-running-and-watching.md)) |
