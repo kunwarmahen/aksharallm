@@ -321,7 +321,37 @@ anything, and it is enough to see the machinery work:
 | sample | *"Once upon a time, there was a little girl named Lily. She loved to play with her toys and her dolls. One day, Lily went to a walk when she saw a big dog."* |
 
 Grammatical TinyStories in five minutes, from a model that has never once been asked what
-comes next. The full 8,000-step run against the baseline is a couple of hours.
+comes next.
+
+### The full run: 8,000 steps, the baseline's budget (2026-11-16)
+
+Same data, seed, batch and steps as `tiny` (AR val **1.472**). 26 minutes on the card
+(`logs/queue/loose-ends.sh`).
+
+| | AR `tiny` | `tiny-diffusion` |
+|---|---|---|
+| val at step 500 / 1,500 / 7,999 | 2.179 / 1.802 / **1.472** (exact CE) | 3.470 / 2.822 / **2.215** (NELBO, a bound) |
+| `elbo --batches 40` | | 2.194 nats/token, ppl ⩽ 8.97 |
+| masked-position `ce` | | 2.884 |
+
+**What this does and does not say.** The diffusion number is an *upper bound* on its true
+loss, so the table cannot say diffusion is 0.72 nats worse, only that its true loss is at
+most 2.19. What it can say: the bound after 8,000 steps sits where the AR run's *exact*
+loss was after about 500. That is consistent with the published 3–16× compute gap. It is not
+a measurement of it, because the bound's slack is unknown.
+
+Loss by mask rate runs **0.69 nats at 5% masked to 5.13 at 95%**, the same 7× spread the
+smoke run showed, so the single number averages very different tasks.
+
+What an AR model cannot do, it did:
+
+* **generate**: *"Once upon a time, there was a little girl named Lily. She loved to run
+  and play with her friends. One day, she went to the park with her friends. They saw a big
+  tree with many leaves and leaves. Lily wanted to climb the tree, so she was very brave and
+  climbed the tree."* Sixty-five tokens in 32 forward passes, **2.0 tokens per pass**.
+* **infill**: `The cat sat [ in a cozy bed. The cat closed her eyes and B] and fell asleep.`
+  Fluent up to a stray `B` where the span had to meet the fixed suffix: the hardest token
+  is the one that must agree with both sides.
 
 Then, on the finished checkpoint:
 
