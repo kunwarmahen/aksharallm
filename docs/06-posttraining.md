@@ -587,6 +587,27 @@ STAGE_RUN=small-code-py-dense-grpo TASKS=mbpp HOLDOUT=0 FILTER=8 \
     scripts/stage.sh grpo small-code-py-dense
 ```
 
+**Measured 2026-11-16/17 (500 steps over two nights): the filter fixed the signal, and the
+signal did not transfer.** The probe took 58 minutes: of 330 MBPP-train tasks, **260 were never
+solved in 8 tries, none always, 70 kept**. On those 70 the policy learned steadily:
+
+| steps | solved (the 70 training tasks) | KL | held-out MBPP-validation (of 90) |
+|---|---|---|---|
+| 0–24 | 26% | 0.002 | 7 at step 0 |
+| 200–224 | 57% | 0.009 | 5, then 3 at step 223 |
+| 400–424 | 74% | 0.012 | 5 |
+| 475–499 | **77%** | 0.012 | **4** at step 499 |
+
+Training success tripled and the held-out set never beat step 0, so `grpo_best.pt` is the
+step-0 policy (one update at lr 1e-6, at most 1e-6 from the SFT's weights). Its scores against
+`small-code-py-dense-sft`: MBPP **30 vs 28** (+2/−0, p 0.50), HumanEval **10 vs 10** (no item
+differs), pass@10 9.4 vs 7.6% (sampling noise on near-identical weights).
+
+That settles what 4b could not. 4b had no signal; this run had plenty, and learned exactly
+the tasks it was shown. **At 300M, GRPO on code improves the problems it practises and
+nothing else**: round 3 (synth, held out by name), round 4 (no signal) and round 5 (signal,
+held out by split) all end in the same place. More RL on this model is not the lever.
+
 **The whole of Phase 3 in one line:** SFT made a chat model; of everything after it, only the
 first GRPO run beat SFT on the judge (11–1, p = 0.006), and nothing moved HumanEval.
 

@@ -402,6 +402,47 @@ given each sentence's *real* duration (`speak` needs a frame count, and there is
 token), which a deployed system would not have, and the report says so. WAVs of all three
 are written side by side, because intelligibility is still not quality.
 
+### Measured: `audiolm-lj` (2026-11-18)
+
+60,000 steps in **2 h 1 min** (0.12 s/step, ~365k codes/s; the estimate was 3–4 h). Step-0
+loss sat on ln(1024) as it should. **Validation bottomed at step 22,000 (4.666) and rose for
+the remaining 38,000 steps** to 4.758 while the training loss kept falling to 3.65. That is
+memorisation: 24 hours of one voice, about 27 passes over the corpus by step 22k.
+`ckpt_best.pt` is step 22,000, and that is what was scored. The last two-thirds of the
+budget bought nothing.
+
+`tts-report`, 20 held-out sentences, judged by `asr-libri460` (greedy):
+
+| row | WER | CER |
+|---|---|---|
+| original recording | 8.7% | 3.1% |
+| through the codec | 8.7% | 2.7% |
+| **TTS (step 22k)** | **65.7%** | **34.8%** |
+
+The codec costs the judge nothing. The TTS is **intelligible but slurred**: two thirds of
+the characters come through, and no utterance ran away (0 hypotheses longer than twice the
+reference). What the judge heard:
+
+> said: *based on its experience during this period the secret service now recommends that
+> additional personnel be made available to prs*
+> heard: *es on its experienced during this period the secret service now recommons that a
+> dist at additinal personal bealable preval ard*
+
+> said: *so that these arrangements can be made permanent without adversely affecting the
+> operations of the service's field offices*
+> heard: *so thit these arrangements can be made perminage without dead variuling the
+> operations of the service he speelss field fofhices*
+
+In the transcripts read so far, short common words come through and long rare ones smear
+into near-misses ("perminage", "variuling"), with the ends of long sentences the worst. That
+is a reading of a handful of examples, not a measurement. Whether it *sounds* like
+LJSpeech is a question for `logs/audio/tts-audiolm-lj/NN-tts.wav` beside `NN-original.wav`:
+no number here can answer it.
+
+Two limits the number hides. The TTS was **given each sentence's real duration**, and there
+is no command to speak arbitrary text yet. Both are the next build, along with the
+overfitting, which more speakers would address better than more dropout.
+
 ### The corpus that makes this measurable
 
 `synth_corpus` writes **its own transcripts**, because we chose the vowel sequence and
