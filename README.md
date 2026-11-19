@@ -165,7 +165,8 @@ aksharallm/
 │   │   ├── codec.py          the RVQ-VAE and its multi-scale spectral loss
 │   │   ├── delay.py          the shift that turns 8 codebooks into one stream
 │   │   ├── lm.py             the SAME Transformer, 8 embeddings in and 8 heads out
-│   │   └── speech.py         TTS and ASR: one model, one flag apart
+│   │   ├── speech.py         TTS and ASR: one model, one flag apart; `speak` and the stop head
+│   │   └── transfer.py       does the codec carry voices it never heard? (paired, per clip)
 │   ├── asr/              speech recognition, for dictation — see docs/23
 │   │   ├── ctc.py            CTC loss (alpha-beta, from scratch) and greedy decoding
 │   │   ├── model.py          the Conformer: conv subsampling, attention + convolution
@@ -306,7 +307,9 @@ Both use identical code. Only the config differs.
 fresh, deduplicated Python plus a code SFT nearly doubled the general chat model on MBPP
 (27 against 14 of 500, p 0.02). Then 737M more Python tokens helped the loss a little and the
 benchmarks not at all. Spending them on a 4-expert mixture of experts instead bought
-nothing at 2.5× the cost. At 300M, the model's size is the cap. Full tables in
+nothing at 2.5× the cost. A fifth round of GRPO (November) trained only on tasks the model
+solves some of the time. It went from 26% to 77% on those tasks and moved nothing held
+out. At 300M, the model's size is the cap. Full tables in
 [docs/08](docs/08-scaling.md) and [docs/13](docs/13-eval.md).
 
 Six days of compute needn't be six days of calendar. `scripts/phase2.sh` launches in the
@@ -420,7 +423,7 @@ verifies) → **quantization** ✅ → **LoRA/QLoRA** ✅ → a **real eval harn
 HellaSwag, PIQA, GSM8K, HumanEval and a model-judged suite — [docs/13](docs/13-eval.md)) →
 **synthetic data** ✅ ([docs/14](docs/14-synthetic-data.md)) → **mixture of experts** ✅
 ([docs/15](docs/15-moe.md)) → **distillation** ✅ ([docs/24](docs/24-distillation.md)) → **diffusion training** ✅
-([docs/20](docs/20-diffusion.md)) → **audio** → export and serving ✅, with **speculative
+([docs/20](docs/20-diffusion.md)) → **audio** ✅ ([docs/21](docs/21-audio.md)) → export and serving ✅, with **speculative
 decoding** ✅, an **interpretability tab** ✅, **FlashAttention written in Triton** ✅
 ([docs/04](docs/04-model.md)) and **long context** ✅ ([docs/19](docs/19-long-context.md)).
 
@@ -521,12 +524,16 @@ generates by unmasking positions in any order until none are left. The whole tra
 objective is: mask each token with probability `t ~ U(0,1)`, run the model with the causal
 mask off, and take cross-entropy on the masked positions weighted by `1/t`.
 
-It will be trained at Phase 1 scale (13.8M params, TinyStories) against the autoregressive
-baseline that is already there — same data, same size, same budget. Not because it will win:
-masked diffusion needs several times the compute of autoregression to reach the same
-quality. It is there because it can do two things autoregression structurally cannot —
-**infilling** (given a prefix *and* a suffix, write the middle) and **parallel generation**
-(watch a whole sequence resolve from all-masked to text in about 32 steps).
+It was trained at Phase 1 scale (13.8M params, TinyStories) against the autoregressive
+baseline that is already there, with the same data, size and budget. It was never expected
+to win: masked diffusion needs several times the compute of autoregression to reach the
+same quality. Measured over 8,000 steps (2026-11-16), it scores 2.215. That number is an
+*upper bound* on the loss, where the autoregressive 1.472 is exact, so the two cannot go in
+one table; the bound sits about where the baseline was at step 500. It is here for the two
+things autoregression structurally cannot do. One is **infilling**: given a prefix *and* a
+suffix, write the middle, which it does fluently. The other is **parallel generation**: a
+whole sequence resolves from all-masked to text at about two tokens per pass
+([docs/20](docs/20-diffusion.md)).
 
 **Audio.** The transformer does not care what its tokens mean, and audio is the cheapest
 honest way to prove it: no new architecture, just a new tokenizer. A small autoencoder learns
@@ -737,7 +744,8 @@ Above the codec, the language model gets eight integers per position instead of 
 them and the sequence is eight times longer; predict them in parallel and you have assumed
 they are independent, when each is defined as a correction to the last. The **delay pattern**
 shifts codebook *k* right by *k* frames, so a whole column can be predicted at once and each
-codebook still sees the one below it in its context — `T + 7` positions instead of `8T`.
+codebook still sees the one below it in its context — `T + 7` positions instead of `8T`,
+plus one start column that generation begins from.
 
 The transformer needed two optional arguments for all of this and nothing else.
 
@@ -745,6 +753,16 @@ The transformer needed two optional arguments for all of this and nothing else.
 mean opinion score needs people. So what gets reported is mel-cepstral distortion plus *our
 own ASR model's error rate on our own TTS output*, labelled **intelligibility**, because that
 is what it measures. A synthesiser with a flat robotic monotone can score perfectly on it.
+
+**What it measured, on LJSpeech** (24 hours of one reader, [docs/21](docs/21-audio.md)):
+- **The codec:** the speech codec rebuilds held-out clips at 2.60 dB MCD at 4 kbps.
+- **Text-to-speech:** a 42M audio LM with a stop head, so it chooses how long to talk.
+  The dictation recogniser gets **54.9%** of its words wrong, against 8.7% on the real
+  recordings: intelligible, and slurred. Try it with
+  `python -m aksharallm.audio speak checkpoints/audiolm-lj-stop/ckpt_best.pt "any text"`.
+- **Other voices:** the codec does not carry voices it never heard. On LibriSpeech
+  speakers it scores 9.1 dB against LJ's 2.5. A multi-speaker voice therefore needs a
+  multi-speaker codec first.
 
 ### Showing it a picture
 

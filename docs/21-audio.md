@@ -240,8 +240,10 @@ delay       →   book 0:  c⁰₀  c⁰₁  c⁰₂  c⁰₃
 
 Codebook *k* shifted right by *k* frames. Now everything in one column can be predicted at
 once, because by the time `c¹₀` is predicted, `c⁰₀` is already in the past and visible. The
-sequence grows from `T` to `T + N − 1` — eight extra positions on five hundred — instead of
-to `8T`, and the dependency chain is preserved rather than assumed away.
+sequence grows from `T` to `T + N − 1` — seven extra positions on five hundred — instead of
+to `8T`, and the dependency chain is preserved rather than assumed away. One more column goes
+in front of it: a start column of BOS ids, because generation has to begin from *something*
+and training must show the model that same start (`lm.training_pair`; § Two layout bugs).
 
 **Trap 4 lives here**, and it is gotcha #2's family: an off-by-one trains perfectly and
 generates garbage, because the decoder is handed codebook 1 of frame 5 alongside codebook 0
@@ -640,7 +642,7 @@ are that chapter's model, unchanged, over different integers.
 | 7 | [`audio/train_codec.py`](../aksharallm/audio/train_codec.py) | the module docstring's "what to watch, in order of how badly it goes wrong". Then the shared STOP/pid/jsonl contract |
 | 8 | [`audio/measure.py`](../aksharallm/audio/measure.py) | the table at the top — what each metric cannot see — then `cepstrum`'s relative floor |
 | 9 | [`audio/delay.py`](../aksharallm/audio/delay.py) | the ASCII diagram, then `delay` and `undelay`. Twelve lines, and trap 4 |
-| 10 | [`audio/lm.py`](../aksharallm/audio/lm.py) | `AudioLM.__init__` (why the body's own head is unused), then `forward`'s shift — it happens on the *delayed* sequence, which is the whole trick |
+| 10 | [`audio/lm.py`](../aksharallm/audio/lm.py) | `AudioLM.__init__` (why the body's own head is unused, and the optional one-logit `stop_head`), then `training_pair` — the BOS column generation starts from — and `forward`'s shift, which happens on the *delayed* sequence, which is the whole trick |
 | 11 | [`audio/text.py`](../aksharallm/audio/text.py) · [`audio/speech.py`](../aksharallm/audio/speech.py) | why character level; then `utterance_loss`, where TTS and ASR are one flag apart and each row is laid out the way `speak`/`transcribe` lay it out; then `tts_ladder`, the three-row score |
 | 12 | [`audio/transfer.py`](../aksharallm/audio/transfer.py) | `measure_corpus`, then `paired`: every clip is read against its own original, so "the codec hurts these voices" is never confused with "these sentences are harder" |
 | 13 | [`aksharallm/audio/__main__.py`](../aksharallm/audio/__main__.py) · [`portal/audio.py`](../aksharallm/portal/audio.py) | the two front ends, over one set of functions |

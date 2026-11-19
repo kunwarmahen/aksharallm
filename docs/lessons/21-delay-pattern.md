@@ -50,8 +50,23 @@ Shift codebook *k* right by *k* frames. Now everything in one column can be pred
 parallel — because by the time `c¹₀` is predicted, `c⁰₀` is in the past and **visible in the
 context**. The dependency is carried by attention rather than assumed away.
 
-The sequence grows from `T` to `T + N − 1`. Eight extra positions on five hundred, instead of
+The sequence grows from `T` to `T + N − 1`. Seven extra positions on five hundred, instead of
 eight times five hundred.
+
+## And one column in front
+
+Generation has to start from something. Before the first frame exists there is nothing to
+condition on, so `generate` begins from a column of **BOS** ids, one per codebook. The model
+can only continue from that column if it saw that column in training. `lm.training_pair`
+puts it there: inputs are `[BOS] + delay(codes)`, targets are `delay(codes)`.
+
+That line was missing until 2026-11-15, and it went unnoticed for months. Training never
+showed the model the start column, so every sample it generated began from a context it
+had never seen. The loss looked normal, because no training position was ever wrong.
+`test_greedy_generation_reproduces_a_memorised_clip` is the check that would have caught
+it: memorise one clip, then generate it back from BOS. A layout bug can pass every loss
+test and still fail that one. [Chapter 21 § Two layout bugs](docs/21-audio.md) has the
+second bug, found the same day.
 
 ## What the model actually changed
 

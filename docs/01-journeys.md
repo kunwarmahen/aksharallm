@@ -593,8 +593,9 @@ say how far from audiobook speech it still works, and the 460-hour run is the fi
 scripts/audio.sh codec-lj                          # train the speech codec (done: 2.60 dB at 4 kbps)
 python -m aksharallm.audio encode checkpoints/codec-lj/ckpt_best.pt --corpus data/audio/lj --out data/audio/lj-codes
 scripts/audio.sh audiolm-lj                        # text-to-speech in LJSpeech's voice
-python -m aksharallm.audio tts-report checkpoints/audiolm-lj/ckpt_best.pt   # judged by asr-libri460
-python -m aksharallm.audio speak checkpoints/audiolm-lj/ckpt_best.pt "Any sentence you like."
+scripts/audio.sh audiolm-lj-stop                   # ...plus a stop head, so it picks its own length
+python -m aksharallm.audio tts-report checkpoints/audiolm-lj-stop/ckpt_best.pt --duration own   # judged by asr-libri460 (54.9% WER)
+python -m aksharallm.audio speak checkpoints/audiolm-lj-stop/ckpt_best.pt "Any sentence you like."
 python -m aksharallm.audio codec-transfer checkpoints/codec-lj/ckpt_best.pt --cpu   # does the codec carry other voices? (no: 9.1 vs 2.5 dB)
 python -m aksharallm.vision caption vision-shapes  # caption held-out images and score them
 scripts/audio.sh asr-synth                         # a recogniser, no download, minutes
