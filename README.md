@@ -167,6 +167,7 @@ aksharallm/
 │   │   ├── lm.py             the SAME Transformer, 8 embeddings in and 8 heads out
 │   │   ├── speech.py         TTS and ASR: one model, one flag apart; `speak` and the stop head
 │   │   ├── content.py        a content codebook: codebook 0 taught by our own recogniser
+│   │   ├── speaker.py        a speaker embedding: does a voice still sound like itself? (EER)
 │   │   └── transfer.py       does the codec carry voices it never heard? (paired, per clip)
 │   ├── asr/              speech recognition, for dictation — see docs/23
 │   │   ├── ctc.py            CTC loss (alpha-beta, from scratch) and greedy decoding
@@ -938,6 +939,28 @@ flowchart LR
     SRV -->|generates from| C
     SRV -->|appends| H[("logs/playground.jsonl<br/>output + the step that made it")]
 ```
+
+### Future work (recorded 2026-11-19)
+
+Built but not yet run on the card: **Muon** against AdamW at 13.8M (`tiny-adamw` /
+`tiny-muon`, [doc 5](docs/05-pretraining.md)); **a codec retrained on many voices**, with and
+without a **content codebook** (`codec-many`, `codec-many-content`), and a **speaker model**
+to say whether a voice still sounds like itself (`speaker-libri`) ([doc 21](docs/21-audio.md)).
+
+Not built yet, in the order they depend on each other or by value per GPU hour:
+
+- **Multi-speaker TTS** on the new codec, first with one learned vector per speaker, then
+  **voice cloning from a 3-second prompt** (the prompt's codes before the text), then **TTS
+  in the author's own voice**, using the dictation recordings.
+- **Small full-duplex voice chat**: listen and speak at once, two audio streams and a text
+  stream. Every piece exists here; it waits for the multi-speaker codec.
+- **Hybrid linear attention**: Gated DeltaNet layers with one full-attention layer in four,
+  at 13.8M, judged on needle-in-a-haystack recall as well as loss.
+- **Turning a trained autoregressive model into a diffusion one** instead of training from
+  scratch, measured in tokens per forward pass.
+- **A small model for agents**: tool-use SFT on the 300M, with GRPO graded by the sandbox.
+- **A toy world model**: a game we write, a frame tokenizer, and the transformer predicting
+  the next frame from an action, so its accuracy can be checked exactly.
 
 ---
 

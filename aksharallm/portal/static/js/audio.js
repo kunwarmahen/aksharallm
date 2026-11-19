@@ -196,8 +196,23 @@ async function loadTransfer() {
     const x = s.paired_wer[k];
     return `${x.worse} worse / ${x.better} better / ${x.same} same (p ${x.p == null ? '—' : x.p.toPrecision(2)})`;
   };
+  const voice = (s, k) => (s.voice && s.voice[k] != null && s.voice_ref
+    ? `voice ${s.voice[k].toFixed(3)} (same speaker ${s.voice_ref.same_speaker == null ? '—'
+      : s.voice_ref.same_speaker.toFixed(3)}, different ${s.voice_ref.different_speaker == null ? '—'
+      : s.voice_ref.different_speaker.toFixed(3)})` : '');
   $('#au-transfer-paired').innerHTML = judged.map((k) =>
-    `<b>@${k.slice(5)} books, per clip:</b> own voice ${pw(r.home, k)}; other voices ${pw(r.other, k)}`).join('<br>');
+    `<b>@${k.slice(5)} books, per clip:</b> own voice ${pw(r.home, k)}; other voices ${pw(r.other, k)}`
+    + (r.other.voice ? `<br><b>@${k.slice(5)} identity</b> (cosine to its own original): own ${voice(r.home, k)}; other ${voice(r.other, k)}` : '')).join('<br>');
+  /* One row per codec run: the gate for a many-voices codec is this table, read across. */
+  const codecs = res.codecs || [];
+  const top = judged[judged.length - 1];
+  $('#au-transfer-codecs').innerHTML = codecs.length < 2 ? '' : `<thead><tr><th>codec</th>`
+    + `<th>MCD @${rungs[rungs.length - 1]} own / new</th><th>WER @${top.slice(5)} own / new</th>`
+    + `<th>new voices, per clip</th></tr></thead><tbody>`
+    + codecs.map((c) => `<tr><td><code>${escHtml(c.checkpoint || c.file)}</code></td>`
+      + `<td>${c.home.mcd[rungs[rungs.length - 1]].mean.toFixed(2)} / ${c.other.mcd[rungs[rungs.length - 1]].mean.toFixed(2)}</td>`
+      + `<td>${pct(c.home.wer[top])} / ${pct(c.other.wer[top])}</td>`
+      + `<td>${pw(c.other, top)}</td></tr>`).join('') + '</tbody>';
   const spk = (r.other.per_speaker || []).slice(0, 8);
   $('#au-transfer-speakers').innerHTML = `<thead><tr><th>worst voices</th><th>clips</th>`
     + `<th>MCD @${rungs[rungs.length - 1]}</th><th>WER original → codec</th></tr></thead><tbody>`

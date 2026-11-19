@@ -11,6 +11,7 @@
 #   scripts/audio.sh codec-lj         # the codec on LJSpeech (docs/21)
 #   scripts/audio.sh codec-many       # LJ + LibriSpeech 460 h, warm-started from codec-lj
 #   scripts/audio.sh codec-many-content  # the same, with codebook 0 taught by asr-libri460
+#   scripts/audio.sh speaker-libri    # a speaker embedding: does a voice still sound like itself?
 #   scripts/audio.sh audiolm-synth    # the audio LM over a trained codec's tokens
 #   scripts/audio.sh asr-synth        # the Conformer-CTC recogniser on synthetic speech
 #   scripts/audio.sh asr-libri100     # ...on LibriSpeech train-clean-100 (docs/23)
@@ -56,8 +57,11 @@ elif grep -qE '^audiolm:' "$CFG"; then
 elif grep -qE '^asr:' "$CFG"; then
     TRAINER=aksharallm.asr.train
     KIND=asr
+elif grep -qE '^speaker:' "$CFG"; then
+    TRAINER=aksharallm.audio.train_speaker
+    KIND=speaker
 else
-    echo "$CFG has no 'codec:', 'audiolm:' or 'asr:' section -- not an audio run." >&2
+    echo "$CFG has no 'codec:', 'audiolm:', 'asr:' or 'speaker:' section -- not an audio run." >&2
     echo "For a language model over text, use scripts/phase2.sh or scripts/experiment.sh." >&2
     exit 2
 fi
@@ -160,8 +164,13 @@ launch_stage data
 # Every corpus the run reads: data.corpus, or each of data.sources (the many-voices codec).
 CORPORA=$($PY - "$CFG" <<'EOF'
 import sys, yaml
-d = (yaml.safe_load(open(sys.argv[1])) or {}).get("data") or {}
-for c in [s["corpus"] for s in d.get("sources") or []] or [d.get("corpus", "")]:
+cfg = yaml.safe_load(open(sys.argv[1])) or {}
+d = cfg.get("data") or {}
+if "speaker" in cfg:        # a speaker model reads its training corpora and one unseen corpus
+    corpora = list(d.get("train") or []) + [d.get("eval", "data/asr/dev-clean")]
+else:
+    corpora = [s["corpus"] for s in d.get("sources") or []] or [d.get("corpus", "")]
+for c in corpora:
     print(c)
 EOF
 )
@@ -276,6 +285,8 @@ echo "    listen:  $RUN_DIR/samples/              (original.wav against stepNNNN
 echo "    stop:    scripts/stop.sh $(basename "$RUN_DIR")"
 if [ "$KIND" = codec ]; then
     echo "    measure: $PY -m aksharallm.audio report $RUN_DIR/ckpt_best.pt"
+elif [ "$KIND" = speaker ]; then
+    echo "    measure: $PY -m aksharallm.audio speaker-eval $RUN_DIR/ckpt_best.pt"
 elif [ "$KIND" = asr ]; then
     echo "    measure: $PY -m aksharallm.asr eval $(basename "$RUN_DIR") --corpus data/asr/test-clean"
 fi

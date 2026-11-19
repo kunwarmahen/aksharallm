@@ -670,6 +670,57 @@ recogniser's forward pass is a larger share; the guess is 30–50% slower, to be
 decide before either runs:** train one, or both as a controlled pair. Both is about 2 × 2.7
 GPU hours plus the teacher's cost.
 
+### Does it still sound like that person? A speaker model (built 2026-11-19, not trained yet)
+
+Neither MCD nor WER can see voice identity. A codec could turn every speaker into one voice
+and still score well on both. So `audio/speaker.py` is a speaker embedding, from scratch: it
+maps a clip to a 192-number unit vector, trained so two clips of one person point the same
+way and two people point apart.
+
+```mermaid
+flowchart LR
+  W["clip"] --> M["log-mel<br/>per-utterance normalised"]
+  M --> C["Conformer encoder<br/>(the recogniser's, 4 x 192)"]
+  C --> P["mean + std<br/>over time"]
+  P --> E["Linear → unit vector"]
+  E -->|training| A["AM-softmax over<br/>~1,170 LibriSpeech speakers"]
+  E -->|measuring| S["cosine between two clips"]
+```
+
+- **The encoder is the recogniser's** (`Recognizer.encode(hidden=True)`), with its output
+  layer unused.
+- **Per-utterance normalisation**, unlike the recogniser. The recogniser needs loudness to stay
+  silent on faint hiss; a speaker model must not learn to tell people apart by their
+  microphone's level.
+- **AM-softmax adds a margin:** the right speaker has to win by `m = 0.2`, not just win. That
+  is what keeps *unseen* speakers apart once the classifier is thrown away.
+- **The checkpoint is chosen on unseen speakers' EER** (dev-clean's 40), not on how well it
+  sorts the 1,170 it trained on. test-clean's 40 give the final number (`audio speaker-eval`).
+  EER is the threshold at which false accepts equal false rejects.
+
+**A baseline to beat:** an *untrained* network already scores **27% EER** on dev-clean (21
+CPU steps, so effectively random weights), not the 50% of random scores. Averaged spectral
+statistics carry some identity before anything is learned. A trained model is only worth
+its name well below that.
+
+In `codec-transfer --speaker <ckpt>` it adds a voice-identity column: the cosine between a
+clip and its own reconstruction. A cosine alone means nothing, so the same model also scores
+two references from the originals. One is two *different* clips by the same speaker, which is
+what "the same voice" scores; the other is two different speakers. A reconstruction near the
+first kept the voice; one near the second did not.
+
+```bash
+scripts/audio.sh speaker-libri                                  # ~20k steps; not run yet
+python -m aksharallm.audio speaker-eval checkpoints/speaker-libri/ckpt_best.pt
+python -m aksharallm.audio codec-transfer checkpoints/codec-lj/ckpt_best.pt --cpu \
+    --speaker checkpoints/speaker-libri/ckpt_best.pt
+```
+
+A run with a smaller sample than the default (64 LJ clips, 3 x 40 speakers) writes its JSON
+under its own name (`...-lj6-test-cleanx1.json`), and the Audio tab never shows one as the
+result. A quick check came within one command of overwriting the full report. The tab's
+panel now has one row per codec, so `codec-lj` and `codec-many` can be read side by side.
+
 ### The corpus that makes this measurable
 
 `synth_corpus` writes **its own transcripts**, because we chose the vowel sequence and
@@ -744,7 +795,8 @@ are that chapter's model, unchanged, over different integers.
 | 10 | [`audio/lm.py`](../aksharallm/audio/lm.py) | `AudioLM.__init__` (why the body's own head is unused, and the optional one-logit `stop_head`), then `training_pair` — the BOS column generation starts from — and `forward`'s shift, which happens on the *delayed* sequence, which is the whole trick |
 | 11 | [`audio/text.py`](../aksharallm/audio/text.py) · [`audio/speech.py`](../aksharallm/audio/speech.py) | why character level; then `utterance_loss`, where TTS and ASR are one flag apart and each row is laid out the way `speak`/`transcribe` lay it out; then `tts_ladder`, the three-row score |
 | 11b | [`audio/content.py`](../aksharallm/audio/content.py) | `teacher_states` (the recogniser's `encode(hidden=True)`, resampled to 50 frames/s), then `content_loss`. `ResidualVQ.forward(first=True)` is where codebook 0's own vector comes from |
-| 12 | [`audio/transfer.py`](../aksharallm/audio/transfer.py) | `measure_corpus`, then `paired`: every clip is read against its own original, so "the codec hurts these voices" is never confused with "these sentences are harder" |
+| 12 | [`audio/transfer.py`](../aksharallm/audio/transfer.py) | `measure_corpus`, then `paired`: every clip is read against its own original, so "the codec hurts these voices" is never confused with "these sentences are harder". Then `voice_columns`, the identity score and its two references |
+| 12b | [`audio/speaker.py`](../aksharallm/audio/speaker.py) · [`audio/train_speaker.py`](../aksharallm/audio/train_speaker.py) | `SpeakerEncoder.forward` (mean + std pooling), `AMSoftmax`'s margin, `SpeakerCorpus`'s per-speaker hold-out, then `eer`. The trainer chooses its best checkpoint on *unseen* speakers |
 | 13 | [`aksharallm/audio/__main__.py`](../aksharallm/audio/__main__.py) · [`portal/audio.py`](../aksharallm/portal/audio.py) | the two front ends, over one set of functions |
 
 What pins it: [`tests/test_audio.py`](../tests/test_audio.py) and

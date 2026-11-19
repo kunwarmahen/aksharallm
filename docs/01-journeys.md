@@ -612,6 +612,8 @@ python -m aksharallm.audio speak checkpoints/audiolm-lj-stop/ckpt_best.pt "Any s
 python -m aksharallm.audio codec-transfer checkpoints/codec-lj/ckpt_best.pt --cpu   # does the codec carry other voices? (no: 9.1 vs 2.5 dB)
 scripts/audio.sh codec-many         # the codec again on LJ + LibriSpeech 460 h, from codec-lj (not run yet)
 scripts/audio.sh codec-many-content # the same, with codebook 0 taught by our recogniser (not run yet)
+scripts/audio.sh speaker-libri      # a speaker model: does a voice still sound like itself? (not run yet)
+python -m aksharallm.audio speaker-eval checkpoints/speaker-libri/ckpt_best.pt   # its EER on unseen speakers
 python -m aksharallm.vision caption vision-shapes  # caption held-out images and score them
 scripts/audio.sh asr-synth                         # a recogniser, no download, minutes
 python -m aksharallm.asr fetch train-clean-100     # then pack it, and scripts/audio.sh asr-libri100

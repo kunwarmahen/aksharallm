@@ -50,6 +50,7 @@ TRAINERS: tuple[str, ...] = (
     "aksharallm.train.grpo",
     "aksharallm.audio.train_codec",
     "aksharallm.audio.train_lm",
+    "aksharallm.audio.train_speaker",
     "aksharallm.vision.train",
     "aksharallm.asr.train",
 )
@@ -87,6 +88,7 @@ LAUNCHERS: dict[str, dict] = {
     "codec-synth": {"script": "scripts/audio.sh", "args": ["codec-synth"]},
     "codec-lj": {"script": "scripts/audio.sh", "args": ["codec-lj"]},
     "codec-many": {"script": "scripts/audio.sh", "args": ["codec-many"]},
+    "speaker-libri": {"script": "scripts/audio.sh", "args": ["speaker-libri"]},
     "codec-many-content": {"script": "scripts/audio.sh", "args": ["codec-many-content"]},
     "audiolm-synth": {"script": "scripts/audio.sh", "args": ["audiolm-synth"]},
     "audiolm-lj": {"script": "scripts/audio.sh", "args": ["audiolm-lj"]},
@@ -183,7 +185,7 @@ def exec_cmdline(argv: list[str]) -> str:
 #: test for "this is a run and not a settings file". `model:` is a language model, `codec:`
 #: and `audiolm:` are docs/21, `vision:` is docs/22, `asr:` is docs/23. Deliberately not a
 #: YAML parse: `runs()` is called on every poll of every open page.
-_RUN_CONFIG_RE = re.compile(r"^(model|codec|audiolm|vision|asr):", re.MULTILINE)
+_RUN_CONFIG_RE = re.compile(r"^(model|codec|audiolm|vision|asr|speaker):", re.MULTILINE)
 
 
 def _is_run_config(path: Path) -> bool:
@@ -940,7 +942,7 @@ class RunStore:
         if not path.exists():
             return {}
         text = self._text(path, limit=1_000_000) or ""
-        kind = next((k for k in ("asr", "codec", "audiolm", "vision")
+        kind = next((k for k in ("asr", "codec", "audiolm", "vision", "speaker")
                      if re.search(rf"^{k}:", text, re.MULTILINE)), "model")
         try:
             if kind != "model":
@@ -999,6 +1001,14 @@ class RunStore:
                        if cfg.data.sources else c["corpus"] for c in cfg.data.corpora()]
             if cfg.train.init:
                 sources.append(f"init: {cfg.train.init}")
+        elif kind == "speaker":
+            from ..audio.train_speaker import load_speaker_config
+            cfg = load_speaker_config(str(path))
+            e = cfg.speaker.encoder
+            arch = (f"speaker embedding: conformer d={e.d_model} x{e.n_layers} -> "
+                    f"{cfg.speaker.emb_dim}-d, AM-softmax m={cfg.speaker.margin:g}")
+            batch = f"{cfg.train.batch_size} x {cfg.data.crop_seconds:g} s crops"
+            sources = list(cfg.data.train) + [f"unseen: {cfg.data.eval}"]
         elif kind == "audiolm":
             from ..audio.train_lm import load_audiolm_config
             cfg = load_audiolm_config(str(path))

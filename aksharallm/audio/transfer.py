@@ -110,11 +110,13 @@ def paired(before: list[float], after: list[float]) -> dict:
 
 
 def measure_corpus(codec, clips: list[dict], transcribe_fn: Callable[[list], list[str]], *,
-                   rungs=(1, 2, 4, 8), judged=(4, 8), keep=None) -> dict:
+                   rungs=(1, 2, 4, 8), judged=(4, 8), keep=None, embed_fn=None) -> dict:
     """MCD at every rung and the judge's WER on the original and at each `judged` rung.
 
     `transcribe_fn(list_of_waves) -> list_of_str`. `keep(j, label, wave)` is called for each
-    waveform so the caller can write a few out to listen to.
+    waveform so the caller can write a few out to listen to. `embed_fn(list_of_waves) ->
+    (N, d) unit vectors` (a speaker model, audio/speaker.py) adds the voice-identity column:
+    see `voice_columns`.
     """
     cfg = MelConfig(sample_rate=codec.cfg.sample_rate)
     rungs = tuple(r for r in rungs if r <= codec.cfg.n_codebooks)
@@ -139,7 +141,42 @@ def measure_corpus(codec, clips: list[dict], transcribe_fn: Callable[[list], lis
             it.setdefault("hyp", {})[label] = hyp
             it.setdefault("wer", {})[label] = word_error_rate(it["ref"], hyp)
             it.setdefault("cer", {})[label] = character_error_rate(it["ref"], hyp)
-    return {"items": items, **summarise(items, rungs, judged)}
+    out = {"items": items, **summarise(items, rungs, judged)}
+    if embed_fn is not None:
+        out.update(voice_columns(items, {k: embed_fn(ws) for k, ws in waves.items()}))
+    return out
+
+
+def voice_columns(items: list[dict], emb: dict) -> dict:
+    """How much each reconstruction still sounds like its original, and the two numbers that
+    give that a meaning.
+
+    `voice[codecN]` is the mean cosine between a clip's original and its reconstruction.
+    On its own a cosine of, say, 0.6 says nothing. So, from the originals alone and with the
+    same model: `same_speaker` is the mean over pairs of DIFFERENT clips by the same person
+    (what "the same voice" scores), and `different_speaker` over pairs by two people. A
+    reconstruction near `same_speaker` or above it kept the voice; near `different_speaker`
+    it did not. Each item gets its own `voice` per label too.
+    """
+    orig = emb["original"]
+    voice = {}
+    for label, e in emb.items():
+        if label == "original":
+            continue
+        sims = (orig * e).sum(-1)
+        for it, v in zip(items, sims.tolist()):
+            it.setdefault("voice", {})[label] = v
+        voice[label] = float(sims.mean())
+    gram = orig @ orig.T
+    spk = [it["speaker"] for it in items]
+    same, diff = [], []
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            (same if spk[i] == spk[j] else diff).append(float(gram[i, j]))
+    mean = lambda xs: sum(xs) / len(xs) if xs else None  # noqa: E731
+    return {"voice": voice, "voice_ref": {"same_speaker": mean(same),
+                                          "different_speaker": mean(diff),
+                                          "pairs": [len(same), len(diff)]}}
 
 
 def summarise(items: list[dict], rungs, judged) -> dict:

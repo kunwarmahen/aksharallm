@@ -251,6 +251,15 @@ def cmd_codec_report(args) -> int:
     return 0
 
 
+def transfer_suffix(args) -> str:
+    """A smaller or different sample gets its own file name, so a quick check can never
+    overwrite the full report the docs and the portal quote (it nearly did, 2026-11-19)."""
+    default = (args.home_clips == 64 and args.per_speaker == 3
+               and Path(args.home).name == "lj" and Path(args.other).name == "test-clean")
+    return "" if default else (f"-{Path(args.home).name}{args.home_clips}"
+                               f"-{Path(args.other).name}x{args.per_speaker}")
+
+
 def cmd_codec_transfer(args) -> int:
     """`transfer.measure_corpus` on the codec's own voice and on voices it never heard."""
     import json as _json
@@ -263,6 +272,11 @@ def cmd_codec_transfer(args) -> int:
     device = "cuda" if torch.cuda.is_available() and not args.cpu else "cpu"
     codec = load_codec(args.checkpoint, device)
     asr_model, _ = load_recognizer(resolve_asr(args.asr), device)
+    embed_fn = None
+    if args.speaker:
+        from .speaker import embed, load_speaker
+        spk_model = load_speaker(args.speaker, device)
+        embed_fn = lambda ws: embed(spk_model, ws, device)  # noqa: E731
     run = Path(args.checkpoint).parent.name
     out_dir = Path(args.out_dir or f"logs/audio/codec-transfer-{run}")
     sr = codec.cfg.sample_rate
@@ -283,7 +297,9 @@ def cmd_codec_transfer(args) -> int:
               f"speaker(s) ...", flush=True)
         result[key] = measure_corpus(codec, clips,
                                      lambda ws: asr_transcribe(asr_model, ws, device),
-                                     keep=keep)
+                                     keep=keep, embed_fn=embed_fn)
+    if args.speaker:
+        result["speaker_model"] = str(args.speaker)
     print()
     rungs = list(result["home"]["mcd"])
     print(f"{'':>8} " + " ".join(f"{'MCD@' + str(r):>7}" for r in rungs)
@@ -300,6 +316,15 @@ def cmd_codec_transfer(args) -> int:
             p = "-" if pw["p"] is None else f"{pw['p']:.3g}"
             print(f"  {key:>6} {k:>7}: worse {pw['worse']:>3}  better {pw['better']:>3}  "
                   f"same {pw['same']:>3}   sign test p {p}")
+    if args.speaker:
+        print("\n  voice identity (speaker model, cosine to the clip's own original):")
+        for key in ("home", "other"):
+            r = result[key]
+            ref = r["voice_ref"]
+            fmt = lambda v: "   -" if v is None else f"{v:.3f}"  # noqa: E731
+            print(f"  {key:>6} " + "  ".join(f"{k}: {v:.3f}" for k, v in r["voice"].items())
+                  + f"   | same speaker, other clip {fmt(ref['same_speaker'])}"
+                  f"   different speakers {fmt(ref['different_speaker'])}")
     worst = result["other"]["per_speaker"][:5]
     print("\n  other voices with the highest MCD@%d:" % rungs[-1])
     for s in worst:
@@ -307,9 +332,36 @@ def cmd_codec_transfer(args) -> int:
               f"WER {s['wer_original'] * 100:.0f}% -> {s['wer_codec'] * 100:.0f}%")
     print(f"\n  MCD sees the envelope, not identity: listen to {out_dir}/other/NN-codec8.wav")
     print("  beside NN-original.wav to hear whether a voice still sounds like itself.")
-    path = Path("logs/audio") / f"codec-transfer-{run}-step{codec.step}.json"
+    path = Path("logs/audio") / f"codec-transfer-{run}-step{codec.step}{transfer_suffix(args)}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_json.dumps(result, indent=1))
+    print(f"wrote {path}")
+    return 0
+
+
+def cmd_speaker_eval(args) -> int:
+    """EER over every pair of clips from unseen speakers; JSON in logs/audio."""
+    import json as _json
+    from .speaker import load_speaker, verification
+    from .transfer import pick_clips
+
+    device = "cuda" if torch.cuda.is_available() and not args.cpu else "cpu"
+    model = load_speaker(args.checkpoint, device)
+    blob = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    clips = pick_clips(args.corpus, per_speaker=args.per_speaker,
+                       sample_rate=model.cfg.encoder.sample_rate)
+    r = verification(model, clips, device)
+    print(f"speaker model  {args.checkpoint} (step {blob.get('step')})")
+    print(f"corpus         {args.corpus}: {r['speakers']} speakers, {r['clips']} clips, "
+          f"{r['pairs']} pairs")
+    print(f"EER            {r['eer'] * 100:.2f}%   (chance 50%)")
+    print(f"similarity     same speaker {r['same_speaker']:.3f}   "
+          f"different speakers {r['different_speaker']:.3f}")
+    run = Path(args.checkpoint).parent.name
+    path = Path("logs/audio") / f"speaker-eval-{run}-step{blob.get('step')}-{Path(args.corpus).name}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_json.dumps({"checkpoint": str(args.checkpoint), "step": blob.get("step"),
+                                 "corpus": str(args.corpus), **r}, indent=1))
     print(f"wrote {path}")
     return 0
 
@@ -560,7 +612,17 @@ def main(argv=None) -> int:
     s.add_argument("--asr", default="asr-libri460", help="the recogniser that judges")
     s.add_argument("--keep", type=int, default=6, help="clips per corpus written as WAVs")
     s.add_argument("--out-dir", default=None)
+    s.add_argument("--speaker", default=None, metavar="PT",
+                   help="a speaker model (train_speaker) -> a voice-identity column")
     s.set_defaults(fn=cmd_codec_transfer)
+
+    s = sub.add_parser("speaker-eval", help="a speaker model's EER on speakers it never "
+                                            "trained on, and its two reference similarities")
+    s.add_argument("checkpoint")
+    s.add_argument("--corpus", default="data/asr/test-clean")
+    s.add_argument("--per-speaker", type=int, default=4)
+    s.add_argument("--cpu", action="store_true")
+    s.set_defaults(fn=cmd_speaker_eval)
 
     s = sub.add_parser("tts-report", help="TTS, judged by the dictation recogniser: "
                                           "original vs codec vs spoken, on held-out sentences")

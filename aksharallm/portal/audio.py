@@ -27,6 +27,7 @@ import base64
 import io
 import json
 import math
+import re
 import wave
 from pathlib import Path
 
@@ -329,17 +330,29 @@ class Audio:
         reports = sorted(self.root.glob("logs/audio/codec-transfer-*.json"),
                          key=lambda p: p.stat().st_mtime)
         if not reports:
-            return {"report": None, "command": TRANSFER_CMD}
+            return {"report": None, "codecs": [], "command": TRANSFER_CMD}
+        # A full-size report is `codec-transfer-<run>-step<N>.json`; a quick check on a
+        # smaller sample carries a suffix after the step and must never be shown as the
+        # result. The newest full report is the headline; one per codec run is the
+        # comparison (codec-lj against codec-many is the gate before a multi-speaker TTS).
+        full = [p for p in reports if re.fullmatch(r"codec-transfer-.+-step\d+\.json", p.name)]
+        by_run = {}
+        for p in full or reports:
+            r = self._read_transfer(p)
+            by_run[Path(r["checkpoint"] or p.name).parent.name or p.name] = r
+        return {"report": self._read_transfer((full or reports)[-1]),
+                "codecs": list(by_run.values()), "command": TRANSFER_CMD}
+
+    def _read_transfer(self, path: Path) -> dict:
         try:
-            r = json.loads(reports[-1].read_text())
+            r = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError) as e:
-            raise AudioError(f"cannot read {reports[-1].name}: {e}") from e
+            raise AudioError(f"cannot read {path.name}: {e}") from e
         side = {k: {kk: vv for kk, vv in r[k].items() if kk != "items"}
                 for k in ("home", "other") if k in r}
-        return {"report": {"file": str(reports[-1].relative_to(self.root)),
-                           "checkpoint": r.get("checkpoint"), "step": r.get("step"),
-                           "judge": r.get("judge"), "corpora": r.get("corpora"), **side},
-                "command": TRANSFER_CMD}
+        return {"file": str(path.relative_to(self.root)), "checkpoint": r.get("checkpoint"),
+                "step": r.get("step"), "judge": r.get("judge"), "corpora": r.get("corpora"),
+                "speaker_model": r.get("speaker_model"), **side}
 
     def runs(self) -> list[dict]:
         """Audio training runs and where they are, for the tab's status strip."""

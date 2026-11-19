@@ -104,3 +104,38 @@ def test_the_portal_reads_the_newest_report_without_its_items(tmp_path):
     r = Audio(tmp_path).transfer()["report"]
     assert r["step"] == 1 and r["other"]["mcd"]["8"]["mean"] == 2.0
     assert "items" not in r["home"]
+
+
+def test_a_smaller_sample_never_overwrites_the_full_report():
+    from aksharallm.audio.__main__ import transfer_suffix
+
+    full = SimpleNamespace(home_clips=64, per_speaker=3, home="data/audio/lj",
+                           other="data/asr/test-clean")
+    assert transfer_suffix(full) == ""
+    quick = SimpleNamespace(**{**vars(full), "home_clips": 6, "per_speaker": 1})
+    assert transfer_suffix(quick) == "-lj6-test-cleanx1"
+    other = SimpleNamespace(**{**vars(full), "other": "data/asr/dev-clean"})
+    assert transfer_suffix(other) != ""
+
+
+def test_the_portal_shows_full_reports_one_per_codec_and_never_a_quick_check(tmp_path):
+    import os
+
+    from aksharallm.portal.audio import Audio
+
+    d = tmp_path / "logs/audio"
+    d.mkdir(parents=True)
+
+    def write(name, ckpt, n, t):
+        side = {"n": n, "mcd": {"8": {"mean": float(n)}}}
+        (d / name).write_text(json.dumps({"checkpoint": ckpt, "step": 1, "home": side,
+                                          "other": side}))
+        os.utime(d / name, (t, t))
+
+    write("codec-transfer-codec-lj-step1.json", "checkpoints/codec-lj/ckpt_best.pt", 120, 1)
+    write("codec-transfer-codec-many-step1.json", "checkpoints/codec-many/ckpt_best.pt", 121, 2)
+    write("codec-transfer-codec-many-step1-lj6-test-cleanx1.json",
+          "checkpoints/codec-many/ckpt_best.pt", 7, 3)               # newest, but a quick check
+    res = Audio(tmp_path).transfer()
+    assert res["report"]["other"]["n"] == 121
+    assert [c["other"]["n"] for c in res["codecs"]] == [120, 121]

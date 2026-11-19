@@ -1,0 +1,51 @@
+# A speaker embedding, from scratch (docs/21 § "Does it still sound like that person?"):
+# the one number this repo lacked for a multi-speaker codec or TTS -- voice identity.
+#
+#     scripts/audio.sh speaker-libri
+#     python -m aksharallm.audio speaker-eval checkpoints/speaker-libri/ckpt_best.pt
+#     python -m aksharallm.audio codec-transfer checkpoints/codec-lj/ckpt_best.pt --cpu \
+#         --speaker checkpoints/speaker-libri/ckpt_best.pt
+#
+# Best is chosen on EER over dev-clean's 40 speakers; test-clean's 40 give the final number.
+name: speaker-libri
+
+speaker:
+  encoder:
+    d_model: 192
+    n_layers: 4
+    n_heads: 4
+    conv_kernel: 15
+    subsample_channels: 128
+    dropout: 0.1
+    max_frames: 1024
+    normalise: utterance      # a speaker model must not tell people apart by microphone level
+  emb_dim: 192
+  margin: 0.2
+  scale: 30.0
+
+data:
+  train: [data/asr/train-clean-100, data/asr/train-clean-360]   # ~1,170 speakers, 464 h
+  eval: data/asr/dev-clean
+  eval_per_speaker: 4
+  crop_seconds: 2.0
+  val_clips: 1
+
+optim:
+  lr: 1.0e-3
+  min_lr_ratio: 0.05
+  warmup_steps: 1000
+  weight_decay: 0.01
+  beta1: 0.9
+  beta2: 0.98
+  grad_clip: 5.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/speaker-libri
+  batch_size: 64
+  max_steps: 20000
+  eval_every: 1000
+  eval_batches: 4
+  sample_every: 0
+  ckpt_every: 1000
+  log_every: 50
