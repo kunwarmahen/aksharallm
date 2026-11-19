@@ -206,6 +206,7 @@ aksharallm/
 │   │   ├── sft.py            instruction tuning
 │   │   ├── dpo.py            preference tuning
 │   │   ├── distil.py         distillation: a small student taught by a teacher's distribution
+│   │   ├── muon.py           Muon: orthogonalised momentum for the block matrices (optim.name)
 │   │   ├── schedule.py       learning-rate schedules
 │   │   ├── stopfile.py       the STOP contract: stop now / at step N / at a wall-clock time
 │   │   │                     — shared by pretraining, SFT and QAT

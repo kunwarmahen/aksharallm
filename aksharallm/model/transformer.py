@@ -555,9 +555,28 @@ class Transformer(nn.Module):
 
     # ---- optimiser ----------------------------------------------------------------
 
-    def configure_optimizers(self, weight_decay, lr, betas, device_type="cuda"):
+    def configure_optimizers(self, weight_decay, lr, betas, device_type="cuda", *,
+                             name="adamw", momentum=0.95, ns_steps=5):
         """Weight decay applies to matmul weights only. Decaying 1-D params (RMSNorm gains,
-        and biases if we had any) actively hurts — they have no redundancy to regularise."""
+        and biases if we had any) actively hurts — they have no redundancy to regularise.
+
+        `name="muon"` hands the 2-D block weights to Muon (train/muon.py) and keeps AdamW
+        for the embedding and the gains; returns the same `(n_decay, n_nodecay)` counts,
+        with Muon's weights counted as decayed (they are)."""
+        if name == "muon":
+            from ..train.muon import Muon, split_for_muon
+
+            muon, decay, no_decay = split_for_muon(self.named_parameters())
+            groups = [
+                {"params": muon, "weight_decay": weight_decay, "muon": True},
+                {"params": decay, "weight_decay": weight_decay},
+                {"params": no_decay, "weight_decay": 0.0},
+            ]
+            opt = Muon(groups, lr=lr, betas=betas, momentum=momentum, ns_steps=ns_steps)
+            decay = muon + decay
+            return opt, (sum(p.numel() for p in decay), sum(p.numel() for p in no_decay))
+        if name != "adamw":
+            raise ValueError(f"optim.name must be adamw or muon, not {name!r}")
         decay, no_decay = [], []
         for _, p in self.named_parameters():
             if not p.requires_grad:

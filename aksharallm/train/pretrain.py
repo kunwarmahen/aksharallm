@@ -380,7 +380,8 @@ def main():
     # ---- model -------------------------------------------------------------------
     model = Transformer(cfg.model).to(device)
     optimizer, (n_decay, n_nodecay) = model.configure_optimizers(
-        cfg.optim.weight_decay, cfg.optim.lr, (cfg.optim.beta1, cfg.optim.beta2), device
+        cfg.optim.weight_decay, cfg.optim.lr, (cfg.optim.beta1, cfg.optim.beta2), device,
+        name=cfg.optim.name, momentum=cfg.optim.muon_momentum, ns_steps=cfg.optim.muon_ns_steps,
     )
 
     start_step, best_val = 0, float("inf")
@@ -426,6 +427,13 @@ def main():
     print(f"params       {human(model.num_params())} total, "
           f"{human(model.num_params(True))} non-embedding")
     print(f"             decay={human(n_decay)} no-decay={human(n_nodecay)}")
+    if cfg.optim.name == "muon":
+        n_muon = sum(p.numel() for g in optimizer.param_groups if g.get("muon")
+                     for p in g["params"])
+        print(f"optimizer    muon on {human(n_muon)} block weights, adamw on the rest "
+              f"(momentum {cfg.optim.muon_momentum}, {cfg.optim.muon_ns_steps} NS steps)")
+    else:
+        print(f"optimizer    {cfg.optim.name}")
     print(f"arch         d={cfg.model.d_model} L={cfg.model.n_layers} H={cfg.model.n_heads} "
           f"KV={cfg.model.n_kv_heads} ff={cfg.model.d_ff} ctx={cfg.model.max_seq_len}")
     print(f"data         {train_ds.n_tokens:,} train / {val_ds.n_tokens:,} val tokens")
@@ -518,7 +526,7 @@ def main():
 
     log_session("session_start", pid=os.getpid(), start_step=start_step,
                 max_steps=cfg.train.max_steps, stop_at=stop_at, stop_by=stop_by,
-                tokens_per_step=tokens_per_step, params=n_params,
+                tokens_per_step=tokens_per_step, params=n_params, optimizer=cfg.optim.name,
                 params_active=n_params_active, params_nonemb=n_params_nonemb,
                 objective=objective.name, metric=objective.metric,
                 init=init_from, init_step=init_step)

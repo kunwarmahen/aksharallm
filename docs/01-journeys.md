@@ -542,6 +542,19 @@ The expensive routes. Each one is a real research direction rather than a switch
   `scripts/stage.sh sft small-code-py-dense`) lowered the loss another 0.018 and moved no
   benchmark significantly (MBPP 28 vs 27, pass@10 7.6 vs 6.7%). At 300M, the size is the cap
   ([doc 8](08-scaling.md)).
+- **A better optimizer (Muon)** — the cheapest experiment on this route. Muon replaces
+  AdamW for the block matrices with a step that moves every direction of a matrix equally;
+  everything else, including the learning rate, stays the same.
+
+  ```bash
+  scripts/experiment.sh tiny-adamw        # the control
+  scripts/experiment.sh tiny-muon         # identical but for optim.name: muon
+  ```
+
+  **How you know it worked:** `tiny-muon`'s val loss ends below `tiny-adamw`'s at the same
+  step. Both are in the portal's run picker with Start on the dashboard, and the trainer's
+  header line `optimizer` says which one ran ([doc 5](05-pretraining.md)). Not run on the
+  card yet.
 - **Scale up** — a bigger model on more tokens. The honest answer to most quality problems,
   and the one that costs the most.
 

@@ -216,6 +216,12 @@ class OptimConfig:
     beta2: float = 0.95
     grad_clip: float = 1.0
     schedule: str = "cosine"  # cosine | wsd | constant
+    # adamw | muon. Muon (train/muon.py) orthogonalises the momentum of every 2-D block
+    # weight and leaves the embedding and 1-D gains to AdamW; it is scaled to use the same
+    # lr, schedule and weight decay, so switching is this one key.
+    name: str = "adamw"
+    muon_momentum: float = 0.95
+    muon_ns_steps: int = 5
 
 
 @dataclass

@@ -539,7 +539,7 @@ function renderConfig(s) {
     ? `${fmt.int(c.max_steps)} steps = ${fmt.compact(c.max_steps * c.tokens_per_step)} tokens`
     : `${fmt.int(c.max_steps)} steps`));
   add('optimiser', c.lr == null ? null
-    : `lr ${fmt.exp(c.lr)} ${c.schedule} · grad clip ${c.grad_clip}`);
+    : `${c.optimizer && c.optimizer !== 'adamw' ? c.optimizer + ' · ' : ''}lr ${fmt.exp(c.lr)} ${c.schedule} · grad clip ${c.grad_clip}`);
   add('cadence', c.eval_every == null ? null
     : `eval every ${fmt.int(c.eval_every)} · checkpoint every ${fmt.int(c.ckpt_every)} steps`);
   add('data', (c.sources || []).filter(Boolean).length ? code((c.sources || []).join('  ')) : null);

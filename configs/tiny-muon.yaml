@@ -1,0 +1,54 @@
+# Optimizer experiment, the MUON arm (docs/05 § "Muon"): `tiny` exactly, with
+# `optim.name: muon`. configs/tiny-adamw.yaml is identical except for that one key,
+# so the difference between the two runs is the optimizer and nothing else -- same data,
+# same seed (so the same batches, gotcha 16), same lr, schedule, decay and steps.
+#
+# Why a fresh control instead of tiny's own 1.472: tiny trained before the data loader was
+# seeded (gotcha 16), so its batches cannot be reproduced. Compare the two arms with each other.
+#
+#   scripts/experiment.sh tiny-adamw
+#   scripts/experiment.sh tiny-muon
+
+name: tiny-muon
+
+model:
+  vocab_size: 8192        # must match the tokenizer
+  d_model: 384
+  n_layers: 6
+  n_heads: 6
+  n_kv_heads: 6           # == n_heads, i.e. plain MHA. GQA isn't worth it at this size.
+  max_seq_len: 512
+  tie_embeddings: true
+  dropout: 0.0
+
+data:
+  train_bin: data/tinystories/train.bin
+  val_bin: data/tinystories/val.bin
+  tokenizer: data/tinystories/tokenizer.json
+
+optim:
+  lr: 1.0e-3              # small models tolerate (and want) a high LR
+  min_lr_ratio: 0.1
+  warmup_steps: 200
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+  name: muon               # the ONE line that differs between tiny-adamw and tiny-muon
+
+train:
+  out_dir: checkpoints/tiny-muon
+  batch_size: 48
+  grad_accum: 2           # 48 * 2 * 512 = 49,152 tokens/step
+  seq_len: 512
+  max_steps: 8000         # ~393M tokens ~= 1 epoch of our 400M-token corpus
+  eval_every: 500
+  eval_batches: 40
+  sample_every: 1000
+  ckpt_every: 1000
+  log_every: 20
+  compile: true
+  seed: 1337
+  wandb_project: null
+  resume: auto

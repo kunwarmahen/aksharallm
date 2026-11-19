@@ -162,6 +162,55 @@ had them. Those have no redundancy to regularise and decaying them actively hurt
 
 ---
 
+## A second optimizer: Muon
+
+AdamW scales every number in a gradient by its own running size. For a weight **matrix**
+that is an odd choice: a linear layer's gradient is a sum of a few outer products, so it is
+close to low rank, and a step along it mostly pushes the few directions that are already
+moving. **Muon** keeps a momentum of the gradient, `M = U S V^T`, and steps along `U V^T`
+instead: the same directions with every singular value set to one. Each step moves every
+direction of the matrix by the same amount.
+
+```mermaid
+flowchart LR
+  G["gradient of a<br/>2-D block weight"] --> M["momentum<br/>(Nesterov, 0.95)"]
+  M --> NS["Newton-Schulz x5<br/>≈ U Vᵀ, matmuls only"]
+  NS --> S["x 0.2·√max(rows, cols)<br/>= AdamW's update size"]
+  S --> W["W ← W(1 − lr·wd) − lr · update"]
+  E["embedding, RMSNorm gains,<br/>MoE router + experts"] --> A["AdamW, as before"]
+```
+
+- **`U V^T` without an SVD.** Five Newton-Schulz iterations, a fixed polynomial applied to
+  `X Xᵀ`, push every singular value towards 1 using matmuls only, in bf16 on the card. They
+  land in roughly [0.7, 1.2] rather than at exactly 1, which works as well in practice.
+- **Only the block matrices.** The embedding is a lookup table, not a linear map, and an
+  orthogonalised update would move the rows of tokens that were not in the batch. It stays on
+  AdamW, as do the 1-D gains and the MoE router and expert stacks.
+- **One switch.** The `0.2·√max(rows, cols)` factor (from Moonlight, 2025) scales Muon's
+  update to about the size of AdamW's, so it uses **the same `lr`, schedule and weight
+  decay**. A config changes optimizer with `optim.name: muon` and nothing else.
+
+The experiment is a controlled pair, `configs/tiny-adamw.yaml` and `configs/tiny-muon.yaml`.
+They are `tiny` with that one key different (`tests/test_muon.py` checks it):
+
+```bash
+scripts/experiment.sh tiny-adamw     # the control, ~7 min on a 3090
+scripts/experiment.sh tiny-muon      # the same run with Muon
+```
+
+Compare the two with each other, not with `tiny`'s 1.472: `tiny` trained before the data
+loader was seeded (gotcha 16), so its batches cannot be reproduced. **Not run yet on the
+card.** A 40-step CPU smoke (batch 4) showed the same step-0 loss for both, and val 4.99 for
+Muon against 5.40 for AdamW. That only shows Muon is wired in and takes larger steps early;
+it says nothing about the end of a run. Muon's steps were 0.67 s against 0.50 s on the CPU,
+where the Newton-Schulz matmuls run in fp32. On the card they run in bf16 and are a smaller
+share of the step.
+
+A resume never mixes the two: an AdamW checkpoint has a different number of parameter groups
+and refuses to load into Muon, and the other way round too.
+
+---
+
 ## `torch.compile`
 
 ```python
@@ -538,6 +587,7 @@ through it.
 |---|---|---|
 | 1 | [`configs/tiny.yaml`](../configs/tiny.yaml) | a whole run in 40 lines. Read it first — every file below is reading *this* |
 | 2 | [`aksharallm/config.py`](../aksharallm/config.py) | `TrainConfig` / `OptimConfig`, then `load_config` — the YAML plus `-o key=value` overrides, and nothing else configures a run |
+| 2b | [`aksharallm/train/muon.py`](../aksharallm/train/muon.py) | `newton_schulz`, then `Muon._muon` — the orthogonalised step and the `0.2·√max` scale that lets it share AdamW's lr — and `split_for_muon`, which decides which weights it gets. `Transformer.configure_optimizers(name=...)` is where it is chosen |
 | 3 | [`aksharallm/train/schedule.py`](../aksharallm/train/schedule.py) | `get_lr` — 25 lines, warmup + cosine/wsd. A pure function of the step, which is *why* a resumed run is mathematically identical to an uninterrupted one |
 | 4 | [`aksharallm/train/pretrain.py`](../aksharallm/train/pretrain.py) → `main`, the step loop | the four lines of the objective inside the `grad_accum` loop (note `loss / grad_accum`), then `clip_grad_norm_`, then `optimizer.step()`. Everything else in the loop is logging, evaluating or stopping |
 | 4b | same file → `ARObjective`, `objective_for` | the seam. Everything in this chapter is machinery for surviving days of wall-clock and knows nothing about *what* the loss is — which is why the masked diffusion model in [doc 20](20-diffusion.md), the punctuation tagger in [doc 23](23-speech-recognition.md) and distillation in [doc 24](24-distillation.md) reuse this whole loop and add no trainer of their own |
@@ -554,6 +604,9 @@ What pins it: `tests/test_pipeline.py::test_warmup_is_linear_and_peaks_at_base_l
 `tests/test_distributed.py` spawns two gloo processes and checks the arithmetic: the
 all-reduce really averages, a stop seen by one rank is seen by all, `no_sync` changes the
 communication and not the answer, and two ranks draw different batches.
+`tests/test_muon.py` checks that Newton-Schulz really orthogonalises along the gradient's own
+directions, that only block matrices go to Muon, that a Muon step has AdamW's update size,
+that the AdamW groups match `torch.optim.AdamW`, and that a resume is exact.
 
 Break the warmup on purpose in [lesson 5](lessons/05-training-loop.md), the stop contract in
 [lesson 6](lessons/06-stop-resume.md).

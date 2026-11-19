@@ -76,6 +76,8 @@ LAUNCHERS: dict[str, dict] = {
     # Distillation (docs/24): the same ~5M student, from scratch and taught by `tiny`.
     "tiny-student": {"script": "scripts/experiment.sh", "args": ["tiny-student"]},
     "tiny-distil": {"script": "scripts/experiment.sh", "args": ["tiny-distil"]},
+    "tiny-adamw": {"script": "scripts/experiment.sh", "args": ["tiny-adamw"]},
+    "tiny-muon": {"script": "scripts/experiment.sh", "args": ["tiny-muon"]},
     # ...and at the real scale: a ~101M student, taught by the 300M base, and a control given
     # the distilled arm's GPU time.
     "small-student": {"script": "scripts/experiment.sh", "args": ["small-student"]},
@@ -964,6 +966,7 @@ class RunStore:
             "max_steps": t.max_steps,
             "lr": o.lr,
             "schedule": o.schedule,
+            "optimizer": o.name,
             "grad_clip": o.grad_clip,
             "eval_every": t.eval_every,
             "ckpt_every": t.ckpt_every,
