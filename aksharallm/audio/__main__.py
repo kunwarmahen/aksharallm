@@ -282,27 +282,76 @@ def cmd_tts_report(args) -> int:
         origs.append(samples[src.offsets[i]:src.offsets[i + 1]].astype(np.float32) / 32768.0)
 
     run = Path(args.checkpoint).parent.name
-    out_dir = Path(args.out_dir or f"logs/audio/tts-{run}")
+    out_dir = Path(args.out_dir or f"logs/audio/tts-{run}-{args.duration}")
     out_dir.mkdir(parents=True, exist_ok=True)
     asr_model, _ = load_recognizer(resolve_asr(args.asr), device)
     print(f"tts         {args.checkpoint} (step {blob.get('step')}), {n} held-out sentences")
     print(f"judge       {args.asr}, greedy\ndevice      {device}\n")
+    fpc = blob.get("frames_per_char") or _frames_per_char(blob, tok, model)
     rep = tts_ladder(model, tok, codec, utts, origs,
                      lambda ws: asr_transcribe(asr_model, ws, device),
                      temperature=args.temperature, seed=args.seed, device=device,
                      keep=lambda j, kind, w: write_wav(out_dir / f"{j:02d}-{kind}.wav", w,
-                                                       codec.cfg.sample_rate))
+                                                       codec.cfg.sample_rate),
+                     duration=args.duration, frames_per_char=fpc)
     print(f"{'row':>9} {'WER':>7} {'CER':>7} {'runaway':>8}")
     for kind, row in rep["rows"].items():
         print(f"{kind:>9} {row['wer'] * 100:>6.1f}% {row['cer'] * 100:>6.1f}% {row['runaway']:>8}")
     ex = rep["rows"]["tts"]["items"][0]
     print(f"\n  e.g. said  {ex['ref']}\n       heard {ex['hyp']}")
-    print("  The TTS row is given each sentence's real duration. Intelligibility is not quality:")
+    print(f"  TTS duration: {rep['duration']}; spoken/real length median "
+          f"{rep['length_ratio']['median']:.2f}. Intelligibility is not quality:")
     print(f"  listen to {out_dir}/NN-tts.wav beside NN-original.wav.")
-    path = Path("logs/audio") / f"tts-{run}-step{blob.get('step')}.json"
+    path = Path("logs/audio") / f"tts-{run}-step{blob.get('step')}-{args.duration}.json"
     path.write_text(_json.dumps({"checkpoint": str(args.checkpoint), "step": blob.get("step"),
                                  "judge": args.asr, **rep}, indent=1))
     print(f"wrote {path}")
+    return 0
+
+
+def _frames_per_char(blob, tok, model) -> float:
+    """For checkpoints saved before `frames_per_char` was: measure it from the corpus."""
+    from .dataset import UtteranceDataset
+    from .text import load_transcripts
+    data = blob["config"]["data"]
+    ds = UtteranceDataset(data["codes"], load_transcripts(data.get("corpus") or data["codes"]),
+                          tok, n_codebooks=model.cfg.n_codebooks, max_frames=model.cfg.max_frames,
+                          max_text=model.cfg.max_text, val_clips=data["val_clips"])
+    return ds.frames_per_char()
+
+
+def cmd_speak(args) -> int:
+    """Any text, in the model's voice, to a WAV."""
+    from .codec import load_codec
+    from .dataset import normalise_text
+    from .speech import load_tts, speak
+
+    device = "cuda" if torch.cuda.is_available() and not args.cpu else "cpu"
+    model, tok, blob = load_tts(args.checkpoint, device)
+    text = normalise_text(args.text)
+    ids = tok.encode(text)
+    lost = sorted({c for c in text if c not in tok.stoi})
+    if lost:
+        print(f"note        these characters are not in its alphabet and are skipped: {''.join(lost)!r}")
+    if len(ids) > model.cfg.max_text:
+        raise SystemExit(f"{len(ids)} characters; this model reads at most {model.cfg.max_text}. "
+                         "Split the text into sentences.")
+    how = (f"{args.frames} frames (given)" if args.frames else
+           "its own stop head" if model.stop_head is not None else None)
+    fpc = None
+    if how is None:
+        fpc = blob.get("frames_per_char") or _frames_per_char(blob, tok, model)
+        how = f"{fpc:.2f} frames per character (it has no stop head)"
+    codec = load_codec(blob["codec"], device)
+    gen = torch.Generator(device=device).manual_seed(args.seed)
+    codes = speak(model, ids, args.frames, temperature=args.temperature, device=device,
+                  generator=gen, frames_per_char=fpc)
+    wave = codec.decode(codes.to(device))[0].float().cpu().numpy()
+    out = Path(args.out or f"logs/audio/speak/{'-'.join(text.split()[:6]) or 'speech'}.wav")
+    write_wav(out, wave, codec.cfg.sample_rate)
+    sec = codes.shape[-1] / codec.cfg.frames_per_second
+    print(f"spoke       {text!r}\nlength      {codes.shape[-1]} frames = {sec:.1f} s, from {how}")
+    print(f"wrote       {out}")
     return 0
 
 
@@ -446,8 +495,20 @@ def main(argv=None) -> int:
     s.add_argument("--temperature", type=float, default=0.8)
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--out-dir", default=None, help="WAVs to listen to (default logs/audio/tts-<run>)")
+    s.add_argument("--duration", choices=["real", "own"], default="real",
+                   help="real = given each sentence's recorded length; own = the model decides")
     s.add_argument("--cpu", action="store_true", help="force the CPU (a run has the card)")
     s.set_defaults(fn=cmd_tts_report)
+
+    s = sub.add_parser("speak", help="say any text in a TTS model's voice, to a WAV")
+    s.add_argument("checkpoint", help="an audio LM trained with data.task: tts")
+    s.add_argument("text")
+    s.add_argument("--out", default=None, help="default logs/audio/speak/<first words>.wav")
+    s.add_argument("--frames", type=int, default=None, help="force a length (50 per second)")
+    s.add_argument("--temperature", type=float, default=0.8)
+    s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--cpu", action="store_true", help="force the CPU (a run has the card)")
+    s.set_defaults(fn=cmd_speak)
 
     args = p.parse_args(argv)
     return args.fn(args)

@@ -86,6 +86,7 @@ LAUNCHERS: dict[str, dict] = {
     "codec-lj": {"script": "scripts/audio.sh", "args": ["codec-lj"]},
     "audiolm-synth": {"script": "scripts/audio.sh", "args": ["audiolm-synth"]},
     "audiolm-lj": {"script": "scripts/audio.sh", "args": ["audiolm-lj"]},
+    "audiolm-lj-stop": {"script": "scripts/audio.sh", "args": ["audiolm-lj-stop"]},
     # The speech recogniser (Phase 7, docs/23): same launcher, an `asr:` config.
     "asr-synth": {"script": "scripts/audio.sh", "args": ["asr-synth"]},
     "asr-libri100": {"script": "scripts/audio.sh", "args": ["asr-libri100"]},

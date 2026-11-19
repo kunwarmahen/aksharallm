@@ -1,0 +1,75 @@
+# audiolm-lj, again, with two changes taken from its first run (2026-11-18, docs/21):
+#
+#   1. predict_stop: true -- a one-logit head that says when the sentence is over, so `speak`
+#      needs only text. The first run had to be told each sentence's real length.
+#   2. max_steps 25,000, not 60,000. The first run's validation loss bottomed at step 22,000
+#      and rose for the other 38,000 (memorising 24 h of one voice); the cosine schedule now
+#      ends near where the useful training did.
+#
+# Everything else is identical, so the two runs compare directly:
+#     .venv/bin/python -m aksharallm.audio tts-report checkpoints/audiolm-lj-stop/ckpt_best.pt --duration own
+#
+# Text-to-speech on LJSpeech: the audio language model, conditioned on characters.
+#
+# The same `AudioLM` as configs/audiolm-synth.yaml, with two differences that are the whole
+# point: the tokens come from the real codec (`codec-lj`, 8 x 1024 at 50 frames/s, MCD 2.60
+# dB at 4 kbps on held-out clips), and every training example is a whole sentence with its
+# transcript in front of it (`data.task: tts`), so the model learns to say a given text in
+# LJSpeech's one voice. Prerequisites:
+#
+#     .venv/bin/python -m aksharallm.audio encode checkpoints/codec-lj/ckpt_best.pt \
+#         --corpus data/audio/lj --out data/audio/lj-codes          # ~1 h on the CPU
+#     scripts/audio.sh audiolm-lj
+#     .venv/bin/python -m aksharallm.audio tts-report checkpoints/audiolm-lj/ckpt_best.pt
+#
+# The report speaks held-out sentences and has the dictation recogniser (asr-libri460)
+# transcribe the original recording, the codec's reconstruction of it and the TTS output:
+# one judge, three rows, so the TTS row reads against the two above it. See docs/21.
+#
+# Sized from the corpus itself: the longest clip is 505 frames (10.1 s) and the longest
+# normalised transcript 189 characters + BOS/EOS, so nothing is dropped. One sequence is
+# up to 192 text ids + 512 frames + 7 of delay + 1 BOS = 712 positions.
+name: audiolm-lj-stop
+
+audiolm:
+  codebook_size: 1024       # must match codec-lj exactly; checked on launch
+  n_codebooks: 8
+  max_frames: 512
+  max_text: 192             # characters, BOS and EOS included
+  predict_stop: true
+  model:
+    d_model: 512
+    n_layers: 12
+    n_heads: 8
+    n_kv_heads: 2
+    max_seq_len: 768        # >= 192 + 512 + 8 = 712
+    rope_theta: 10000.0
+    # 24 h of one voice against ~42M parameters, seen ~70 times over 60k steps: enough to
+    # memorise, so the best checkpoint is chosen on held-out sentences, with some dropout.
+    dropout: 0.1
+
+data:
+  task: tts
+  codes: data/audio/lj-codes
+  corpus: data/audio/lj     # the packed audio; its manifest points at LJSpeech's metadata.csv
+  codec: checkpoints/codec-lj/ckpt_best.pt
+  val_clips: 100            # the last 100 utterances, as for every audio run
+
+optim:
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 1000
+  weight_decay: 0.1
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/audiolm-lj-stop
+  batch_size: 16
+  max_steps: 25000
+  eval_every: 1000
+  eval_batches: 20
+  sample_every: 5000        # speaks one held-out sentence, text beside it: listen to these
+  ckpt_every: 1000
+  log_every: 50

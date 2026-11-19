@@ -461,3 +461,79 @@ def test_the_tts_ladder_judges_each_row_against_the_plain_words_of_the_text():
     assert rep["rows"]["codec"]["wer"] == pytest.approx(0.25)     # 0/2 and 1/2 words
     assert rep["rows"]["tts"]["items"][0]["ref"] == "the cat"
     assert rep["rows"]["tts"]["runaway"] == 1    # 3 insertions over 2 words: WER 1.5
+
+
+# ---------------------------------------------------------------------------------------
+# knowing when to stop
+# ---------------------------------------------------------------------------------------
+
+
+def test_stop_targets_mark_where_codebook_0_has_ended():
+    from aksharallm.audio.speech import stop_targets
+    t = stop_targets([3, 1], n_codebooks=2, width=5)
+    # row 0: T=3, columns 0..3 exist (T + N - 1 = 4); codebook 0 ends at column 3
+    assert t[0].tolist() == [0.0, 0.0, 0.0, 1.0, -1.0]
+    assert t[1].tolist() == [0.0, 1.0, -1.0, -1.0, -1.0]
+
+
+def test_a_memorised_utterance_is_spoken_at_its_own_length_with_no_length_given():
+    """The stop head is what lets `speak` be given text alone. Two memorised utterances of
+    9 and 5 frames must each come back whole and stop where they stopped."""
+    from aksharallm.audio.speech import utterance_loss
+    torch.manual_seed(0)
+    tok, texts, clips = _two_utterances()
+    cfg = tiny(text_vocab=tok.vocab_size, max_text=8)
+    cfg.predict_stop = True
+    model = AudioLM(cfg)
+    _memorise(model, lambda: utterance_loss(model, clips, texts, True), steps=400)
+    for clip, ids in zip(clips, texts):
+        spoken = speak(model, ids, top_k=1)
+        assert spoken.shape[-1] == clip.shape[-1]
+        assert torch.equal(spoken[0], clip)
+
+
+def test_without_a_stop_head_speak_needs_a_length_or_a_ratio():
+    model = AudioLM(tiny(text_vocab=20, max_text=8))
+    with pytest.raises(ValueError, match="no stop head"):
+        speak(model, [BOS, 5, 6, EOS])
+    assert speak(model, [BOS, 5, 6, EOS], frames_per_char=3.0).shape[-1] == 6   # 2 chars x 3
+
+
+def test_the_trainer_saves_a_stop_head_and_its_ratio_and_keeps_val_on_the_audio(tmp_path):
+    """A run with `predict_stop` must save the head (or `speak` cannot stop) and the corpus's
+    frames-per-character (the fallback). Its val number must be the audio alone, or the two
+    LJSpeech runs could not be compared."""
+    import json as _json
+    import yaml
+    from aksharallm.audio import train_lm
+    from aksharallm.audio.dataset import UtteranceDataset
+    from aksharallm.audio.speech import load_tts, utterance_loss
+
+    codes_dir = _tts_corpus(tmp_path, ["ab", "ba ab", "a", "abba", "b a", "bab"])
+    cfg = {"name": "stop-test",
+           "audiolm": {"codebook_size": SIZE, "n_codebooks": BOOKS, "max_frames": 12,
+                       "max_text": 10, "predict_stop": True,
+                       "model": {"d_model": 32, "n_layers": 2, "n_heads": 4, "n_kv_heads": 2,
+                                 "max_seq_len": 32}},
+           "data": {"codes": str(codes_dir), "codec": str(tmp_path / "codec.pt"),
+                    "task": "tts", "val_clips": 2},
+           "train": {"out_dir": str(tmp_path / "out"), "batch_size": 3, "max_steps": 3,
+                     "eval_every": 2, "eval_batches": 1, "sample_every": 0, "ckpt_every": 0,
+                     "log_every": 1}}
+    (tmp_path / "s.yaml").write_text(yaml.safe_dump(cfg))
+    assert train_lm.main([str(tmp_path / "s.yaml")]) == 0
+
+    model, tok, blob = load_tts(tmp_path / "out" / "ckpt_last.pt")
+    assert model.stop_head is not None and blob["frames_per_char"] > 0
+    val = [_json.loads(l) for l in (tmp_path / "out" / "train_log.jsonl").read_text()
+           .splitlines() if '"val_loss"' in l][0]["val_loss"]
+    best = torch.load(tmp_path / "out" / "ckpt_best.pt", weights_only=False)
+    model.load_state_dict(best["model"])
+    ds = UtteranceDataset(codes_dir, _json.loads((codes_dir / "transcripts.json").read_text()),
+                          tok, n_codebooks=BOOKS, max_frames=12, max_text=10, split="val",
+                          val_clips=2)
+    import numpy as np
+    ds.rng = np.random.default_rng(1337 + 1)          # the trainer's val seed
+    clips, texts = ds.batch(3)
+    audio_only = float(utterance_loss(model.eval(), clips, texts, True, with_stop=False))
+    assert val == pytest.approx(audio_only, abs=1e-4)

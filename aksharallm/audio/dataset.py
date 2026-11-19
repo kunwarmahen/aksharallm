@@ -394,6 +394,12 @@ class UtteranceDataset:
         i, ids = self.items[j]
         return self.base.clip(i), ids
 
+    def frames_per_char(self) -> float:
+        """Median frames per character (BOS/EOS excluded) over these utterances."""
+        off = self.base.manifest.offsets
+        return float(np.median([(off[i + 1] - off[i]) / max(1, len(ids) - 2)
+                                for i, ids in self.items]))
+
     def batch(self, batch_size: int) -> tuple[list[torch.Tensor], list[list[int]]]:
         picks = self.rng.choice(len(self.items), size=batch_size)
         pairs = [self.get(int(j)) for j in picks]

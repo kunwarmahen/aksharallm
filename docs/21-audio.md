@@ -440,8 +440,38 @@ LJSpeech is a question for `logs/audio/tts-audiolm-lj/NN-tts.wav` beside `NN-ori
 no number here can answer it.
 
 Two limits the number hides. The TTS was **given each sentence's real duration**, and there
-is no command to speak arbitrary text yet. Both are the next build, along with the
-overfitting, which more speakers would address better than more dropout.
+was no command to speak arbitrary text. Both are addressed below. The overfitting is the
+third, and more speakers would address it better than more dropout.
+
+### Speaking any text, and knowing when to stop
+
+```bash
+.venv/bin/python -m aksharallm.audio speak checkpoints/audiolm-lj/ckpt_best.pt \
+    "The quick brown fox jumps over the lazy dog, and nobody is surprised."
+```
+
+writes `logs/audio/speak/<first words>.wav`. The model has to be told how long to talk, in
+one of three ways, in this order: `--frames N` if given; the model's own **stop head** if it
+has one; else the corpus's median **frames per character** (3.29 on LJSpeech, saved in every
+TTS checkpoint by the trainer). It takes 13 s on the CPU. The first
+model, judged by the recogniser on that sentence: *"a quite bron cocx jumps of rithe lays ow
+lesse darts"*. That is about what 65.7% WER sounds like on a sentence it has never seen.
+
+**The stop head** (`audiolm.predict_stop: true`) is one logit on every audio position: has
+the utterance ended? The delay pattern finishes codebook 0 first, so "ended" means codebook
+0 has no frame at this column (`speech.stop_targets`). Generation stops sampling codebook 0
+the moment the head says so, and finishes the other books' delay tail. A sentence gets at
+least one frame, and at most `max_frames`. It is trained by a binary cross-entropy added
+to the audio loss, while the **validation number stays the audio loss alone**, so a run
+with a stop head reads on the same scale as one without.
+`test_a_memorised_utterance_is_spoken_at_its_own_length_with_no_length_given` memorises
+utterances of 9 and 5 frames and requires each back, whole, at its own length. It fails
+without the stop loss and with labels one column early.
+
+`configs/audiolm-lj-stop.yaml` is the first run plus the head, and **25,000 steps instead of
+60,000**, because validation bottomed at 22,000. `tts-report --duration own` lets the model
+choose its length. Queued as `logs/queue/tts-stop.sh`, which also scores the first model under
+its frames-per-character fallback, so "own length" has a baseline.
 
 ### The corpus that makes this measurable
 

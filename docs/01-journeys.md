@@ -594,6 +594,7 @@ scripts/audio.sh codec-lj                          # train the speech codec (don
 python -m aksharallm.audio encode checkpoints/codec-lj/ckpt_best.pt --corpus data/audio/lj --out data/audio/lj-codes
 scripts/audio.sh audiolm-lj                        # text-to-speech in LJSpeech's voice
 python -m aksharallm.audio tts-report checkpoints/audiolm-lj/ckpt_best.pt   # judged by asr-libri460
+python -m aksharallm.audio speak checkpoints/audiolm-lj/ckpt_best.pt "Any sentence you like."
 python -m aksharallm.vision caption vision-shapes  # caption held-out images and score them
 scripts/audio.sh asr-synth                         # a recogniser, no download, minutes
 python -m aksharallm.asr fetch train-clean-100     # then pack it, and scripts/audio.sh asr-libri100

@@ -97,7 +97,7 @@ def evaluate(model: AudioLM, ds, pad_id: int, batch_size: int, batches: int,
             _, loss = model(inputs, targets=targets)
         else:
             clips, texts = ds.batch(batch_size)
-            loss = utterance_loss(model, clips, texts, text_first=task == "tts")
+            loss = utterance_loss(model, clips, texts, text_first=task == "tts", with_stop=False)
         total += float(loss)
     model.train(was)
     return total / max(batches, 1)
@@ -177,6 +177,8 @@ def main(argv=None) -> int:
 
     # ASR supervises text, so "knows nothing" is uniform over the characters instead.
     uniform = math.log(tok.vocab_size if task == "asr" else cfg.audiolm.codebook_size)
+    if task == "tts" and cfg.audiolm.predict_stop:
+        uniform += math.log(2)   # the stop head's BCE starts at ln 2 too; val excludes it
     print(f"=== {cfg.name} ===")
     print(f"model      {model.num_params() / 1e6:.2f}M params, "
           f"{cfg.audiolm.n_codebooks} heads x {cfg.audiolm.codebook_size} codes")
@@ -192,7 +194,9 @@ def main(argv=None) -> int:
         print(f"dropped    train " + ", ".join(f"{v} {k.replace('_', ' ')}"
                                                for k, v in train_ds.dropped.items()))
     print(f"corpus     {len(train_ds)} train clips / {len(val_ds)} val")
-    print(f"expect     step-0 loss ~= ln({tok.vocab_size if task == 'asr' else cfg.audiolm.codebook_size}) = {uniform:.4f}")
+    print(f"expect     step-0 loss ~= ln({tok.vocab_size if task == 'asr' else cfg.audiolm.codebook_size})"
+          + (" + ln 2 (stop head)" if task == "tts" and cfg.audiolm.predict_stop else "")
+          + f" = {uniform:.4f}" + ("; val is the audio alone" if cfg.audiolm.predict_stop else ""))
     print(f"device     {device}")
 
     claim_pid_file(out_dir)
@@ -234,6 +238,10 @@ def main(argv=None) -> int:
 
     # Saved with every checkpoint: a text model is unusable without the ids it learned.
     extra = {"task": task, **({"tokenizer": tok.to_dict()} if tok else {})}
+    if task == "tts":
+        # How many frames a character takes in this corpus: what `speak` falls back on for
+        # a model with no stop head, saved so the checkpoint can speak without the corpus.
+        extra["frames_per_char"] = train_ds.frames_per_char()
     model.train()
     t0 = time.time()
     prev_log_step = start_step - 1
@@ -353,7 +361,9 @@ def _sample(model: AudioLM, codec, out_dir: Path, step: int, cfg: AudioLMRunConf
             print(f"           truth  {ref}\n           heard  {hyp}")
             model.train()
             return path
-        codes = speak(model, ids, clip.shape[-1], device=device)
+        # Its own length when it can choose one (`predict_stop`): that is what is on trial.
+        codes = speak(model, ids, None if model.stop_head is not None else clip.shape[-1],
+                      device=device)
         (out_dir / "samples").mkdir(parents=True, exist_ok=True)
         (out_dir / "samples" / f"step{step:06d}.txt").write_text(ref + "\n")
     else:

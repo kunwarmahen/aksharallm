@@ -65,7 +65,7 @@ def pad_text(batch: list[list[int]], device="cpu") -> tuple[torch.Tensor, torch.
 
 
 def utterance_loss(model: AudioLM, clips: list[torch.Tensor], texts: list[list[int]],
-                   text_first: bool = True) -> torch.Tensor:
+                   text_first: bool = True, with_stop: bool = True) -> torch.Tensor:
     """The loss for a batch of whole utterances of *different* lengths. TTS or ASR.
 
     `clips[i]` is undelayed codes `(N, T_i)`; `texts[i]` is that clip's character ids.
@@ -131,11 +131,39 @@ def utterance_loss(model: AudioLM, clips: list[torch.Tensor], texts: list[list[i
                                                torch.full_like(d[i, :, 1 : 1 + s], -100))
         h = gather(a_at, d.shape[-1])
         logits = torch.stack([head(h) for head in model.heads], dim=2)   # (B, S, N, V)
-        return F.cross_entropy(logits[:, :-1].reshape(-1, model.cfg.codebook_size).float(),
+        loss = F.cross_entropy(logits[:, :-1].reshape(-1, model.cfg.codebook_size).float(),
                                tgt[:, :, 1:].permute(0, 2, 1).reshape(-1), ignore_index=-100)
+        # `with_stop=False` is the validation number: the audio alone, so a run with a stop
+        # head reads on the same scale as one without.
+        if model.stop_head is not None and with_stop:
+            loss = loss + stop_loss(model, h[:, :-1], frames)
+        return loss
     h = gather(t_at, tid.shape[1])
     return F.cross_entropy(model.text_head(h)[:, :-1].reshape(-1, model.cfg.text_vocab_size).float(),
                            ttgt[:, 1:].reshape(-1), ignore_index=-100)
+
+
+def stop_targets(frames: list[int], n_codebooks: int, width: int, device="cpu") -> torch.Tensor:
+    """`(B, width)` float targets for the stop head, `-1` where there is nothing to predict.
+
+    Audio position `c` (the BOS column is 0) predicts delayed column `c`. Codebook 0 holds
+    frame `c` there, so the utterance has ended for it exactly when `c >= T`. Positions
+    after the row's last real column are padding and are ignored.
+    """
+    out = torch.full((len(frames), width), -1.0, device=device)
+    pos = torch.arange(width, device=device)
+    for i, t in enumerate(frames):
+        live = pos < t + n_codebooks - 1
+        out[i, live] = (pos[live] >= t).float()
+    return out
+
+
+def stop_loss(model: AudioLM, h: torch.Tensor, frames: list[int]) -> torch.Tensor:
+    """Binary cross-entropy of the stop head on the audio positions that predict a column."""
+    tgt = stop_targets(frames, model.cfg.n_codebooks, h.shape[1], h.device)
+    logit = model.stop_head(h).squeeze(-1).float()
+    keep = tgt >= 0
+    return F.binary_cross_entropy_with_logits(logit[keep], tgt[keep])
 
 
 def tts_batch(model: AudioLM, codes: torch.Tensor, texts: list[list[int]]):
@@ -157,14 +185,20 @@ def asr_batch(model: AudioLM, codes: torch.Tensor, texts: list[list[int]]):
 def speak(
     model: AudioLM,
     text_ids: list[int],
-    n_frames: int,
+    n_frames: int | None = None,
     *,
     temperature: float = 0.8,
     top_k: int = 100,
     device: str = "cpu",
     generator: torch.Generator | None = None,
+    frames_per_char: float | None = None,
 ) -> torch.Tensor:
-    """TTS. Text ids in, undelayed codes `(1, N, n_frames)` out — feed them to `codec.decode`.
+    """TTS. Text ids in, undelayed codes `(1, N, T)` out — feed them to `codec.decode`.
+
+    How long to speak, in order of preference: `n_frames` if given; else the model's own
+    stop head (`predict_stop`), which ends the utterance when it says codebook 0 is done;
+    else `frames_per_char` times the text length (the ratio the trainer measured and saved).
+    Always capped at `max_frames`.
 
     Sampling rather than greedy, and that is not a stylistic choice: greedy TTS produces a
     flat monotone, because the model's single most likely continuation of any prosody is the
@@ -174,15 +208,33 @@ def speak(
     cfg = model.cfg
     n = cfg.n_codebooks
     model.eval()
+    t_frames = n_frames
+    if t_frames is None and model.stop_head is None:
+        if not frames_per_char:
+            raise ValueError("this model has no stop head: pass n_frames or frames_per_char")
+        t_frames = round(frames_per_char * max(1, len(text_ids) - 2))
+    if t_frames is not None:
+        t_frames = max(1, min(int(t_frames), cfg.max_frames))
     text = torch.tensor([text_ids], dtype=torch.long, device=device)
     seq = torch.full((1, n, 1), model.bos_id, dtype=torch.long, device=device)
 
-    for s in range(n_frames + n - 1):
-        logits, _ = model(seq, text=text, text_first=True)
-        step = logits[0, -1]
+    s = 0
+    while s < (t_frames if t_frames is not None else cfg.max_frames) + n - 1:
+        text_x, audio_x = model.embed_text(text), model.embed_audio(seq)
+        hidden, _ = model.body(None, inputs_embeds=torch.cat([text_x, audio_x], dim=1),
+                               return_hidden=True)
+        last = hidden[:, -1]
+        if t_frames is None:
+            # The stop head reads the same position the heads do. Asked at s == 0 it would
+            # end an utterance before its first frame, so a sentence gets at least one.
+            if s >= 1 and torch.sigmoid(model.stop_head(last).float()).item() > 0.5:
+                t_frames = s
+            elif s >= cfg.max_frames:
+                t_frames = cfg.max_frames
+        step = torch.stack([head(last) for head in model.heads], dim=1)[0]   # (N, V)
         nxt = torch.full((1, n, 1), model.pad_id, dtype=torch.long, device=device)
         for k in range(n):
-            if not (k <= s < k + n_frames):
+            if not (k <= s and (t_frames is None or s < k + t_frames)):
                 continue
             row = step[k].float() / max(temperature, 1e-6)
             if top_k:
@@ -190,7 +242,8 @@ def speak(
                 row = row.masked_fill(row < cut, float("-inf"))
             nxt[0, k, 0] = torch.multinomial(torch.softmax(row, -1), 1, generator=generator)
         seq = torch.cat([seq, nxt], dim=-1)
-    return undelay(seq[:, :, 1:], n_frames=n_frames)
+        s += 1
+    return undelay(seq[:, :, 1:], n_frames=t_frames)
 
 
 @torch.no_grad()
@@ -301,28 +354,31 @@ def load_tts(path, device: str = "cpu"):
 
 @torch.no_grad()
 def tts_ladder(model, tok, codec, utterances, originals, transcribe_fn, *, temperature=0.8,
-               seed=0, device="cpu", keep=None) -> dict:
+               seed=0, device="cpu", keep=None, duration="real",
+               frames_per_char=None) -> dict:
     """The same sentences three ways, judged by one independent recogniser.
 
         original   the recording itself            -> the judge's own error on this voice
         codec      the recording through the codec -> what the codec loses
         tts        the model speaking the text     -> what the TTS gets wrong
 
-    Each row is only readable against the one above it. The TTS is given each sentence's
-    **real duration** (`speak` needs a frame count, and this model has no stop token), which
-    is an advantage a deployed system would not have, and the report says so.
+    Each row is only readable against the one above it. `duration="real"` gives the TTS each
+    sentence's real length, an advantage a deployed system would not have; `"own"` lets the
+    model choose (its stop head, or `frames_per_char` if it has none). The report says which.
 
     `utterances` is `[(codes (N, T), text ids)]`, `originals` the matching float waveforms,
     `transcribe_fn(list_of_waves) -> list_of_str`. `keep(j, name, wave)` is called for each
     waveform, so the caller can write them out to listen to.
     """
     gen = torch.Generator(device=device).manual_seed(seed)
-    refs, waves = [], {"original": [], "codec": [], "tts": []}
+    refs, waves, lengths = [], {"original": [], "codec": [], "tts": []}, []
     for j, ((codes, ids), orig) in enumerate(zip(utterances, originals)):
         refs.append(plain_words(tok.decode(ids[1:-1])))
         recon = codec.decode(codes.unsqueeze(0).to(device))[0].float().cpu().numpy()
-        spoken = speak(model, ids, codes.shape[-1], temperature=temperature, device=device,
-                       generator=gen)
+        spoken = speak(model, ids, codes.shape[-1] if duration == "real" else None,
+                       temperature=temperature, device=device, generator=gen,
+                       frames_per_char=frames_per_char)
+        lengths.append((codes.shape[-1], spoken.shape[-1]))
         tts = codec.decode(spoken.to(device))[0].float().cpu().numpy()
         for name, w in (("original", orig), ("codec", recon), ("tts", tts)):
             waves[name].append(w)
@@ -333,5 +389,10 @@ def tts_ladder(model, tok, codec, utterances, originals, transcribe_fn, *, tempe
         hyps = [plain_words(h) for h in transcribe_fn(ws)]
         rows[name] = {**asr_report(list(zip(refs, hyps))),
                       "items": [{"ref": r, "hyp": h} for r, h in zip(refs, hyps)]}
-    return {"n": len(refs), "temperature": temperature, "seed": seed,
-            "duration": "the real recording's (given, not predicted)", "rows": rows}
+    how = ("the real recording's (given, not predicted)" if duration == "real"
+           else "the model's own" + (" (stop head)" if model.stop_head is not None
+                                     else f" ({frames_per_char:.2f} frames per character)"))
+    ratio = [s / r for r, s in lengths]
+    return {"n": len(refs), "temperature": temperature, "seed": seed, "duration": how,
+            "length_ratio": {"median": sorted(ratio)[len(ratio) // 2], "min": min(ratio),
+                             "max": max(ratio)} if ratio else None, "rows": rows}

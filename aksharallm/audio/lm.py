@@ -71,6 +71,10 @@ class AudioLMConfig:
     max_frames: int = 500  # 10 s at 50 frames/s
     max_text: int = 0  # > 0 turns on the text path (TTS / ASR)
     text_vocab_size: int = 0
+    #: TTS only: a one-logit head that says, at each audio position, whether the utterance
+    #: has ended (codebook 0, which the delay pattern finishes first, has no frame left).
+    #: Without it `speak` must be told how many frames to make.
+    predict_stop: bool = False
     model: ModelConfig = field(default_factory=ModelConfig)
 
     @property
@@ -112,6 +116,7 @@ class AudioLM(nn.Module):
         self.heads = nn.ModuleList(
             nn.Linear(d, cfg.codebook_size, bias=False) for _ in range(cfg.n_codebooks)
         )
+        self.stop_head = nn.Linear(d, 1) if cfg.predict_stop else None
         self.text_emb = self.text_head = None
         if cfg.text_vocab_size:
             self.text_emb = nn.Embedding(cfg.text_vocab_size, d)
