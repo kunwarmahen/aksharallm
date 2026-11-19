@@ -470,8 +470,38 @@ without the stop loss and with labels one column early.
 
 `configs/audiolm-lj-stop.yaml` is the first run plus the head, and **25,000 steps instead of
 60,000**, because validation bottomed at 22,000. `tts-report --duration own` lets the model
-choose its length. Queued as `logs/queue/tts-stop.sh`, which also scores the first model under
-its frames-per-character fallback, so "own length" has a baseline.
+choose its length. It ran as `logs/queue/tts-stop.sh` (2026-11-19, 53 min). That queue
+also scored the first model under its frames-per-character fallback, so "own length" has a
+baseline.
+
+**Measured (2026-11-19).** The run's val loss bottomed at **4.686 at step 18,000** and stayed
+flat to 25,000. The first run reached 4.666, so the shorter schedule cost a little. The
+same 20 held-out sentences were judged by the same recogniser:
+
+| model | length from | WER | CER |
+|---|---|---|---|
+| original recording | – | 8.7% | 3.1% |
+| codec | – | 8.7% | 2.7% |
+| `audiolm-lj` (step 22k) | real recording | 65.7% | 34.8% |
+| `audiolm-lj` (step 22k) | 3.29 frames/char | 60.4% | 32.7% |
+| `audiolm-lj-stop` (step 18k) | real recording | **47.1%** | 23.1% |
+| `audiolm-lj-stop` (step 18k) | **its own stop head** | **54.9%** | 25.7% |
+
+- **The stop head works.** It chose lengths at a median of 1.07× the real recording (range
+  0.92–1.36×). Judged sentence by sentence, it was no worse than being handed the real
+  length (better on 6, worse on 12, p 0.24), or than the frames-per-character rule (11–8,
+  p 0.65).
+- **The new run is clearer when both runs are given the real length:** it was better on 16
+  of 20 sentences and worse on 3 (sign test p 0.004), despite a slightly worse val loss.
+  Two things changed at once, so this does not say which one did it. The stop loss is one;
+  the shorter cosine schedule, which decays sooner, is the other.
+- On the fox sentence, which the model has never seen, the recogniser heard *"the quick
+  brown fox jumps ofe zy dos and noblty is surpriss"* from the new model (5.6 s, its own
+  length). From the old one it heard *"a quick brown fox over the lacied ta and is
+  surprus"* (4.5 s, which dropped "jumps"). WAVs: `logs/audio/speak/fox-*.wav`.
+
+With 20 sentences sampled at temperature 0.8, a difference of five points means nothing.
+Only paired counts like these mean anything.
 
 ### The corpus that makes this measurable
 
