@@ -503,6 +503,72 @@ same 20 held-out sentences were judged by the same recogniser:
 With 20 sentences sampled at temperature 0.8, a difference of five points means nothing.
 Only paired counts like these mean anything.
 
+### Does the codec carry other voices? (2026-11-19)
+
+The TTS overfits one voice, and the obvious fix is more voices. But a multi-speaker TTS
+writes *codes*, and the codec turns them back into sound. If `codec-lj`, trained on 24 hours
+of one reader, cannot rebuild other people, more speakers in the audio LM cannot help: its
+output can never sound better than the codec's reconstruction. So the codec was measured
+first, on the CPU:
+
+```bash
+python -m aksharallm.audio codec-transfer checkpoints/codec-lj/ckpt_best.pt --cpu
+```
+
+It runs two sets of clips through the codec. The first is 64 LJSpeech clips from the
+codec's own held-out split. The second is 120 LibriSpeech `test-clean` clips, 3 from each of
+40 speakers it never heard. For every clip it records MCD at 1, 2, 4 and 8 codebooks, and
+`asr-libri460`'s transcript of the original and of the reconstruction.
+
+```mermaid
+flowchart LR
+  C["one clip"] --> O["original"]
+  C --> K["codec-lj<br/>encode → decode"]
+  O --> J["asr-libri460"]
+  K --> J
+  O --> M["MCD"]
+  K --> M
+  J --> P["paired: did the codec make<br/>THIS clip harder to hear?"]
+```
+
+| | clips | MCD @1 | @2 | @4 | @8 | WER original | @4 | @8 |
+|---|---|---|---|---|---|---|---|---|
+| its own voice (LJ, held out) | 64 · 1 voice | 6.24 | 4.34 | 3.16 | **2.53** | 6.3% | 7.6% | 7.2% |
+| voices it never heard (LibriSpeech) | 120 · 40 voices | 13.88 | 11.61 | 10.12 | **9.12** | 9.1% | 21.4% | 15.3% |
+
+Paired, clip by clip, at 8 codebooks:
+
+- **Its own voice:** the codec made the recogniser worse on 12 clips and better on 6, and
+  left 46 the same (p 0.24). That is no measurable damage.
+- **Other voices:** worse on **60**, better on 13, the same on 47 (p 2×10⁻⁸). At 4 codebooks
+  it was worse on 75 and better on 8.
+
+**It degrades badly.** At full bitrate the codec is further from an unseen voice (9.1 dB)
+than from its own voice at a *single* codebook (6.2 dB). Only 7 of the 40 speakers come out
+under 4 dB. The spread is wide: from 2.7 dB for the best speaker to 24.8 dB for the worst,
+and 80% of clips are above 4 dB. The recogniser still gets most words: CER goes 3.0% →
+5.9%. So the *words* mostly survive while the *voice* does not. But for a TTS whose job is
+to sound like a person, that is the part that matters.
+
+Two explanations were ruled out before believing this:
+
+- **Not loudness.** Normalising each clip to LJSpeech's level before encoding left MCD where
+  it was (10.1 → 10.1 dB on the first speaker, and similar on the rest).
+- **Not background noise.** LibriSpeech is read at home and LJSpeech in a studio, so the
+  noise between words could have inflated MCD. It did not: keeping only frames within
+  10 dB of each clip's peak, which is the speech itself, made the gap *wider* (2.9 vs
+  11.4 dB).
+
+What it cannot see: MCD measures the spectral envelope, not identity. A codec that turned
+every speaker into one voice could score well on both columns. And the judge trained on
+LibriSpeech, so it is on home ground for the second row. That is why each row is read
+against its own original, never against the other row. Listen:
+`logs/audio/codec-transfer-codec-lj/other/NN-codec8.wav` beside `NN-original.wav`, or pick
+`data/asr/test-clean` in the Audio tab's ladder. The tab's **Does the codec carry other
+voices?** panel shows this report.
+
+**So the codec has to be retrained on many voices before the audio LM is.**
+
 ### The corpus that makes this measurable
 
 `synth_corpus` writes **its own transcripts**, because we chose the vowel sequence and
@@ -576,7 +642,8 @@ are that chapter's model, unchanged, over different integers.
 | 9 | [`audio/delay.py`](../aksharallm/audio/delay.py) | the ASCII diagram, then `delay` and `undelay`. Twelve lines, and trap 4 |
 | 10 | [`audio/lm.py`](../aksharallm/audio/lm.py) | `AudioLM.__init__` (why the body's own head is unused), then `forward`'s shift — it happens on the *delayed* sequence, which is the whole trick |
 | 11 | [`audio/text.py`](../aksharallm/audio/text.py) · [`audio/speech.py`](../aksharallm/audio/speech.py) | why character level; then `utterance_loss`, where TTS and ASR are one flag apart and each row is laid out the way `speak`/`transcribe` lay it out; then `tts_ladder`, the three-row score |
-| 12 | [`aksharallm/audio/__main__.py`](../aksharallm/audio/__main__.py) · [`portal/audio.py`](../aksharallm/portal/audio.py) | the two front ends, over one set of functions |
+| 12 | [`audio/transfer.py`](../aksharallm/audio/transfer.py) | `measure_corpus`, then `paired`: every clip is read against its own original, so "the codec hurts these voices" is never confused with "these sentences are harder" |
+| 13 | [`aksharallm/audio/__main__.py`](../aksharallm/audio/__main__.py) · [`portal/audio.py`](../aksharallm/portal/audio.py) | the two front ends, over one set of functions |
 
 What pins it: [`tests/test_audio.py`](../tests/test_audio.py) and
 [`tests/test_codec.py`](../tests/test_codec.py) — including the three regressions above

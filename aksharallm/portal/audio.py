@@ -92,6 +92,11 @@ def spectrogram_rows(wave_t: torch.Tensor, cfg: MelConfig, width: int = 160) -> 
     }
 
 
+#: Printed in the panel beside the result, so the terminal and the browser stay one tool.
+TRANSFER_CMD = ("python -m aksharallm.audio codec-transfer "
+                "checkpoints/codec-lj/ckpt_best.pt --cpu")
+
+
 class Audio:
     """Everything the Audio tab can ask for."""
 
@@ -145,7 +150,12 @@ class Audio:
     def corpora(self) -> list[dict]:
         """Packed corpora on disk — what there is to listen to."""
         out = []
-        for man_path in sorted(self.root.glob("data/audio/*/manifest.json")):
+        # The recogniser's packed test sets too (not its 40 GB training sets): they are the
+        # voices a one-speaker codec never heard, and hearing the ladder on them is the
+        # other half of `audio codec-transfer`'s report.
+        found = sorted(self.root.glob("data/audio/*/manifest.json")) \
+            + sorted(self.root.glob("data/asr/test-*/manifest.json"))
+        for man_path in found:
             if not (man_path.parent / "audio.bin").is_file():
                 continue  # a codes-only directory has no waveforms to play
             try:
@@ -308,6 +318,28 @@ class Audio:
                     "noise, and noise spreads evenly over a codebook. Collapse is a "
                     "perplexity of a few dozen out of a thousand ANYWHERE.",
         }
+
+    def transfer(self) -> dict:
+        """The newest `audio codec-transfer` report: a codec on its own voice vs others.
+
+        Read from the JSON the CLI wrote rather than computed here — it transcribes a couple
+        of hundred clips, which is minutes, not a request. Per-clip items are dropped; the
+        panel needs the summary and the per-speaker table.
+        """
+        reports = sorted(self.root.glob("logs/audio/codec-transfer-*.json"),
+                         key=lambda p: p.stat().st_mtime)
+        if not reports:
+            return {"report": None, "command": TRANSFER_CMD}
+        try:
+            r = json.loads(reports[-1].read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            raise AudioError(f"cannot read {reports[-1].name}: {e}") from e
+        side = {k: {kk: vv for kk, vv in r[k].items() if kk != "items"}
+                for k in ("home", "other") if k in r}
+        return {"report": {"file": str(reports[-1].relative_to(self.root)),
+                           "checkpoint": r.get("checkpoint"), "step": r.get("step"),
+                           "judge": r.get("judge"), "corpora": r.get("corpora"), **side},
+                "command": TRANSFER_CMD}
 
     def runs(self) -> list[dict]:
         """Audio training runs and where they are, for the tab's status strip."""

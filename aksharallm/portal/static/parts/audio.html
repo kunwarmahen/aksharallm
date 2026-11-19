@@ -97,7 +97,23 @@ scripts/audio.sh codec-synth</pre>
       <div class="scroll-x"><table id="au-tokens-table" class="grid au-codes"></table></div>
     </div>
 
-    <!-- 4. runs -->
+    <!-- 4. other voices -->
+    <div class="panel">
+      <h3>Does the codec carry other voices?</h3>
+      <p class="panel-note">
+        A codec trained on one reader may only know how to rebuild that reader. This compares
+        clips of its own voice it never trained on with LibriSpeech speakers it never heard:
+        MCD at each bitrate, and one recogniser's word error rate on the original and on the
+        reconstruction of the <em>same</em> clip. Pick <code>data/asr/test-clean</code> in
+        the ladder above to hear it.
+      </p>
+      <div class="scroll-x"><table id="au-transfer" class="grid"></table></div>
+      <p id="au-transfer-paired" class="panel-note"></p>
+      <div class="scroll-x"><table id="au-transfer-speakers" class="grid"></table></div>
+      <p id="au-transfer-note" class="panel-note dim"></p>
+    </div>
+
+    <!-- 5. runs -->
     <div class="panel">
       <h3>Audio runs</h3>
       <p class="panel-note">

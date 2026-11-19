@@ -169,6 +169,45 @@ async function runTokens() {
   }
 }
 
+/* ---- other voices ------------------------------------------------------------------- */
+
+/* Rendered from the JSON `audio codec-transfer` wrote: transcribing a couple of hundred
+ * clips is minutes, so it is a CLI job and this panel only reads it. */
+async function loadTransfer() {
+  const res = await api('/api/audio/transfer');
+  const r = res.report;
+  if (!r) {
+    $('#au-transfer').innerHTML = '<tbody><tr><td>no report yet</td></tr></tbody>';
+    $('#au-transfer-note').innerHTML = `Run <code>${escHtml(res.command || '')}</code> (CPU, a few minutes).`;
+    return;
+  }
+  const rungs = Object.keys(r.home.mcd);
+  const judged = Object.keys(r.home.paired_wer);
+  const pct = (x) => (x == null ? '—' : `${(x * 100).toFixed(1)}%`);
+  const row = (label, s) => `<tr><td>${label}</td><td>${fmt.int(s.n)} clips · ${fmt.int(s.speakers)} voice(s)</td>`
+    + rungs.map((n) => `<td>${s.mcd[n].mean.toFixed(2)}</td>`).join('')
+    + `<td>${pct(s.wer.original)}</td>`
+    + judged.map((k) => `<td>${pct(s.wer[k])}</td>`).join('') + '</tr>';
+  $('#au-transfer').innerHTML = `<thead><tr><th></th><th>clips</th>`
+    + rungs.map((n) => `<th>MCD @${n}</th>`).join('')
+    + `<th>WER original</th>` + judged.map((k) => `<th>WER @${k.slice(5)}</th>`).join('')
+    + `</tr></thead><tbody>${row('its own voice', r.home)}${row('voices it never heard', r.other)}</tbody>`;
+  const pw = (s, k) => {
+    const x = s.paired_wer[k];
+    return `${x.worse} worse / ${x.better} better / ${x.same} same (p ${x.p == null ? '—' : x.p.toPrecision(2)})`;
+  };
+  $('#au-transfer-paired').innerHTML = judged.map((k) =>
+    `<b>@${k.slice(5)} books, per clip:</b> own voice ${pw(r.home, k)}; other voices ${pw(r.other, k)}`).join('<br>');
+  const spk = (r.other.per_speaker || []).slice(0, 8);
+  $('#au-transfer-speakers').innerHTML = `<thead><tr><th>worst voices</th><th>clips</th>`
+    + `<th>MCD @${rungs[rungs.length - 1]}</th><th>WER original → codec</th></tr></thead><tbody>`
+    + spk.map((s) => `<tr><td>speaker ${escHtml(s.speaker)}</td><td>${s.n}</td><td>${s.mcd.toFixed(2)}</td>`
+      + `<td>${pct(s.wer_original)} → ${pct(s.wer_codec)}</td></tr>`).join('') + '</tbody>';
+  $('#au-transfer-note').innerHTML = `From <code>${escHtml(r.file)}</code>, judged by `
+    + `<code>${escHtml(r.judge)}</code>. MCD under ~4 dB is very close. It measures the envelope, `
+    + 'not whether a voice still sounds like itself: listen too.';
+}
+
 /* ---- lifecycle ---------------------------------------------------------------------- */
 
 registerTab('audio', {
@@ -180,6 +219,7 @@ registerTab('audio', {
     $('#au-tokens').onclick = runTokens;
     await loadOverview();
     await loadRuns();
+    await loadTransfer().catch((e) => flash(`other-voices report: ${e.message}`, 'error'));
     au.loaded = true;
   },
   /* Nothing polls here, so there is nothing to tear down — but the hook stays declared so

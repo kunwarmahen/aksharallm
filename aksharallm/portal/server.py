@@ -615,6 +615,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.audio.overview())
         if parts == ["audio", "runs"]:
             return self._json({"runs": self.audio.runs()})
+        if parts == ["audio", "transfer"]:
+            try:
+                return self._json(self.audio.transfer())
+            except AudioError as e:
+                return self._json({"error": str(e)}, code=400)
         # masked diffusion: which checkpoints can be denoised, and what the current one is.
         if parts == ["diffusion"]:
             return self._json(self.diffusion.overview(

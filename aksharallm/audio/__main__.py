@@ -251,6 +251,69 @@ def cmd_codec_report(args) -> int:
     return 0
 
 
+def cmd_codec_transfer(args) -> int:
+    """`transfer.measure_corpus` on the codec's own voice and on voices it never heard."""
+    import json as _json
+    from ..asr.__main__ import resolve as resolve_asr
+    from ..asr.measure import transcribe as asr_transcribe
+    from ..asr.train import load_recognizer
+    from .codec import load_codec
+    from .transfer import measure_corpus, pick_clips
+
+    device = "cuda" if torch.cuda.is_available() and not args.cpu else "cpu"
+    codec = load_codec(args.checkpoint, device)
+    asr_model, _ = load_recognizer(resolve_asr(args.asr), device)
+    run = Path(args.checkpoint).parent.name
+    out_dir = Path(args.out_dir or f"logs/audio/codec-transfer-{run}")
+    sr = codec.cfg.sample_rate
+    print(f"codec       {args.checkpoint} (step {codec.step}), {codec.cfg.describe()}")
+    print(f"judge       {args.asr}, greedy\ndevice      {device}\n")
+    corpora = {
+        "home": pick_clips(args.home, last=args.home_clips, sample_rate=sr),
+        "other": pick_clips(args.other, per_speaker=args.per_speaker, sample_rate=sr),
+    }
+    result = {"checkpoint": str(args.checkpoint), "step": codec.step, "judge": args.asr,
+              "corpora": {"home": str(args.home), "other": str(args.other)}}
+    for key, clips in corpora.items():
+        d = out_dir / key
+        d.mkdir(parents=True, exist_ok=True)
+        keep = (lambda j, label, w, d=d: write_wav(d / f"{j:02d}-{label}.wav", w, sr)
+                if j < args.keep else None)
+        print(f"{key:<6} {len(clips)} clips from {len({c['speaker'] for c in clips})} "
+              f"speaker(s) ...", flush=True)
+        result[key] = measure_corpus(codec, clips,
+                                     lambda ws: asr_transcribe(asr_model, ws, device),
+                                     keep=keep)
+    print()
+    rungs = list(result["home"]["mcd"])
+    print(f"{'':>8} " + " ".join(f"{'MCD@' + str(r):>7}" for r in rungs)
+          + f" {'WER orig':>9} " + " ".join(f"{'@' + k[5:]:>7}" for k in
+                                             result["home"]["paired_wer"]))
+    for key in ("home", "other"):
+        r = result[key]
+        print(f"{key:>8} " + " ".join(f"{r['mcd'][n]['mean']:>7.2f}" for n in rungs)
+              + f" {r['wer']['original'] * 100:>8.1f}% "
+              + " ".join(f"{r['wer'][k] * 100:>6.1f}%" for k in r["paired_wer"]))
+    print("\n  paired, per clip: did the codec make the recogniser do worse on THIS clip?")
+    for key in ("home", "other"):
+        for k, pw in result[key]["paired_wer"].items():
+            p = "-" if pw["p"] is None else f"{pw['p']:.3g}"
+            print(f"  {key:>6} {k:>7}: worse {pw['worse']:>3}  better {pw['better']:>3}  "
+                  f"same {pw['same']:>3}   sign test p {p}")
+    worst = result["other"]["per_speaker"][:5]
+    print("\n  other voices with the highest MCD@%d:" % rungs[-1])
+    for s in worst:
+        print(f"    speaker {s['speaker']:>5}  MCD {s['mcd']:.2f}  "
+              f"WER {s['wer_original'] * 100:.0f}% -> {s['wer_codec'] * 100:.0f}%")
+    print(f"\n  MCD sees the envelope, not identity: listen to {out_dir}/other/NN-codec8.wav")
+    print("  beside NN-original.wav to hear whether a voice still sounds like itself.")
+    path = Path("logs/audio") / f"codec-transfer-{run}-step{codec.step}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_json.dumps(result, indent=1))
+    print(f"wrote {path}")
+    return 0
+
+
 def cmd_tts_report(args) -> int:
     """`tts_ladder` over held-out LJSpeech-style sentences, WAVs written, JSON in logs/audio."""
     import json as _json
@@ -486,6 +549,18 @@ def main(argv=None) -> int:
     s.add_argument("wav")
     s.add_argument("--frames", type=int, default=16)
     s.set_defaults(fn=cmd_codec_tokens)
+
+    s = codec_args(sub.add_parser("codec-transfer", help="does the codec carry voices it never "
+                                                    "heard? MCD + recogniser WER, paired"))
+    s.add_argument("--home", default="data/audio/lj", help="the corpus the codec trained on")
+    s.add_argument("--home-clips", type=int, default=64,
+                   help="its last N clips: the codec's own held-out split (val_clips)")
+    s.add_argument("--other", default="data/asr/test-clean", help="voices it never heard")
+    s.add_argument("--per-speaker", type=int, default=3)
+    s.add_argument("--asr", default="asr-libri460", help="the recogniser that judges")
+    s.add_argument("--keep", type=int, default=6, help="clips per corpus written as WAVs")
+    s.add_argument("--out-dir", default=None)
+    s.set_defaults(fn=cmd_codec_transfer)
 
     s = sub.add_parser("tts-report", help="TTS, judged by the dictation recogniser: "
                                           "original vs codec vs spoken, on held-out sentences")
