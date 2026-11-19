@@ -373,8 +373,13 @@ class Recognizer(nn.Module):
         self.feat_mean.copy_(mean)
         self.feat_std.copy_(torch.sqrt((acc2 / n - mean ** 2).clamp_min(1e-4)))
 
-    def encode(self, feats: torch.Tensor, lengths: torch.Tensor):
-        """Normalised log-mel -> `(log_probs (B, T', V) float32, out_lengths (B,))`."""
+    def encode(self, feats: torch.Tensor, lengths: torch.Tensor, *, hidden: bool = False):
+        """Normalised log-mel -> `(log_probs (B, T', V) float32, out_lengths (B,))`.
+
+        `hidden=True` returns the last block's normalised states `(B, T', d_model)` instead
+        of the log-probabilities: what the many-voices codec's content loss is taught by
+        (docs/21), because a recogniser's encoder was trained to keep the words and drop
+        the speaker."""
         x = self.in_norm(self.subsample(feats))
         T = x.shape[1]
         if T > self.rope_cos.shape[0]:
@@ -392,6 +397,8 @@ class Recognizer(nn.Module):
         x = x * mask[..., None]
         for blk in self.blocks:
             x = blk(x, mask, self.rope_cos, self.rope_sin)
+        if hidden:
+            return self.out_norm(x), out_len
         logits = self.head(self.out_norm(x)).float()
         return logits.log_softmax(-1), out_len
 

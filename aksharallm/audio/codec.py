@@ -255,10 +255,15 @@ class Codec(nn.Module):
         """Codes `(B, N, frames)` -> waveform. `n_codebooks` is the bitrate dial."""
         return self.synthesize(self.quantizer.decode(idx, n_active=n_codebooks))
 
-    def forward(self, wave: torch.Tensor, *, n_codebooks: int | None = None):
-        """The training path. Returns `(reconstruction, codes, vq_loss, [VQStats])`."""
+    def forward(self, wave: torch.Tensor, *, n_codebooks: int | None = None,
+                first: bool = False):
+        """The training path. Returns `(reconstruction, codes, vq_loss, [VQStats])`, plus
+        codebook 0's own output `(B, D, frames)` when `first=True` (the content loss)."""
         padded, n = self.pad_to_hop(wave)
         z = self.latent(padded)
+        if first:
+            q, idx, vq_loss, stats, q0 = self.quantizer(z, n_active=n_codebooks, first=True)
+            return self.synthesize(q)[..., :n], idx, vq_loss, stats, q0
         q, idx, vq_loss, stats = self.quantizer(z, n_active=n_codebooks)
         return self.synthesize(q)[..., :n], idx, vq_loss, stats
 

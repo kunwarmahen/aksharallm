@@ -9,6 +9,8 @@
 #
 #   scripts/audio.sh codec-synth      # the codec on synthetic babble (minutes, no download)
 #   scripts/audio.sh codec-lj         # the codec on LJSpeech (docs/21)
+#   scripts/audio.sh codec-many       # LJ + LibriSpeech 460 h, warm-started from codec-lj
+#   scripts/audio.sh codec-many-content  # the same, with codebook 0 taught by asr-libri460
 #   scripts/audio.sh audiolm-synth    # the audio LM over a trained codec's tokens
 #   scripts/audio.sh asr-synth        # the Conformer-CTC recogniser on synthetic speech
 #   scripts/audio.sh asr-libri100     # ...on LibriSpeech train-clean-100 (docs/23)
@@ -155,31 +157,45 @@ fi
 echo
 echo "=== 1/3  data ==="
 launch_stage data
-CORPUS=$($PY - "$CFG" <<'EOF'
+# Every corpus the run reads: data.corpus, or each of data.sources (the many-voices codec).
+CORPORA=$($PY - "$CFG" <<'EOF'
 import sys, yaml
-cfg = yaml.safe_load(open(sys.argv[1])) or {}
-print((cfg.get("data") or {}).get("corpus", ""))
+d = (yaml.safe_load(open(sys.argv[1])) or {}).get("data") or {}
+for c in [s["corpus"] for s in d.get("sources") or []] or [d.get("corpus", "")]:
+    print(c)
 EOF
 )
-if [ -n "$CORPUS" ] && [ ! -s "$CORPUS/audio.bin" ]; then
-    if [ "$CORPUS" = "data/audio/synth" ]; then
-        echo "    $CORPUS is missing. Building the synthetic corpus (~30 s)..."
-        $PY -m aksharallm.audio corpus --out "$CORPUS" --clips 400
+CORPUS=$(echo "$CORPORA" | head -1)
+for C in $CORPORA; do
+    [ -s "$C/audio.bin" ] && continue
+    if [ "$C" = "data/audio/synth" ]; then
+        echo "    $C is missing. Building the synthetic corpus (~30 s)..."
+        $PY -m aksharallm.audio corpus --out "$C" --clips 400
     else
-        echo "    ERROR: $CORPUS/audio.bin does not exist." >&2
-        echo "           build it:  $PY -m aksharallm.audio pack <wav-dir> --out $CORPUS" >&2
+        echo "    ERROR: $C/audio.bin does not exist." >&2
+        echo "           build it:  $PY -m aksharallm.audio pack <wav-dir> --out $C" >&2
         echo "           or fetch:  $PY -m aksharallm.audio fetch ljspeech" >&2
         exit 1
     fi
+done
+INIT=$($PY - "$CFG" <<'EOF'
+import sys, yaml
+print(((yaml.safe_load(open(sys.argv[1])) or {}).get("train") or {}).get("init") or "")
+EOF
+)
+if [ -n "$INIT" ] && [ ! -s "$INIT" ] && [ ! -s "$RUN_DIR/ckpt_last.pt" ]; then
+    echo "    ERROR: train.init $INIT does not exist (and there is no ckpt_last.pt to resume)." >&2
+    exit 1
 fi
 if [ "$KIND" = asr ]; then
     # A recogniser reads data.train (a list) and data.val, not data.corpus.
     $PY scripts/asr_data_check.py "$CFG" || exit 1
 fi
-if [ -n "$CORPUS" ]; then
-    sz=$(stat -c%s "$CORPUS/audio.bin")
-    echo "    $CORPUS/audio.bin: $((sz / 1000000)) MB = $((sz / 2 / 16000 / 60)) minutes at 16 kHz"
-fi
+for C in $CORPORA; do
+    sz=$(stat -c%s "$C/audio.bin")
+    echo "    $C/audio.bin: $((sz / 1000000)) MB = $((sz / 2 / 16000 / 60)) minutes at 16 kHz"
+done
+[ -n "$INIT" ] && echo "    warm start from $INIT"
 
 # ---- smoke ------------------------------------------------------------------------------
 echo

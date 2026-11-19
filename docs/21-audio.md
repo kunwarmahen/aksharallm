@@ -588,6 +588,88 @@ because the decoder cannot render those voices anyway. A codebook-only fix is ru
 **So the codec has to be retrained on many voices — encoder and decoder, not only the
 codebooks — before the audio LM is.**
 
+### The many-voices codec: `codec-many` (built 2026-11-19, not run yet)
+
+`configs/codec-many.yaml` is `codec-lj`'s architecture exactly, with two changes:
+
+- **It reads three corpora by weight** (`data.sources`): LJSpeech 0.20, LibriSpeech
+  train-clean-100 0.17 and train-clean-360 0.63, which is 488 hours and ~1,170 voices. Weighted by
+  hours, LJ would be 5% of every batch and the voice the codec already knows could drift.
+  `MixedAudioDataset` gives every batch `floor(16 × weight)` rows from each corpus and hands out
+  the leftover rows by the fractional parts, so a weight is a corpus's exact expected share.
+- **It starts from `codec-lj`'s weights** (`train.init`), with a fresh optimizer and its own
+  warm-up. The two configs must describe the same codec; a different codebook size or stride
+  is refused rather than loaded. A resume always wins over the init, so restarting a stopped run
+  continues it.
+
+```mermaid
+flowchart LR
+  LJ["LJSpeech<br/>24 h, 1 voice<br/>weight 0.20"] --> B["each batch of 16<br/>3 + 2 + 10 rows<br/>+ 1 by fraction"]
+  L1["train-clean-100<br/>100 h<br/>0.17"] --> B
+  L3["train-clean-360<br/>364 h<br/>0.63"] --> B
+  I["codec-lj<br/>ckpt_best.pt"] -->|train.init| C["codec-many"]
+  B --> C
+  C --> V["val loss per corpus:<br/>lj · train-clean-100 · train-clean-360<br/>+ the weighted mean"]
+```
+
+Validation is reported **per corpus** beside the weighted mean (`val_loss_lj`,
+`val_loss_train-clean-100`, ...). The question this run has to answer is whether the new voices
+improve *without* the old one getting worse, and a single blended number cannot show that.
+The best checkpoint is chosen on the weighted mean.
+
+```bash
+scripts/audio.sh codec-many        # ~2.7 h at codec-lj's 0.096 s/step, 100k steps
+python -m aksharallm.audio codec-transfer checkpoints/codec-many/ckpt_best.pt --cpu
+```
+
+**The gate before any TTS is built on it** is the same `codec-transfer` report: the
+LibriSpeech row has to improve and the LJSpeech row must not get worse, both read per clip.
+A 12-step CPU smoke run on the real corpora, starting from `codec-lj`, already shows the
+starting gap in the trainer's own terms: val **2.29 on LJ against 3.77 and 5.26** on the two
+LibriSpeech tails. It also shows codebook usage at 18–24% on the new mix against codec-lj's
+61–70% on LJ, so the dead-entry restarts will have work to do early.
+
+### A content codebook: `codec-many-content` (built 2026-11-19, not run yet)
+
+Codebook 0 of today's codec carries whatever cuts the reconstruction error most, so it holds
+the words and the voice together. A TTS over those codes has to guess the voice from text,
+which text cannot tell it. SpeechTokenizer and Mimi split the two instead: codebook 0 is pulled
+towards the states of a speech-recognition encoder, which was trained to keep the words and
+ignore the speaker. The words then sit in codebook 0, which text predicts well, and the voice
+in codebooks 1–7, which is where a speaker id or a reference clip can act.
+
+Our own recogniser is the teacher: `asr-libri460`, frozen ([doc 23](23-speech-recognition.md)).
+
+```mermaid
+flowchart LR
+  W["waveform"] --> E["codec encoder"] --> Q0["codebook 0<br/>(B, 128, 50/s)"]
+  Q0 --> H["ContentHead<br/>Linear 128→256"]
+  W --> R["asr-libri460 encoder<br/>frozen, 25/s"] --> I["resample to 50/s"]
+  H --> L["1 − cos, per frame<br/>× content_weight"]
+  I --> L
+  Q0 --> REST["+ codebooks 1–7"] --> D["decoder → reconstruction loss"]
+```
+
+- **Only a projection is added**, about 33k parameters. It is saved next to the codec in the
+  checkpoint (`content_head`), never inside its weights, so everything that reads a codec
+  checkpoint is unaffected.
+- **Cosine, not squared error.** The recogniser's states are layer-normalised, so their
+  direction carries the phone. A squared error would mostly teach the projection their size.
+- **The loss cannot be switched on or off across a resume.** Doing that would change the
+  optimizer's groups and the objective at once, so it is refused. Start a new run with
+  `train.init` instead.
+- **The judge's caveat.** The same recogniser scores the codec in `codec-transfer`. This loss
+  shapes the *codes* to match its encoder; it does not train the *reconstruction* to please
+  it, which is the trap named above. Still read a content-trained codec's WER rows next to MCD
+  and a second judge (Whisper).
+
+`configs/codec-many-content.yaml` is `codec-many.yaml` with only `loss.content_weight: 1.0`
+and `loss.content_teacher` added, so the pair answers this one question. On the CPU both run
+at the same 4.2 audio-s/s, because there the codec dominates the step. On the card the
+recogniser's forward pass is a larger share; the guess is 30–50% slower, to be measured. **To
+decide before either runs:** train one, or both as a controlled pair. Both is about 2 × 2.7
+GPU hours plus the teacher's cost.
+
 ### The corpus that makes this measurable
 
 `synth_corpus` writes **its own transcripts**, because we chose the vowel sequence and
@@ -655,12 +737,13 @@ are that chapter's model, unchanged, over different integers.
 | 3 | [`audio/dataset.py`](../aksharallm/audio/dataset.py) | `pack` and the assertion rule, then the clip-boundary rule in `AudioDataset`. `synth_corpus` last — it is a voice, written out |
 | 4 | [`audio/vq.py`](../aksharallm/audio/vq.py) | `VectorQuantizer.forward` (the float32 line, the straight-through line), then `_seed` and `_update`'s restart. Then `ResidualVQ` — six lines that make bitrate a dial |
 | 5 | [`audio/codec.py`](../aksharallm/audio/codec.py) | `Snake`, `Down`/`Up`'s asymmetric padding, then `ReconstructionLoss` — the two terms and what each fixes |
-| 6 | [`audio/config.py`](../aksharallm/audio/config.py) · [`configs/codec-synth.yaml`](../configs/codec-synth.yaml) | diff it against [`codec-lj.yaml`](../configs/codec-lj.yaml); that diff is what scaling to real speech costs |
-| 7 | [`audio/train_codec.py`](../aksharallm/audio/train_codec.py) | the module docstring's "what to watch, in order of how badly it goes wrong". Then the shared STOP/pid/jsonl contract |
+| 6 | [`audio/config.py`](../aksharallm/audio/config.py) · [`configs/codec-synth.yaml`](../configs/codec-synth.yaml) | diff it against [`codec-lj.yaml`](../configs/codec-lj.yaml); that diff is what scaling to real speech costs. Then [`codec-many.yaml`](../configs/codec-many.yaml): `data.sources` and `train.init`, and `MixedAudioDataset` in `dataset.py` |
+| 7 | [`audio/train_codec.py`](../aksharallm/audio/train_codec.py) | the module docstring's "what to watch, in order of how badly it goes wrong". Then the shared STOP/pid/jsonl contract, then `evaluate_sources` (one val number per corpus) and `warm_start` (which config fields may differ) |
 | 8 | [`audio/measure.py`](../aksharallm/audio/measure.py) | the table at the top — what each metric cannot see — then `cepstrum`'s relative floor |
 | 9 | [`audio/delay.py`](../aksharallm/audio/delay.py) | the ASCII diagram, then `delay` and `undelay`. Twelve lines, and trap 4 |
 | 10 | [`audio/lm.py`](../aksharallm/audio/lm.py) | `AudioLM.__init__` (why the body's own head is unused, and the optional one-logit `stop_head`), then `training_pair` — the BOS column generation starts from — and `forward`'s shift, which happens on the *delayed* sequence, which is the whole trick |
 | 11 | [`audio/text.py`](../aksharallm/audio/text.py) · [`audio/speech.py`](../aksharallm/audio/speech.py) | why character level; then `utterance_loss`, where TTS and ASR are one flag apart and each row is laid out the way `speak`/`transcribe` lay it out; then `tts_ladder`, the three-row score |
+| 11b | [`audio/content.py`](../aksharallm/audio/content.py) | `teacher_states` (the recogniser's `encode(hidden=True)`, resampled to 50 frames/s), then `content_loss`. `ResidualVQ.forward(first=True)` is where codebook 0's own vector comes from |
 | 12 | [`audio/transfer.py`](../aksharallm/audio/transfer.py) | `measure_corpus`, then `paired`: every clip is read against its own original, so "the codec hurts these voices" is never confused with "these sentences are harder" |
 | 13 | [`aksharallm/audio/__main__.py`](../aksharallm/audio/__main__.py) · [`portal/audio.py`](../aksharallm/portal/audio.py) | the two front ends, over one set of functions |
 

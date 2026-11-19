@@ -35,6 +35,13 @@ class AudioDataConfig:
     #: and never by offset — two windows of one utterance are near-duplicates, so splitting
     #: inside a clip leaks the val set into training.
     val_clips: int = 16
+    #: Several corpora mixed by weight, as `[{corpus: data/audio/lj, weight: 0.2}, ...]`.
+    #: When set it replaces `corpus`; each corpus keeps its own held-out tail and the val
+    #: loss is reported per corpus as well as weighted (`MixedAudioDataset`).
+    sources: list | None = None
+
+    def corpora(self) -> list[dict]:
+        return list(self.sources) if self.sources else [{"corpus": self.corpus, "weight": 1.0}]
 
 
 @dataclass
@@ -62,6 +69,11 @@ class AudioTrainConfig:
     compile: bool = False
     seed: int = 1337
     resume: str | None = "auto"
+    #: Warm start: a codec checkpoint whose WEIGHTS (and codebooks) start this run, with a
+    #: fresh optimizer and this config's own schedule. The architecture must match exactly.
+    #: A resume always wins, so restarting a warm-started run continues it rather than
+    #: starting it over from the init.
+    init: str | None = None
     stop_after: int | None = None
     stop_at: int | None = None
     stop_after_s: float | None = None
@@ -80,6 +92,10 @@ class LossConfig:
     #: so an experiment can turn the whole VQ term off without changing the codec's shape and
     #: therefore without invalidating the checkpoint.
     vq_weight: float = 1.0
+    #: The content codebook (audio/content.py): pull codebook 0 towards a frozen
+    #: recogniser's encoder states. 0 turns it off and loads no teacher.
+    content_weight: float = 0.0
+    content_teacher: str | None = None
 
 
 @dataclass

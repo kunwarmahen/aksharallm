@@ -75,6 +75,10 @@ def load_audiolm_config(path, overrides=None) -> AudioLMRunConfig:
     cfg = load_into(AudioLMRunConfig, path, overrides)
     if isinstance(cfg.audiolm.model, dict):  # nested twice; `_build` handles one level
         cfg.audiolm.model = ModelConfig(**cfg.audiolm.model)
+    if cfg.train.init:
+        # The field is shared with the codec trainer's config; this trainer has no warm start,
+        # and a key that is read by nothing would look like it had worked.
+        raise ValueError("train.init is a codec-trainer option; the audio LM does not read it")
     return cfg
 
 

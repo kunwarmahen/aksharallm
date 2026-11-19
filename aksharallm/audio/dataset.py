@@ -229,6 +229,65 @@ class AudioDataset:
         return torch.from_numpy(raw)
 
 
+class MixedAudioDataset:
+    """Windows from several packed corpora, mixed by weight within every batch.
+
+    The many-voices codec reads LJSpeech (one reader, 24 h) beside LibriSpeech (~1,170
+    readers, 460 h). Sampled by duration, LJ would be 5% of what the codec sees and the voice
+    it already knows would drift; a weight per corpus keeps it at the share the config says.
+
+    Each batch has `floor(batch * weight)` rows from every corpus, and the leftover rows go
+    to corpora drawn by their fractional parts. So a weight is the expected share of the
+    batch exactly, and every corpus with weight >= 1/batch appears in every batch. Inside a
+    corpus, windows are drawn the way `AudioDataset` draws them: every second equally likely.
+    """
+
+    def __init__(self, sources: list[dict], window: int, device: str = "cpu", *,
+                 seed: int | None = None, split: str = "train", val_clips: int = 16):
+        if not sources:
+            raise ValueError("data.sources is empty")
+        w = np.array([float(s.get("weight", 1.0)) for s in sources], dtype=np.float64)
+        if (w <= 0).any():
+            raise ValueError("every source weight must be positive")
+        self.weights = w / w.sum()
+        base = 0 if seed is None else seed
+        self.parts = [AudioDataset(s["corpus"], window, device, seed=base + 1000 * i,
+                                   split=split, val_clips=val_clips)
+                      for i, s in enumerate(sources)]
+        self.names = [Path(s["corpus"]).name for s in sources]
+        rates = {p.manifest.sample_rate for p in self.parts}
+        if len(rates) != 1:
+            # Asserted, never repaired: one corpus at another rate is a codec that learns two
+            # meanings of a frame.
+            raise ValueError(f"sources disagree on sample rate: {sorted(rates)}")
+        self.manifest = self.parts[0].manifest
+        self.window = window
+        self.rng = np.random.default_rng(seed)
+
+    def __len__(self) -> int:
+        return sum(len(p) for p in self.parts)
+
+    @property
+    def seconds(self) -> float:
+        return sum(p.seconds for p in self.parts)
+
+    def counts(self, batch_size: int) -> np.ndarray:
+        exact = self.weights * batch_size
+        n = np.floor(exact).astype(int)
+        left = batch_size - int(n.sum())
+        if left:
+            frac = exact - n
+            n[self.rng.choice(len(n), size=left, replace=False, p=frac / frac.sum())] += 1
+        return n
+
+    def batch(self, batch_size: int) -> torch.Tensor:
+        rows = [p.batch(int(k)) for p, k in zip(self.parts, self.counts(batch_size)) if k]
+        return torch.cat(rows)
+
+    def clip(self, i: int) -> torch.Tensor:
+        return self.parts[0].clip(i)
+
+
 # ---------------------------------------------------------------------------------------
 # from waveforms to codes
 # ---------------------------------------------------------------------------------------

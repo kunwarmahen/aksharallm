@@ -279,7 +279,7 @@ class ResidualVQ(nn.Module):
     def bits_per_frame(self) -> float:
         return self.n_codebooks * torch.log2(torch.tensor(float(self.size))).item()
 
-    def forward(self, z: torch.Tensor, *, n_active: int | None = None):
+    def forward(self, z: torch.Tensor, *, n_active: int | None = None, first: bool = False):
         """Quantize `(B, D, T)` with the first `n_active` codebooks (default: all).
 
         Returns `(quantized, indices (B, N, T), commitment loss, [VQStats])`. Indices for
@@ -307,10 +307,17 @@ class ResidualVQ(nn.Module):
             # reaches the encoder through every stage rather than only the first.
             residual = residual - q
             quantized = quantized + q
+            if i == 0:
+                first_q = q
             idx[:, i] = ids
             loss = loss + commit
             stats.append(st)
 
+        if first:
+            # The first codebook's own straight-through output, for a loss that shapes what
+            # codebook 0 carries (the content loss, docs/21). Always present: dropout never
+            # turns off fewer than one codebook.
+            return quantized, idx, loss / max(n_active, 1), stats, first_q
         return quantized, idx, loss / max(n_active, 1), stats
 
     def decode(self, idx: torch.Tensor, *, n_active: int | None = None) -> torch.Tensor:

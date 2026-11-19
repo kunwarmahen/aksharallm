@@ -86,6 +86,8 @@ LAUNCHERS: dict[str, dict] = {
     # Audio and vision: a different launcher, the same pid/meta/log contract. docs/21, 22.
     "codec-synth": {"script": "scripts/audio.sh", "args": ["codec-synth"]},
     "codec-lj": {"script": "scripts/audio.sh", "args": ["codec-lj"]},
+    "codec-many": {"script": "scripts/audio.sh", "args": ["codec-many"]},
+    "codec-many-content": {"script": "scripts/audio.sh", "args": ["codec-many-content"]},
     "audiolm-synth": {"script": "scripts/audio.sh", "args": ["audiolm-synth"]},
     "audiolm-lj": {"script": "scripts/audio.sh", "args": ["audiolm-lj"]},
     "audiolm-lj-stop": {"script": "scripts/audio.sh", "args": ["audiolm-lj-stop"]},
@@ -991,7 +993,12 @@ class RunStore:
             cfg = load_codec_config(str(path))
             arch = cfg.codec.describe()
             batch = f"{cfg.train.batch_size} x {cfg.data.window_seconds:g} s windows"
-            sources = [cfg.data.corpus]
+            # A many-voices codec reads several corpora by weight; show each with its share,
+            # and the warm start, which decides what step 0 already knows.
+            sources = [f"{c['corpus']} ({float(c.get('weight', 1.0)):g})"
+                       if cfg.data.sources else c["corpus"] for c in cfg.data.corpora()]
+            if cfg.train.init:
+                sources.append(f"init: {cfg.train.init}")
         elif kind == "audiolm":
             from ..audio.train_lm import load_audiolm_config
             cfg = load_audiolm_config(str(path))

@@ -166,6 +166,7 @@ aksharallm/
 │   │   ├── delay.py          the shift that turns 8 codebooks into one stream
 │   │   ├── lm.py             the SAME Transformer, 8 embeddings in and 8 heads out
 │   │   ├── speech.py         TTS and ASR: one model, one flag apart; `speak` and the stop head
+│   │   ├── content.py        a content codebook: codebook 0 taught by our own recogniser
 │   │   └── transfer.py       does the codec carry voices it never heard? (paired, per clip)
 │   ├── asr/              speech recognition, for dictation — see docs/23
 │   │   ├── ctc.py            CTC loss (alpha-beta, from scratch) and greedy decoding
