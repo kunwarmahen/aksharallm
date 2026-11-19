@@ -588,7 +588,7 @@ because the decoder cannot render those voices anyway. A codebook-only fix is ru
 **So the codec has to be retrained on many voices — encoder and decoder, not only the
 codebooks — before the audio LM is.**
 
-### The many-voices codec: `codec-many` (built 2026-11-19, not run yet)
+### The many-voices codec: `codec-many` (built 2026-11-19, training from 2026-11-19)
 
 `configs/codec-many.yaml` is `codec-lj`'s architecture exactly, with two changes:
 
@@ -629,7 +629,7 @@ starting gap in the trainer's own terms: val **2.29 on LJ against 3.77 and 5.26*
 LibriSpeech tails. It also shows codebook usage at 18–24% on the new mix against codec-lj's
 61–70% on LJ, so the dead-entry restarts will have work to do early.
 
-### A content codebook: `codec-many-content` (built 2026-11-19, not run yet)
+### A content codebook: `codec-many-content` (built 2026-11-19, queued after `codec-many`)
 
 Codebook 0 of today's codec carries whatever cuts the reconstruction error most, so it holds
 the words and the voice together. A TTS over those codes has to guess the voice from text,
@@ -670,7 +670,7 @@ recogniser's forward pass is a larger share; the guess is 30–50% slower, to be
 decide before either runs:** train one, or both as a controlled pair. Both is about 2 × 2.7
 GPU hours plus the teacher's cost.
 
-### Does it still sound like that person? A speaker model (built 2026-11-19, not trained yet)
+### Does it still sound like that person? A speaker model (built and training 2026-11-19)
 
 Neither MCD nor WER can see voice identity. A codec could turn every speaker into one voice
 and still score well on both. So `audio/speaker.py` is a speaker embedding, from scratch: it
@@ -710,7 +710,7 @@ what "the same voice" scores; the other is two different speakers. A reconstruct
 first kept the voice; one near the second did not.
 
 ```bash
-scripts/audio.sh speaker-libri                                  # ~20k steps; not run yet
+scripts/audio.sh speaker-libri                                  # ~20k steps, ~16 min on a 3090
 python -m aksharallm.audio speaker-eval checkpoints/speaker-libri/ckpt_best.pt
 python -m aksharallm.audio codec-transfer checkpoints/codec-lj/ckpt_best.pt --cpu \
     --speaker checkpoints/speaker-libri/ckpt_best.pt
@@ -796,7 +796,7 @@ are that chapter's model, unchanged, over different integers.
 | 11 | [`audio/text.py`](../aksharallm/audio/text.py) · [`audio/speech.py`](../aksharallm/audio/speech.py) | why character level; then `utterance_loss`, where TTS and ASR are one flag apart and each row is laid out the way `speak`/`transcribe` lay it out; then `tts_ladder`, the three-row score |
 | 11b | [`audio/content.py`](../aksharallm/audio/content.py) | `teacher_states` (the recogniser's `encode(hidden=True)`, resampled to 50 frames/s), then `content_loss`. `ResidualVQ.forward(first=True)` is where codebook 0's own vector comes from |
 | 12 | [`audio/transfer.py`](../aksharallm/audio/transfer.py) | `measure_corpus`, then `paired`: every clip is read against its own original, so "the codec hurts these voices" is never confused with "these sentences are harder". Then `voice_columns`, the identity score and its two references |
-| 12b | [`audio/speaker.py`](../aksharallm/audio/speaker.py) · [`audio/train_speaker.py`](../aksharallm/audio/train_speaker.py) | `SpeakerEncoder.forward` (mean + std pooling), `AMSoftmax`'s margin, `SpeakerCorpus`'s per-speaker hold-out, then `eer`. The trainer chooses its best checkpoint on *unseen* speakers |
+| 12b | [`audio/speaker.py`](../aksharallm/audio/speaker.py) · [`audio/train_speaker.py`](../aksharallm/audio/train_speaker.py) | `SpeakerEncoder.forward` (mean + std pooling), `AMSoftmax`'s margin, `SpeakerCorpus`'s per-speaker hold-out, then `eer`. The trainer chooses its best checkpoint on *unseen* speakers. Break `eer` on purpose in [lesson 24](lessons/24-speaker.md) |
 | 13 | [`aksharallm/audio/__main__.py`](../aksharallm/audio/__main__.py) · [`portal/audio.py`](../aksharallm/portal/audio.py) | the two front ends, over one set of functions |
 
 What pins it: [`tests/test_audio.py`](../tests/test_audio.py) and
