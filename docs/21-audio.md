@@ -569,7 +569,24 @@ against its own original, never against the other row. Listen:
 `data/asr/test-clean` in the Audio tab's ladder. The tab's **Does the codec carry other
 voices?** panel shows this report.
 
-**So the codec has to be retrained on many voices before the audio LM is.**
+**Which part fails: the codebooks, or the encoder and decoder?** If only the codebooks were
+missing the new voices, re-fitting them would be nearly free (k-means, no GPU). So the same
+clips were rebuilt four ways (32 LJ held-out, 40 LibriSpeech speakers, one clip each):
+
+| | MCD own voice | MCD new voices | rounding error, new voices | WER new voices (orig 9.2%) | per clip vs original, new voices |
+|---|---|---|---|---|---|
+| **no rounding** (encoder → decoder directly) | 2.29 | **9.49** | – | 17.8% | 18 worse / 4 better (p 0.004) |
+| the codec as it is (8 books) | 2.51 | 9.20 | 12.8% | 15.0% | 19 / 5 (p 0.007) |
+| codebooks re-fitted on LibriSpeech train-clean-100 + LJ | 2.60 | 9.47 | 7.6% | 17.5% | 21 / 3 (p 0.0003) |
+
+Skipping the rounding entirely is **no better**. The continuous latent, decoded directly, is
+already 9.5 dB from a new voice, so the loss happens in the encoder and decoder, before any
+codebook is involved. The codebooks *do* fit new voices worse (12.8% of the latent's energy
+lost in rounding against 4.7% for LJ), and re-fitting them halves that, but nothing improves,
+because the decoder cannot render those voices anyway. A codebook-only fix is ruled out.
+
+**So the codec has to be retrained on many voices — encoder and decoder, not only the
+codebooks — before the audio LM is.**
 
 ### The corpus that makes this measurable
 
