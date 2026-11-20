@@ -215,7 +215,10 @@ loader was seeded (gotcha 16), so its batches cannot be reproduced.
   **1.4636**, 0.012 below AdamW's *final* 1.4752.
 - **One seed, one size.** A 0.03 gap between two single runs is a direction. The
   distillation pair (docs/24) is the warning: a lead at 13.8M did not survive at 100M. The
-  test that would settle it is the same pair at the ~100M student size.
+  test that would settle it is the same pair at the ~100M student size: `small-student-muon`
+  (`configs/small-student-muon.yaml`, `small-student` plus `optim.name: muon`), whose control
+  `small-student` already trained (val 3.371 at 2,000 steps). Queued 2026-11-19 in
+  `logs/queue/many.sh`, ~2 h.
 
 The 40-step CPU smoke before it (batch 4) showed the same step-0 loss for both and val 4.99
 against 5.40, which only showed Muon was wired in.

@@ -75,6 +75,10 @@ class AudioLMConfig:
     #: has ended (codebook 0, which the delay pattern finishes first, has no frame left).
     #: Without it `speak` must be told how many frames to make.
     predict_stop: bool = False
+    #: Multi-speaker TTS: the size of a speaker embedding (speaker-libri's is 192). > 0 adds
+    #: one position in FRONT of the text, a projection of a reference clip's embedding, so the
+    #: row is `[speaker][text][BOS + audio]`. 0 = one voice, as audiolm-lj.
+    speaker_dim: int = 0
     model: ModelConfig = field(default_factory=ModelConfig)
 
     @property
@@ -100,12 +104,13 @@ class AudioLM(nn.Module):
         # The cost is 2 x d_model dead parameters, which at d_model 512 is one kilobyte.
         body_cfg.vocab_size = 1
         body_cfg.tie_embeddings = False
-        need = cfg.audio_positions + cfg.max_text
+        spk = 1 if cfg.speaker_dim else 0
+        need = cfg.audio_positions + cfg.max_text + spk
         if body_cfg.max_seq_len < need:
             raise ValueError(
                 f"model.max_seq_len={body_cfg.max_seq_len} cannot hold {cfg.max_frames} frames "
-                f"+ {cfg.n_codebooks - 1} of delay + 1 BOS + {cfg.max_text} of text = {need} "
-                "positions"
+                f"+ {cfg.n_codebooks - 1} of delay + 1 BOS + {cfg.max_text} of text"
+                + (" + 1 speaker" if spk else "") + f" = {need} positions"
             )
         self.body = Transformer(body_cfg)
 
@@ -117,6 +122,7 @@ class AudioLM(nn.Module):
             nn.Linear(d, cfg.codebook_size, bias=False) for _ in range(cfg.n_codebooks)
         )
         self.stop_head = nn.Linear(d, 1) if cfg.predict_stop else None
+        self.spk_proj = nn.Linear(cfg.speaker_dim, d) if cfg.speaker_dim else None
         self.text_emb = self.text_head = None
         if cfg.text_vocab_size:
             self.text_emb = nn.Embedding(cfg.text_vocab_size, d)
@@ -133,6 +139,13 @@ class AudioLM(nn.Module):
     def embed_audio(self, delayed: torch.Tensor) -> torch.Tensor:
         """Delayed codes `(B, N, S)` -> `(B, S, d_model)`, by summing the N tables."""
         return sum(emb(delayed[:, k]) for k, emb in enumerate(self.embeds))
+
+    def embed_speaker(self, emb: torch.Tensor) -> torch.Tensor:
+        """Speaker embeddings `(B, speaker_dim)` -> one position each, `(B, 1, d_model)`."""
+        if self.spk_proj is None:
+            raise ValueError("this audio LM has no speaker input (speaker_dim = 0)")
+        w = self.spk_proj.weight
+        return self.spk_proj(emb.to(device=w.device, dtype=w.dtype)).unsqueeze(1)
 
     def embed_text(self, text: torch.Tensor) -> torch.Tensor:
         if self.text_emb is None:

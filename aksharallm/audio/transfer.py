@@ -36,17 +36,11 @@ from typing import Callable
 import numpy as np
 import torch
 
-from .dataset import Manifest
+from .dataset import Manifest, speaker_of  # noqa: F401  (speaker_of: re-exported)
 from .features import MelConfig
 from .measure import mcd
 from .speech import plain_words
 from .text import character_error_rate, load_transcripts, word_error_rate
-
-
-def speaker_of(name: str, corpus_speaker: str) -> str:
-    """LibriSpeech names are `<speaker>-<chapter>-<utt>`; anything else is one speaker."""
-    stem = name.rsplit(".", 1)[0].split("-")
-    return stem[0] if len(stem) == 3 and all(p.isdigit() for p in stem) else corpus_speaker
 
 
 def pick_clips(corpus: str | Path, *, per_speaker: int | None = None, last: int | None = None,

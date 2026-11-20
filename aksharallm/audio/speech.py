@@ -65,7 +65,8 @@ def pad_text(batch: list[list[int]], device="cpu") -> tuple[torch.Tensor, torch.
 
 
 def utterance_loss(model: AudioLM, clips: list[torch.Tensor], texts: list[list[int]],
-                   text_first: bool = True, with_stop: bool = True) -> torch.Tensor:
+                   text_first: bool = True, with_stop: bool = True,
+                   speaker: torch.Tensor | None = None) -> torch.Tensor:
     """The loss for a batch of whole utterances of *different* lengths. TTS or ASR.
 
     `clips[i]` is undelayed codes `(N, T_i)`; `texts[i]` is that clip's character ids.
@@ -103,6 +104,13 @@ def utterance_loss(model: AudioLM, clips: list[torch.Tensor], texts: list[list[i
     tid, ttgt = pad_text(texts, dev)
     t_len = [len(t) for t in texts]
     audio_x, text_x = model.embed_audio(d), model.embed_text(tid)
+    if model.spk_proj is not None and text_first:
+        # Multi-speaker TTS: `[speaker][text][BOS + audio]`, as `speak` lays it out. The
+        # speaker position is one more "text" position; its loss is never taken.
+        if speaker is None:
+            raise ValueError("a multi-speaker TTS model needs a speaker embedding per row")
+        text_x = torch.cat([model.embed_speaker(speaker).to(text_x.dtype), text_x], dim=1)
+        t_len = [t + 1 for t in t_len]
 
     total = [a + t for a, t in zip(a_len, t_len)]
     x = audio_x.new_zeros((b, max(total), audio_x.shape[-1]))
@@ -192,6 +200,7 @@ def speak(
     device: str = "cpu",
     generator: torch.Generator | None = None,
     frames_per_char: float | None = None,
+    speaker: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """TTS. Text ids in, undelayed codes `(1, N, T)` out — feed them to `codec.decode`.
 
@@ -217,10 +226,18 @@ def speak(
         t_frames = max(1, min(int(t_frames), cfg.max_frames))
     text = torch.tensor([text_ids], dtype=torch.long, device=device)
     seq = torch.full((1, n, 1), model.bos_id, dtype=torch.long, device=device)
+    prefix = None
+    if model.spk_proj is not None:
+        if speaker is None:
+            raise ValueError("a multi-speaker TTS model needs `speaker`: a reference clip's "
+                             "speaker-libri embedding")
+        prefix = model.embed_speaker(speaker.reshape(1, -1))
 
     s = 0
     while s < (t_frames if t_frames is not None else cfg.max_frames) + n - 1:
         text_x, audio_x = model.embed_text(text), model.embed_audio(seq)
+        if prefix is not None:
+            text_x = torch.cat([prefix.to(text_x.dtype), text_x], dim=1)
         hidden, _ = model.body(None, inputs_embeds=torch.cat([text_x, audio_x], dim=1),
                                return_hidden=True)
         last = hidden[:, -1]
@@ -355,7 +372,7 @@ def load_tts(path, device: str = "cpu"):
 @torch.no_grad()
 def tts_ladder(model, tok, codec, utterances, originals, transcribe_fn, *, temperature=0.8,
                seed=0, device="cpu", keep=None, duration="real",
-               frames_per_char=None) -> dict:
+               frames_per_char=None, speakers=None) -> dict:
     """The same sentences three ways, judged by one independent recogniser.
 
         original   the recording itself            -> the judge's own error on this voice
@@ -377,7 +394,8 @@ def tts_ladder(model, tok, codec, utterances, originals, transcribe_fn, *, tempe
         recon = codec.decode(codes.unsqueeze(0).to(device))[0].float().cpu().numpy()
         spoken = speak(model, ids, codes.shape[-1] if duration == "real" else None,
                        temperature=temperature, device=device, generator=gen,
-                       frames_per_char=frames_per_char)
+                       frames_per_char=frames_per_char,
+                       speaker=None if speakers is None else speakers[j])
         lengths.append((codes.shape[-1], spoken.shape[-1]))
         tts = codec.decode(spoken.to(device))[0].float().cpu().numpy()
         for name, w in (("original", orig), ("codec", recon), ("tts", tts)):

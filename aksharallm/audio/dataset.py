@@ -424,9 +424,12 @@ class UtteranceDataset:
 
     def __init__(self, codes_dir: str | Path, transcripts: dict[str, str], tokenizer, *,
                  n_codebooks: int, max_frames: int, max_text: int, split: str = "train",
-                 val_clips: int = 16, seed: int | None = None):
+                 val_clips: int = 16, seed: int | None = None, speakers: bool = False):
         self.base = CodeDataset(codes_dir, 1, "cpu", n_codebooks=n_codebooks, seed=seed,
                                 split=split, val_clips=val_clips)
+        self.speaker_emb = None
+        if speakers:
+            self._load_speakers(Path(codes_dir), val_clips)
         names, off = self.base.manifest.names, self.base.manifest.offsets
         self.items, self.dropped = [], {"no_transcript": 0, "too_long_audio": 0,
                                         "too_long_text": 0}
@@ -446,6 +449,35 @@ class UtteranceDataset:
             raise ValueError(f"no {split} utterance fits {max_frames} frames / {max_text} ids")
         self.rng = np.random.default_rng(seed)
 
+    def _load_speakers(self, d: Path, val_clips: int) -> None:
+        """`speakers.json` + `speaker_emb.npy`, from `encode_many`. A row's reference is a
+        DIFFERENT clip by the same speaker, drawn from the training clips, so the model learns
+        the voice from a reference and not this clip's own words or recording."""
+        names = self.base.manifest.names
+        n = len(names)
+        emb_path = d / "speaker_emb.npy"
+        if not emb_path.is_file():
+            raise FileNotFoundError(f"{emb_path} missing: encode with `encode-many --speaker`")
+        self.speaker_emb = np.load(emb_path)
+        if len(self.speaker_emb) != n:
+            raise ValueError(f"{emb_path} has {len(self.speaker_emb)} rows for {n} clips")
+        who = json.loads((d / "speakers.json").read_text())
+        self.speaker = [who[Path(x).name] for x in names]
+        n_train = n - min(val_clips, max(1, n // 10))     # CodeDataset's split rule
+        self.pool: dict[str, list[int]] = {}
+        for i in range(n_train):
+            self.pool.setdefault(self.speaker[i], []).append(i)
+
+    def reference(self, j: int, rng: np.random.Generator | None = None) -> torch.Tensor:
+        """A speaker embedding for item `j`: another training clip by the same speaker."""
+        i = self.items[j][0]
+        pool = self.pool.get(self.speaker[i], [i])
+        rng = rng or self.rng
+        r = int(pool[rng.integers(len(pool))])
+        if r == i and len(pool) > 1:
+            r = int(pool[(pool.index(i) + 1) % len(pool)])
+        return torch.from_numpy(self.speaker_emb[r].astype(np.float32))
+
     def __len__(self) -> int:
         return len(self.items)
 
@@ -461,8 +493,15 @@ class UtteranceDataset:
 
     def batch(self, batch_size: int) -> tuple[list[torch.Tensor], list[list[int]]]:
         picks = self.rng.choice(len(self.items), size=batch_size)
+        self.last_picks = picks
         pairs = [self.get(int(j)) for j in picks]
         return [c for c, _ in pairs], [t for _, t in pairs]
+
+    def speaker_batch(self) -> torch.Tensor | None:
+        """`(B, D)` references for the rows of the last `batch`; None for a one-voice set."""
+        if self.speaker_emb is None:
+            return None
+        return torch.stack([self.reference(int(j)) for j in self.last_picks])
 
 
 def normalise_text(text: str) -> str:
@@ -618,3 +657,120 @@ def find_wavs(root: str | Path) -> list[Path]:
     and no two val numbers would be comparable.
     """
     return sorted(Path(root).rglob("*.wav"))
+
+
+def speaker_of(name: str, corpus_speaker: str) -> str:
+    """LibriSpeech names are `<speaker>-<chapter>-<utt>`; anything else is one speaker,
+    `corpus_speaker` (`encode_many` uses `LJ` for LJSpeech)."""
+    stem = Path(name).name.rsplit(".", 1)[0].split("-")
+    return stem[0] if len(stem) == 3 and all(p.isdigit() for p in stem) else corpus_speaker
+
+
+def encode_many(codec, corpora: list[str | Path], out_dir: str | Path, *, speaker_model=None,
+                seed: int = 0, max_batch: int = 32, max_batch_s: float = 240.0,
+                progress=print) -> Manifest:
+    """Encode several packed corpora into ONE codes directory, for a multi-speaker audio LM.
+
+    Writes, beside `codes.bin` + `manifest.json` (the layout `CodeDataset` reads):
+
+    * `transcripts.json` -- every corpus's transcripts merged, keyed by clip file name (the
+      names are unique across LJSpeech and LibriSpeech, and a clash is refused);
+    * `speakers.json` -- `{clip name: speaker}`, from `speaker_of` (LJSpeech is `LJ`);
+    * `speaker_emb.npy` -- `(n_clips, D)` float16, one `speaker-libri` embedding per clip,
+      in manifest order, when a speaker model is given. Computed here because the audio is
+      already being read; a second pass over 488 hours would cost as much again.
+
+    **The clips are written in a shuffled order** (fixed `seed`). Every audio run holds out
+    the *last* `val_clips` of the manifest, and the corpora are sorted by speaker, so in
+    corpus order the validation set would be one or two LibriSpeech readers. Shuffled, it is
+    a sample of the whole mix, LJ included.
+    """
+    from .text import load_transcripts
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    device = next(codec.parameters()).device
+    n_books, hop = codec.cfg.n_codebooks, codec.cfg.hop
+
+    clips, transcripts, who = [], {}, {}
+    for c in corpora:
+        c = Path(c)
+        man = Manifest.load(c / "manifest.json")
+        if man.sample_rate != codec.cfg.sample_rate:
+            raise ValueError(f"{c} is {man.sample_rate} Hz and the codec {codec.cfg.sample_rate} Hz")
+        tr = load_transcripts(c)
+        clash = set(tr) & set(transcripts)
+        if clash:
+            raise ValueError(f"{c}: {len(clash)} clip names already used by another corpus")
+        transcripts.update(tr)
+        mm = np.memmap(c / "audio.bin", dtype="<i2", mode="r")
+        clips += [(mm, man.offsets[i], man.offsets[i + 1], man.names[i]) for i in range(man.n_clips)]
+        one = "LJ" if c.name == "lj" else c.name
+        who.update({Path(x).name: speaker_of(x, one) for x in man.names})
+    order = np.random.default_rng(seed).permutation(len(clips))
+
+    # Encoded in BATCHES of similar length (one clip at a time left the card 60% idle: 56 min
+    # for 488 h), then written in the shuffled order. Zero-padding a clip changes only its
+    # last two frames' codes (the codec's receptive field reaching past the end; measured on
+    # codec-many, the same two frames whatever the padding), which is trailing silence.
+    # The speaker model takes true lengths and masks, so its embeddings are exact.
+    lengths = np.array([b - a for _, a, b, _ in clips])
+    by_len = np.argsort(lengths, kind="stable")
+    codes_of, emb_of = {}, {}
+    was = codec.training
+    codec.eval()
+    t0, done = time.time(), 0
+    with torch.no_grad():
+        i = 0
+        while i < len(by_len):
+            # as many clips as fit in max_batch_s seconds of padded audio
+            longest = lengths[by_len[min(i + max_batch - 1, len(by_len) - 1)]]
+            n = max(1, min(max_batch, int(max_batch_s * codec.cfg.sample_rate // max(1, longest))))
+            idx = by_len[i : i + n]
+            longest = int(lengths[idx].max())
+            wave = torch.zeros(len(idx), longest)
+            for r, j in enumerate(idx):
+                mm, a, b, _ = clips[j]
+                wave[r, : b - a] = torch.from_numpy(mm[a:b].astype(np.float32) / 32768.0)
+            wave = wave.to(device)
+            codes = codec.encode(wave).cpu().numpy().astype("<i2")
+            for r, j in enumerate(idx):
+                frames = -(-int(lengths[j]) // hop)           # what one-at-a-time would give
+                codes_of[int(j)] = codes[r, :, :frames]
+            if speaker_model is not None:
+                e = speaker_model(wave, torch.as_tensor(lengths[idx], device=device))
+                for r, j in enumerate(idx):
+                    emb_of[int(j)] = e[r].float().cpu().numpy().astype(np.float16)
+            i += n
+            if progress and i // 4000 > done:
+                done = i // 4000
+                rate = i / (time.time() - t0)
+                progress(f"  {i}/{len(by_len)} clips, eta {(len(by_len) - i) / rate / 60:.0f} min")
+    codec.train(was)
+
+    offsets, names, embs, total = [0], [], [], 0
+    with open(out_dir / "codes.bin", "wb") as f:
+        for j in order:
+            c = codes_of.pop(int(j))
+            f.write(c.tobytes())
+            total += c.shape[1]
+            offsets.append(total)
+            names.append(clips[j][3])
+            if speaker_model is not None:
+                embs.append(emb_of.pop(int(j)))
+
+    man = Manifest(
+        sample_rate=codec.cfg.sample_rate, offsets=offsets, names=names,
+        sources=[{"n_codebooks": n_books, "hop": hop, "codebook_size": codec.cfg.codebook_size,
+                  "corpora": [str(c) for c in corpora], "seed": seed}],
+        seconds=total * hop / codec.cfg.sample_rate, built=time.strftime("%Y-%m-%d %H:%M:%S"),
+    )
+    (out_dir / "transcripts.json").write_text(json.dumps({n: transcripts[n] for n in names if n in transcripts}))
+    (out_dir / "speakers.json").write_text(json.dumps({n: who[Path(n).name] for n in names}))
+    if embs:
+        np.save(out_dir / "speaker_emb.npy", np.stack(embs))
+    man.save(out_dir / "manifest.json")   # last: a manifest means the directory is complete
+    if progress:
+        progress(f"{len(names)} clips, {man.seconds / 3600:.2f} h, "
+                 f"{len(set(who.values()))} speakers -> {out_dir}")
+    return man

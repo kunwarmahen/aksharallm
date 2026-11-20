@@ -60,6 +60,10 @@ class AudioLMDataConfig:
     #: Where the transcripts are found for tts/asr (`text.load_transcripts`): the packed
     #: corpus the codes were made from. Empty = the codes directory.
     corpus: str = ""
+    #: Multi-speaker TTS: the speaker model that made the codes directory's
+    #: `speaker_emb.npy` (`encode-many --speaker`). Set = condition on a reference clip's
+    #: embedding (`audiolm.speaker_dim` is filled in from the file); `speak --voice` uses it.
+    speaker_model: str = ""
 
 
 @dataclass
@@ -101,7 +105,8 @@ def evaluate(model: AudioLM, ds, pad_id: int, batch_size: int, batches: int,
             _, loss = model(inputs, targets=targets)
         else:
             clips, texts = ds.batch(batch_size)
-            loss = utterance_loss(model, clips, texts, text_first=task == "tts", with_stop=False)
+            loss = utterance_loss(model, clips, texts, text_first=task == "tts", with_stop=False,
+                                  speaker=ds.speaker_batch())
         total += float(loss)
     model.train(was)
     return total / max(batches, 1)
@@ -160,11 +165,16 @@ def main(argv=None) -> int:
                else CharTokenizer.from_texts(normalise_text(t) for t in transcripts.values()))
         cfg.audiolm.text_vocab_size = tok.vocab_size
         kw = dict(n_codebooks=cfg.audiolm.n_codebooks, max_frames=cfg.audiolm.max_frames,
-                  max_text=cfg.audiolm.max_text, val_clips=cfg.data.val_clips)
+                  max_text=cfg.audiolm.max_text, val_clips=cfg.data.val_clips,
+                  speakers=bool(cfg.data.speaker_model))
         train_ds = UtteranceDataset(cfg.data.codes, transcripts, tok, split="train",
                                     seed=cfg.train.seed, **kw)
         val_ds = UtteranceDataset(cfg.data.codes, transcripts, tok, split="val",
                                   seed=cfg.train.seed + 1, **kw)
+        if cfg.data.speaker_model:
+            if task != "tts":
+                raise SystemExit("data.speaker_model is for tts only")
+            cfg.audiolm.speaker_dim = int(train_ds.speaker_emb.shape[1])
 
     model = AudioLM(cfg.audiolm).to(device)
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.optim.lr,
@@ -242,6 +252,9 @@ def main(argv=None) -> int:
 
     # Saved with every checkpoint: a text model is unusable without the ids it learned.
     extra = {"task": task, **({"tokenizer": tok.to_dict()} if tok else {})}
+    if task == "tts" and cfg.data.speaker_model:
+        print(f"speakers   {len(train_ds.pool)} voices; each row conditioned on another clip "
+              f"by the same speaker ({cfg.data.speaker_model}, dim {cfg.audiolm.speaker_dim})")
     if task == "tts":
         # How many frames a character takes in this corpus: what `speak` falls back on for
         # a model with no stop head, saved so the checkpoint can speak without the corpus.
@@ -268,7 +281,8 @@ def main(argv=None) -> int:
                 seen += tokens_per_step
             else:
                 clips, texts = train_ds.batch(cfg.train.batch_size)
-                loss = utterance_loss(model, clips, texts, text_first=task == "tts")
+                loss = utterance_loss(model, clips, texts, text_first=task == "tts",
+                                      speaker=train_ds.speaker_batch())
                 seen += sum(int(c.numel()) for c in clips)
 
         opt.zero_grad(set_to_none=True)
@@ -366,8 +380,10 @@ def _sample(model: AudioLM, codec, out_dir: Path, step: int, cfg: AudioLMRunConf
             model.train()
             return path
         # Its own length when it can choose one (`predict_stop`): that is what is on trial.
+        spk = (val_ds.reference(0, np.random.default_rng(0))
+               if getattr(val_ds, "speaker_emb", None) is not None else None)
         codes = speak(model, ids, None if model.stop_head is not None else clip.shape[-1],
-                      device=device)
+                      device=device, speaker=spk)
         (out_dir / "samples").mkdir(parents=True, exist_ok=True)
         (out_dir / "samples" / f"step{step:06d}.txt").write_text(ref + "\n")
     else:

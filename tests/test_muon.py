@@ -129,3 +129,16 @@ def test_the_two_arms_differ_in_exactly_one_key():
     assert a == b
     tiny = yaml.safe_load(open("configs/tiny.yaml"))
     assert a["model"] == tiny["model"] and a["train"]["max_steps"] == tiny["train"]["max_steps"]
+
+
+def test_the_100m_muon_arm_is_its_control_plus_one_key():
+    """small-student (trained 2026-11-02) is the control; only the Muon arm is new."""
+    import yaml
+
+    a = yaml.safe_load(open("configs/small-student.yaml"))
+    b = yaml.safe_load(open("configs/small-student-muon.yaml"))
+    assert "name" not in a["optim"] and b["optim"].pop("name") == "muon"
+    assert b.pop("name") == "small-student-muon" and a.pop("name") == "small-student"
+    assert b["train"].pop("out_dir") == "checkpoints/small-student-muon"
+    a["train"].pop("out_dir")
+    assert a == b

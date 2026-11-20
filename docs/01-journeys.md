@@ -555,7 +555,9 @@ The expensive routes. Each one is a real research direction rather than a switch
   step. Both are in the portal's run picker with Start on the dashboard, and the trainer's
   header line `optimizer` says which one ran ([doc 5](05-pretraining.md)). **Run
   2026-11-19:** val 1.4418 vs 1.4752 at 8,000 steps, and still ahead at matched wall clock
-  (Muon's step is 23% slower). One seed at 13.8M, so a direction, not a law.
+  (Muon's step is 23% slower). One seed at 13.8M, so a direction, not a law. At ~100M:
+  `scripts/experiment.sh small-student-muon` against `small-student`'s val 3.371 (queued
+  2026-11-19).
 - **Scale up** — a bigger model on more tokens. The honest answer to most quality problems,
   and the one that costs the most.
 
@@ -614,6 +616,10 @@ python -m aksharallm.audio codec-transfer checkpoints/codec-lj/ckpt_best.pt --cp
 scripts/audio.sh codec-many         # the codec again on LJ + LibriSpeech 460 h, from codec-lj (run 2026-11-19: other voices 9.1 → 3.7 dB)
 scripts/audio.sh codec-many-content # the same, with codebook 0 taught by our recogniser (run 2026-11-19: no better than codec-many)
 scripts/audio.sh speaker-libri      # a speaker model: does a voice still sound like itself? (trained 2026-11-19, ~16 min)
+python -m aksharallm.audio encode-many checkpoints/codec-many/ckpt_best.pt --corpus data/audio/lj --corpus data/asr/train-clean-100 --corpus data/asr/train-clean-360 --out data/audio/many-codes --speaker checkpoints/speaker-libri/ckpt_best.pt
+scripts/audio.sh audiolm-many       # multi-speaker TTS on codec-many, voice from a reference clip (queued 2026-11-19)
+python -m aksharallm.audio speak checkpoints/audiolm-many/ckpt_best.pt "Any sentence." --voice logs/audio/speak/voice-1089-unseen.wav
+python -m aksharallm.audio codec-transfer checkpoints/codec-many-content/ckpt_best.pt --judged 1,4,8   # does codebook 0 alone carry the words?
 python -m aksharallm.audio speaker-eval checkpoints/speaker-libri/ckpt_best.pt   # its EER on unseen speakers (0.42%)
 python -m aksharallm.vision caption vision-shapes  # caption held-out images and score them
 scripts/audio.sh asr-synth                         # a recogniser, no download, minutes

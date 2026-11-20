@@ -768,8 +768,67 @@ What it says:
   trained on clean recordings and reads codec artefacts as a channel change. So compare
   voice cosines between codecs, which works, and do not read 0.45 as "half the voice is gone".
 
-**For the TTS:** use `codec-many`. It is the gate the audio LM was waiting for, and the
-content variant offers nothing to justify its cost until a codebook-0 probe says otherwise.
+**For the TTS:** use `codec-many` (it is: `audiolm-many`, below). It is the gate the audio LM
+was waiting for, and the content variant offers nothing to justify its cost until the
+codebook-0 probe says otherwise.
+
+### Many voices, one TTS: `audiolm-many` (built 2026-11-19, queued `logs/queue/many.sh`)
+
+`audiolm-lj-stop` speaks in one voice because it only ever heard one. With `codec-many`
+carrying other voices, the same audio LM can be trained on all of them, if it is told *whose*
+voice each sentence is in. Otherwise it would have to guess the voice from the text, which
+says nothing about it, and would learn an average of 1,170 speakers.
+
+```mermaid
+flowchart LR
+  R["another clip by<br/>the same speaker"] --> S["speaker-libri<br/>embedding (192)"]
+  S --> P["Linear 192→512<br/>one position"]
+  P --> ROW["[speaker][text][BOS + delayed audio]"]
+  T["characters"] --> ROW
+  A["codec-many codes"] --> ROW
+  ROW --> LM["the same AudioLM<br/>+ stop head"]
+```
+
+- **The voice comes from a reference clip, not a speaker id.** Each training row starts with a
+  projection of the `speaker-libri` embedding of a *different* clip by the same speaker
+  (`UtteranceDataset.reference`, never the clip itself). Using the clip's own embedding would
+  hand the model that recording's room and words as well as its voice. Because the input is
+  an embedding rather than an index, `speak --voice any.wav` can ask for a speaker it has
+  never heard; whether that works is one of the things the report measures.
+- **One codes directory over three corpora** (`encode-many`): LJSpeech plus LibriSpeech
+  train-clean-100 and -360, 145,653 clips, with `transcripts.json`, `speakers.json` and one
+  speaker embedding per clip (`speaker_emb.npy`) beside the codes. The clips are written in a
+  **shuffled** order: every audio run holds out the manifest's *last* clips, and LibriSpeech
+  is sorted by speaker, so in corpus order the held-out set would be one or two readers.
+- **Encoded in batches of similar length** (10× faster than one clip at a time, which left
+  the card 60% idle). Zero-padding changes only the last two frames of a clip's codes, the
+  same two whatever the padding (measured on `codec-many`), which is trailing silence.
+  `tests/test_multispeaker.py` checks every clip matches encoding it alone bar its edge.
+- **Longer sentences.** LibriSpeech's run to 35 s. `max_frames: 768` (15.4 s) keeps 82% of
+  clips, 372 hours; the rest are dropped, never cut. 30k steps, which on 16× LJ's data
+  should stay clear of the overfitting the one-voice run hit at 22k.
+
+```bash
+python -m aksharallm.audio encode-many checkpoints/codec-many/ckpt_best.pt \
+    --corpus data/audio/lj --corpus data/asr/train-clean-100 --corpus data/asr/train-clean-360 \
+    --out data/audio/many-codes --speaker checkpoints/speaker-libri/ckpt_best.pt
+scripts/audio.sh audiolm-many
+python -m aksharallm.audio tts-report checkpoints/audiolm-many/ckpt_best.pt --duration own
+python -m aksharallm.audio speak checkpoints/audiolm-many/ckpt_best.pt "Hello." --voice me.wav
+python -m aksharallm.audio speak checkpoints/audiolm-many/ckpt_best.pt "Hello." --speaker-id 103
+```
+
+**What the report adds for a multi-speaker model** is a voice check: the speaker model's
+cosine between each TTS sentence and its own speaker's original recording, against the
+original of a sentence by a *different* speaker. If the conditioning works, "own" beats
+"other" on most sentences, read as a paired count with a sign test. The codec row (codec vs
+original) is the ceiling the codes allow, and the caveat above applies: compare these
+cosines with each other, not with 1.
+
+**Does codebook 0 carry the words?** The content codebook's open question gets its test in
+the same queue: `codec-transfer --judged 1,4,8` has the recogniser transcribe audio decoded
+from codebook 0 *alone*, for `codec-many` and `codec-many-content`. If the content loss did
+its job, the content codec's book-0 WER is clearly lower, paired per clip.
 
 ### The corpus that makes this measurable
 

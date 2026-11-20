@@ -203,6 +203,23 @@ def cmd_encode(args) -> int:
     return 0
 
 
+def cmd_encode_many(args) -> int:
+    """Several packed corpora -> one shuffled codes directory, with speakers (multi-speaker TTS)."""
+    from .codec import load_codec
+    from .dataset import encode_many
+
+    device = "cuda" if torch.cuda.is_available() and not args.cpu else "cpu"
+    codec = load_codec(args.checkpoint, device)
+    spk = None
+    if args.speaker:
+        from .speaker import load_speaker
+        spk = load_speaker(args.speaker, device).eval()
+    import functools
+    encode_many(codec, args.corpus, args.out, speaker_model=spk, seed=args.seed,
+                progress=functools.partial(print, flush=True))
+    return 0
+
+
 def _codec_clips(args, sr: int):
     """Validation clips to measure on: the corpus's held-out split, or the files given."""
     import torch as _t
@@ -256,8 +273,10 @@ def transfer_suffix(args) -> str:
     overwrite the full report the docs and the portal quote (it nearly did, 2026-11-19)."""
     default = (args.home_clips == 64 and args.per_speaker == 3
                and Path(args.home).name == "lj" and Path(args.other).name == "test-clean")
-    return "" if default else (f"-{Path(args.home).name}{args.home_clips}"
-                               f"-{Path(args.other).name}x{args.per_speaker}")
+    judged = getattr(args, "judged", "4,8")
+    tail = "" if judged == "4,8" else "-judged" + judged.replace(",", "-")
+    return tail if default else (f"-{Path(args.home).name}{args.home_clips}"
+                                 f"-{Path(args.other).name}x{args.per_speaker}{tail}")
 
 
 def cmd_codec_transfer(args) -> int:
@@ -297,7 +316,8 @@ def cmd_codec_transfer(args) -> int:
               f"speaker(s) ...", flush=True)
         result[key] = measure_corpus(codec, clips,
                                      lambda ws: asr_transcribe(asr_model, ws, device),
-                                     keep=keep, embed_fn=embed_fn)
+                                     keep=keep, embed_fn=embed_fn,
+                                     judged=tuple(int(x) for x in args.judged.split(",")))
     if args.speaker:
         result["speaker_model"] = str(args.speaker)
     print()
@@ -385,16 +405,35 @@ def cmd_tts_report(args) -> int:
     val = UtteranceDataset(data["codes"], load_transcripts(corpus), tok, split="val",
                            n_codebooks=model.cfg.n_codebooks, max_frames=model.cfg.max_frames,
                            max_text=model.cfg.max_text, val_clips=data["val_clips"])
-    src = Manifest.load(corpus / "manifest.json")
-    samples = np.memmap(corpus / "audio.bin", dtype="<i2", mode="r")
-    by_name = {n: i for i, n in enumerate(src.names)}
+    # The original recordings: the packed corpus, or (a multi-speaker codes directory from
+    # `encode-many`) every corpus it was made from, found by clip name.
+    if (corpus / "audio.bin").is_file():
+        sources = [corpus]
+    else:
+        sources = [Path(c) for c in Manifest.load(Path(data["codes"]) / "manifest.json").sources[0]["corpora"]]
+    where = {}
+    for c in sources:
+        m = Manifest.load(c / "manifest.json")
+        mm = np.memmap(c / "audio.bin", dtype="<i2", mode="r")
+        for i, nm in enumerate(m.names):
+            where[nm] = (mm, m.offsets[i], m.offsets[i + 1])
     names = val.base.manifest.names
     n = min(args.n, len(val))
     utts, origs = [], []
     for j in range(n):
-        i = by_name[names[val.items[j][0]]]
+        mm, a, b = where[names[val.items[j][0]]]
         utts.append(val.get(j))
-        origs.append(samples[src.offsets[i]:src.offsets[i + 1]].astype(np.float32) / 32768.0)
+        origs.append(mm[a:b].astype(np.float32) / 32768.0)
+    speakers = None
+    if model.spk_proj is not None:
+        # Each sentence spoken in its own speaker's voice, from a DIFFERENT clip by them.
+        val = UtteranceDataset(data["codes"], load_transcripts(corpus), tok, split="val",
+                               n_codebooks=model.cfg.n_codebooks, max_frames=model.cfg.max_frames,
+                               max_text=model.cfg.max_text, val_clips=data["val_clips"],
+                               speakers=True)
+        rng = np.random.default_rng(args.seed)
+        speakers = [val.reference(j, rng) for j in range(n)]
+        who = [val.speaker[val.items[j][0]] for j in range(n)]
 
     run = Path(args.checkpoint).parent.name
     out_dir = Path(args.out_dir or f"logs/audio/tts-{run}-{args.duration}")
@@ -403,12 +442,24 @@ def cmd_tts_report(args) -> int:
     print(f"tts         {args.checkpoint} (step {blob.get('step')}), {n} held-out sentences")
     print(f"judge       {args.asr}, greedy\ndevice      {device}\n")
     fpc = blob.get("frames_per_char") or _frames_per_char(blob, tok, model)
+    kept = {}
+
+    def keep(j, kind, w):
+        kept[(j, kind)] = w
+        write_wav(out_dir / f"{j:02d}-{kind}.wav", w, codec.cfg.sample_rate)
+
     rep = tts_ladder(model, tok, codec, utts, origs,
-                     lambda ws: asr_transcribe(asr_model, ws, device),
+                     lambda ws: asr_transcribe(asr_model, [_min_len(w) for w in ws], device),
                      temperature=args.temperature, seed=args.seed, device=device,
-                     keep=lambda j, kind, w: write_wav(out_dir / f"{j:02d}-{kind}.wav", w,
-                                                       codec.cfg.sample_rate),
-                     duration=args.duration, frames_per_char=fpc)
+                     keep=keep, duration=args.duration, frames_per_char=fpc,
+                     speakers=speakers)
+    if speakers is not None:
+        rep["voice"] = _tts_voice(data["speaker_model"], kept, who, n, device)
+        v = rep["voice"]
+        print(f"voice: cosine of the TTS to its own speaker's recording {v['tts_own']:.3f}, "
+              f"to a different speaker's {v['tts_other']:.3f}; paired, own closer in "
+              f"{v['own_closer']}/{v['pairs']} (sign test p {v['p']:.3g}). Reference: two "
+              f"recordings by one speaker {v['same_speaker']:.3f}, codec {v['codec_own']:.3f}")
     print(f"{'row':>9} {'WER':>7} {'CER':>7} {'runaway':>8}")
     for kind, row in rep["rows"].items():
         print(f"{kind:>9} {row['wer'] * 100:>6.1f}% {row['cer'] * 100:>6.1f}% {row['runaway']:>8}")
@@ -422,6 +473,44 @@ def cmd_tts_report(args) -> int:
                                  "judge": args.asr, **rep}, indent=1))
     print(f"wrote {path}")
     return 0
+
+
+def _min_len(w, sr: int = 16_000):
+    """A model that stops after a frame or two (early in training) makes a clip shorter than
+    the judges' convolutions can read, and one such clip would crash the whole report.
+    Padded with silence to 0.25 s for judging only; the length ratio still records it."""
+    return np.pad(w, (0, max(0, sr // 4 - len(w))))
+
+
+def _tts_voice(speaker_ckpt, kept, who, n, device) -> dict:
+    """Does a multi-speaker TTS speak in the RIGHT voice? speaker-libri cosines, paired.
+
+    For each sentence: its TTS output against its own speaker's original recording, and
+    against the original of the next sentence by a DIFFERENT speaker. If conditioning works,
+    own > other on most sentences. The codec row is the ceiling the codes allow."""
+    from math import comb
+
+    from .speaker import embed, load_speaker
+    spk = load_speaker(speaker_ckpt, device)
+    e = {k: v for k, v in zip(kept, embed(spk, [_min_len(w) for w in kept.values()], device))}
+    own, other, codec, wins, pairs = [], [], [], 0, 0
+    for j in range(n):
+        o = next((k for k in list(range(j + 1, n)) + list(range(j)) if who[k] != who[j]), None)
+        t = e[(j, "tts")]
+        own.append(float(t @ e[(j, "original")]))
+        codec.append(float(e[(j, "codec")] @ e[(j, "original")]))
+        if o is not None:
+            other.append(float(t @ e[(o, "original")]))
+            pairs += 1
+            wins += own[-1] > other[-1]
+    k = min(wins, pairs - wins)
+    p = min(1.0, 2 * sum(comb(pairs, i) for i in range(k + 1)) / 2 ** pairs) if pairs else 1.0
+    same = [float(e[(a, "original")] @ e[(b, "original")]) for a in range(n) for b in range(a + 1, n)
+            if who[a] == who[b]]
+    mean = lambda xs: sum(xs) / len(xs) if xs else float("nan")  # noqa: E731
+    return {"tts_own": mean(own), "tts_other": mean(other), "codec_own": mean(codec),
+            "same_speaker": mean(same), "own_closer": wins, "pairs": pairs, "p": p,
+            "per_item": [{"speaker": who[j], "tts_own": own[j]} for j in range(n)]}
 
 
 def _frames_per_char(blob, tok, model) -> float:
@@ -458,9 +547,13 @@ def cmd_speak(args) -> int:
         fpc = blob.get("frames_per_char") or _frames_per_char(blob, tok, model)
         how = f"{fpc:.2f} frames per character (it has no stop head)"
     codec = load_codec(blob["codec"], device)
+    voice = None
+    if model.spk_proj is not None:
+        voice, said = _voice(args, blob, device)
+        print(f"voice       {said}")
     gen = torch.Generator(device=device).manual_seed(args.seed)
     codes = speak(model, ids, args.frames, temperature=args.temperature, device=device,
-                  generator=gen, frames_per_char=fpc)
+                  generator=gen, frames_per_char=fpc, speaker=voice)
     wave = codec.decode(codes.to(device))[0].float().cpu().numpy()
     out = Path(args.out or f"logs/audio/speak/{'-'.join(text.split()[:6]) or 'speech'}.wav")
     write_wav(out, wave, codec.cfg.sample_rate)
@@ -468,6 +561,28 @@ def cmd_speak(args) -> int:
     print(f"spoke       {text!r}\nlength      {codes.shape[-1]} frames = {sec:.1f} s, from {how}")
     print(f"wrote       {out}")
     return 0
+
+
+def _voice(args, blob, device):
+    """The speaker embedding a multi-speaker TTS speaks with: `--voice clip.wav` (anyone's,
+    embedded by the run's speaker model), else the mean of `--speaker-id`'s training clips
+    (default LJ, the voice every earlier TTS here used)."""
+    import json as _json
+    data = blob["config"]["data"]
+    if args.voice:
+        from .speaker import embed, load_speaker
+        spk = load_speaker(data["speaker_model"], device)
+        w = load_audio(args.voice, sample_rate=16_000).samples
+        return embed(spk, [w], device)[0], f"from {args.voice}"
+    d = Path(data["codes"])
+    emb = np.load(d / "speaker_emb.npy").astype(np.float32)
+    who = _json.loads((d / "speakers.json").read_text())
+    names = _json.loads((d / "manifest.json").read_text())["names"]
+    rows = [i for i, nm in enumerate(names) if who[Path(nm).name] == args.speaker_id]
+    if not rows:
+        raise SystemExit(f"no clips by speaker {args.speaker_id!r} in {d}")
+    m = torch.from_numpy(emb[rows].mean(0))
+    return m / m.norm(), f"speaker {args.speaker_id} (mean of {len(rows)} clips)"
 
 
 def cmd_codec_reconstruct(args) -> int:
@@ -592,6 +707,15 @@ def main(argv=None) -> int:
     s.add_argument("--out-dir", default="logs/audio/reconstruct")
     s.set_defaults(fn=cmd_codec_reconstruct)
 
+    s = codec_args(sub.add_parser("encode-many", help="several corpora -> one shuffled codes "
+                                  "directory with speakers + speaker embeddings (multi-speaker TTS)"))
+    s.add_argument("--corpus", action="append", required=True, help="repeat for each corpus")
+    s.add_argument("--out", required=True)
+    s.add_argument("--speaker", default=None, metavar="PT", help="speaker-libri checkpoint: "
+                   "also write one embedding per clip (speaker_emb.npy)")
+    s.add_argument("--seed", type=int, default=0)
+    s.set_defaults(fn=cmd_encode_many)
+
     s = codec_args(sub.add_parser("encode", help="turn a packed corpus into codec tokens"))
     s.add_argument("--corpus", default="data/audio/synth")
     s.add_argument("--out", default="data/audio/synth-codes")
@@ -611,6 +735,8 @@ def main(argv=None) -> int:
     s.add_argument("--per-speaker", type=int, default=3)
     s.add_argument("--asr", default="asr-libri460", help="the recogniser that judges")
     s.add_argument("--keep", type=int, default=6, help="clips per corpus written as WAVs")
+    s.add_argument("--judged", default="4,8", help="codebook counts the recogniser judges; "
+                   "'1,4,8' adds codebook 0 alone, the test of a content codebook (own JSON name)")
     s.add_argument("--out-dir", default=None)
     s.add_argument("--speaker", default=None, metavar="PT",
                    help="a speaker model (train_speaker) -> a voice-identity column")
@@ -641,6 +767,10 @@ def main(argv=None) -> int:
     s.add_argument("checkpoint", help="an audio LM trained with data.task: tts")
     s.add_argument("text")
     s.add_argument("--out", default=None, help="default logs/audio/speak/<first words>.wav")
+    s.add_argument("--voice", default=None, metavar="WAV", help="multi-speaker models: speak "
+                   "in this recording's voice")
+    s.add_argument("--speaker-id", default="LJ", help="multi-speaker models without --voice: "
+                   "a speaker in the training set (LibriSpeech id, or LJ)")
     s.add_argument("--frames", type=int, default=None, help="force a length (50 per second)")
     s.add_argument("--temperature", type=float, default=0.8)
     s.add_argument("--seed", type=int, default=0)

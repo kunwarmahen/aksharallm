@@ -1,0 +1,66 @@
+# Multi-speaker text-to-speech (docs/21 § "Many voices, one TTS"): audiolm-lj-stop, on
+# codec-many's codes of LJSpeech + LibriSpeech 460 h, told WHOSE voice to speak in.
+#
+# What changes from audiolm-lj-stop, and why:
+#   * the codec is codec-many (it carries other voices: MCD@8 3.73 vs codec-lj's 9.12);
+#   * the codes are one shuffled directory over three corpora (`encode-many`), so the
+#     held-out sentences are a sample of every voice, LJ included;
+#   * data.speaker_model: each row starts with a projection of a speaker-libri embedding of
+#     ANOTHER clip by the same speaker, `[speaker][text][BOS + audio]`, so the voice comes
+#     from a reference recording and `speak --voice any.wav` can ask for anyone's;
+#   * max_frames 768 (15.4 s): LibriSpeech sentences are longer than LJ's. 82% of clips,
+#     372 h, fit; the rest are dropped, never cut;
+#   * 30k steps: ~16x LJ's data, so the one-voice run's overfitting (val rose after 22k on
+#     24 h) should not appear inside this budget.
+#
+# Prerequisites:
+#     python -m aksharallm.audio encode-many checkpoints/codec-many/ckpt_best.pt \
+#         --corpus data/audio/lj --corpus data/asr/train-clean-100 --corpus data/asr/train-clean-360 \
+#         --out data/audio/many-codes --speaker checkpoints/speaker-libri/ckpt_best.pt
+#     scripts/audio.sh audiolm-many
+#     python -m aksharallm.audio tts-report checkpoints/audiolm-many/ckpt_best.pt --duration own
+#     python -m aksharallm.audio speak checkpoints/audiolm-many/ckpt_best.pt "Hello." --voice me.wav
+#
+# One sequence is up to 1 speaker + 290 text ids + 768 frames + 7 of delay + 1 BOS = 1067.
+name: audiolm-many
+
+audiolm:
+  codebook_size: 1024       # must match codec-many exactly; checked on launch
+  n_codebooks: 8
+  max_frames: 768
+  max_text: 290             # characters, BOS and EOS included (99th percentile 289)
+  predict_stop: true
+  model:
+    d_model: 512
+    n_layers: 12
+    n_heads: 8
+    n_kv_heads: 2
+    max_seq_len: 1088       # >= 1067
+    rope_theta: 10000.0
+    dropout: 0.1
+
+data:
+  task: tts
+  codes: data/audio/many-codes      # holds transcripts.json, speakers.json, speaker_emb.npy
+  codec: checkpoints/codec-many/ckpt_best.pt
+  speaker_model: checkpoints/speaker-libri/ckpt_best.pt
+  val_clips: 200
+
+optim:
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 1000
+  weight_decay: 0.1
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/audiolm-many
+  batch_size: 16
+  max_steps: 30000
+  eval_every: 1000
+  eval_batches: 20
+  sample_every: 5000
+  ckpt_every: 1000
+  log_every: 50
