@@ -96,6 +96,12 @@ class ModelConfig:
     #: learn similar things and one of the pair can stay dense.
     moe_every: int = 1
 
+    #: Hybrid linear attention (docs/04 § "Linear attention"). 0: every block is softmax
+    #: attention, the model as it always was. N > 0: one block in N keeps softmax attention
+    #: (blocks N-1, 2N-1, ...) and the rest use a Gated DeltaNet layer, whose memory is a
+    #: fixed-size matrix per head instead of a KV cache that grows with the context.
+    full_attn_every: int = 0
+
     def __post_init__(self):
         if self.n_kv_heads is None:
             self.n_kv_heads = self.n_heads
@@ -109,6 +115,13 @@ class ModelConfig:
         # stops a `.type` lookup silently reading a dict attribute that does not exist.
         if isinstance(self.rope_scaling, dict):
             self.rope_scaling = RopeScaling(**self.rope_scaling)
+        if self.full_attn_every < 0:
+            raise ValueError(f"full_attn_every must be >= 0, got {self.full_attn_every}")
+        if self.full_attn_every and not self.causal:
+            raise ValueError("full_attn_every: the Gated DeltaNet recurrence reads left to "
+                             "right; it does not apply with causal: false")
+        if self.full_attn_every and self.attn_window is not None:
+            raise ValueError("full_attn_every with attn_window: pick one way to bound memory")
         if self.attn_window is not None and self.attn_window < 1:
             raise ValueError(f"attn_window must be >= 1 or null, got {self.attn_window}")
         if self.attn_sinks < 0:
@@ -182,6 +195,10 @@ class ModelConfig:
     def tag_base(self) -> int:
         """The id of the first class row: the tokenizer's ids come first, the classes last."""
         return self.vocab_size - self.tag_classes
+
+    def linear_layer(self, i: int) -> bool:
+        """Whether block `i` is a Gated DeltaNet layer rather than softmax attention."""
+        return self.full_attn_every > 0 and (i + 1) % self.full_attn_every != 0
 
     def moe_layer(self, i: int) -> bool:
         """Whether layer `i` is a mixture-of-experts block."""

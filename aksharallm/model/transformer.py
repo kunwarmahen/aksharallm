@@ -26,6 +26,7 @@ import torch.nn.functional as F
 
 from ..config import ModelConfig
 from . import flash, rope
+from .deltanet import GatedDeltaNet
 from .moe import MoEFeedForward, moe_stats
 from .rope import RopeScaling
 
@@ -303,7 +304,9 @@ class Block(nn.Module):
     def __init__(self, cfg: ModelConfig, layer_idx: int = 0):
         super().__init__()
         self.attn_norm = RMSNorm(cfg.d_model, cfg.norm_eps)
-        self.attn = Attention(cfg)
+        # Hybrid linear attention swaps the mixer and nothing else (model/deltanet.py). The
+        # name stays `attn` so norms, residuals and checkpoints read the same either way.
+        self.attn = GatedDeltaNet(cfg) if cfg.linear_layer(layer_idx) else Attention(cfg)
         self.ffn_norm = RMSNorm(cfg.d_model, cfg.norm_eps)
         # The ONLY thing a mixture of experts changes about the architecture. Attention,
         # RoPE, the norms and the residual path are untouched, which is why an MoE
