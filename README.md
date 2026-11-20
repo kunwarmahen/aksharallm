@@ -944,7 +944,8 @@ flowchart LR
 ### Future work (recorded 2026-11-19)
 
 Built and run 2026-11-19/20: **Muon** against AdamW, at 13.8M and at ~100M, where it won
-by 3.1% in val and on ARC-Easy and PIQA for 3.5% more time ([doc 5](docs/05-pretraining.md)).
+by 3.1% in val and on ARC-Easy and PIQA for 3.5% more time, and over 2.9× the steps by
+2.9% in val with the benchmarks no different ([doc 5](docs/05-pretraining.md)).
 Also run: **a codec retrained on many voices** (`codec-many`: other voices 9.1 → 3.7 dB MCD);
 a **content codebook** (`codec-many-content`, no measurable gain, closed); a **speaker model**
 (`speaker-libri`, 0.42% EER); and **multi-speaker TTS** (`audiolm-many`), which speaks in
@@ -954,16 +955,22 @@ the voice of a reference clip, closer to its own speaker on 37 of 40 sentences, 
 Not built yet, in the order they depend on each other or by value per GPU hour:
 
 - **Voice cloning from a prompt**: ✅ built 2026-11-20 (`speak --prompt`, `tts-report
-  --prompt`, scored on 40 unseen speakers and on the author's own recordings; queued).
+  --prompt`). Unseen speakers come out closer to their own voice 30 of 40 times from the
+  embedding alone; a prompt adds a little voice (p 0.04) and costs words (p 0.03); 60k steps
+  took seen-speaker WER 57 → 41% ([doc 21](docs/21-audio.md)).
 - **Small full-duplex voice chat**: listen and speak at once, two audio streams and a text
   stream. Every piece exists here; it waits for the multi-speaker codec.
 - **Hybrid linear attention**: ✅ built 2026-11-20 (`model.full_attn_every`, a Gated DeltaNet
-  layer from scratch, [doc 4](docs/04-model.md)); `tiny-hybrid` queued against `tiny-adamw`.
+  layer from scratch, [doc 4](docs/04-model.md)). `tiny-hybrid` val 1.458 vs 1.475 per step,
+  1.8× slower per step, and **no cliff at twice its trained window** where attention's loss
+  goes 1.4 → 5.0.
 - **Turning a trained autoregressive model into a diffusion one** instead of training from
   scratch, measured in tokens per forward pass.
-- **A small model for agents**: tool-use SFT on the 300M, with GRPO graded by the sandbox.
+- **A small model for agents**: tool-use SFT ✅ built and run 2026-11-20 (120/120 on trained
+  kinds, 0/20 on the held-out one, [doc 6](docs/06-posttraining.md)); GRPO with tool calls
+  mid-completion is not built.
 - **A toy world model**: ✅ built 2026-11-20 ([doc 25](docs/25-world-model.md)); `world-sokoban`
-  queued.
+  solved it: 100% exact next frames and 10-step rollouts. A harder world is next.
 
 ---
 

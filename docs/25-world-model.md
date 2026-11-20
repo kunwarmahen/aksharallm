@@ -83,8 +83,28 @@ python -m aksharallm.world play checkpoints/world-sokoban/ckpt_best.pt   # one r
 
 ## Measured
 
-**Not run yet.** Queued 2026-11-20 in `logs/queue/day-1120b.sh`, after the day's audio and
-Muon runs. The result goes here.
+**2026-11-20, 4,000 steps, 6 minutes on the 3090: the toy is solved.**
+
+| | n | exact frame | cells | copying would score |
+|---|---|---|---|---|
+| `blocked` | 1,564 | 100.0% | 100.00% | 100% |
+| `moved` | 2,819 | 100.0% | 100.00% | 0% |
+| `pushed` | 368 | 100.0% | 100.00% | 0% |
+| `stayed` | 249 | 100.0% | 100.00% | 100% |
+| all | 5,000 | **100.0%** | 100.00% | 36.3% |
+
+Rollouts of 10 actions with its own frames fed back: 100% exact at every step, 0 impossible
+frames. Val loss is 0.094 at step 500 and 0.087 at the end. It is not zero because the next *action*
+is the random policy's choice and the first frame of an episode is a random level, and no
+model can predict either.
+
+So the 13.8M shape learned Sokoban's rules exactly, pushes included, on levels it had never
+seen. That is a result about how easy this world is, not about how good the model is: an 8×8
+grid with deterministic rules is a function a small transformer can represent outright. To
+make it a test again, the next steps are a world it cannot solve completely: a bigger grid,
+hidden state (a door opened by a key picked up earlier), or randomness (a box that slips
+some of the time), where exact frames stop being possible and the score has to become
+calibration.
 
 ## The code, in reading order
 

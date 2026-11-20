@@ -226,6 +226,7 @@ loader was seeded (gotcha 16), so its batches cannot be reproduced.
 | `small-student` (AdamW) | **4.211** | 3.646 | 3.451 | 3.3705 | 3.615 | 2.138 | 39.0% | 55.7% | 1h49m |
 | `small-student-muon` | 4.292 | 3.526 | 3.338 | **3.2673** | **3.512** | **2.030** | **43.2%** | **58.0%** | 1h53m |
 | `small-student-long` (AdamW, 2.9× the steps) | | | | 3.0616 | 3.301 | 1.812 | 44.2% | 59.6% | ~5h15m |
+| `small-student-long-muon` (Muon, 2.9× the steps) | 4.293 | 3.531 | 3.355 | **2.9719** | **3.203** | **1.730** | 46.0% | 59.3% | 5h21m |
 
 - **The lead survived the jump to 100M, and grew**: −0.103 (−3.1%) in val, −0.10 on prose and
   −0.11 on Python alike. Behind at step 500 (Muon's early steps are noisier), ahead from
@@ -240,9 +241,15 @@ loader was seeded (gotcha 16), so its batches cannot be reproduced.
   (val 3.2812, which cost 2.9× the compute for its teacher) at 1.04×. More steps still win —
   `small-student-long` at 2.9× the compute is ahead on val — but on the benchmarks the two
   are not distinguishable (ARC 31 / 36, p 0.63; PIQA 54 / 70, p 0.18).
-- Still one seed. What it says is that **Muon is the better default for the next run at this
-  size**; a long-run pair (`small-student-long` with Muon) would say whether the lead holds
-  over 5,800 steps.
+- **Over the long budget the val lead held, and the benchmark lead did not** (2026-11-20,
+  `small-student-long-muon`, 5,800 steps, against `small-student-long`). Behind at step 500
+  again (4.293 vs 4.214), ahead by 0.129 at step 1,000, and the gap then narrowed slowly and
+  steadily, to −0.090 at the end: val **2.9719 vs 3.0616**, prose 3.203 vs 3.301, Python
+  1.730 vs 1.812. Per item, ARC-Easy 42 won / 33 lost (p 0.36) and PIQA 55 / 58 (p 0.85):
+  no difference. Steps were 4% slower (median 3.27 vs 3.14 s).
+- So: **Muon is the better default at this size for loss**, at 2,000 and at 5,800 steps, for
+  about 4% more time. The benchmark win at 2,000 steps did not repeat at 5,800; read that
+  one as unconfirmed. Still one seed per arm.
 
 The 40-step CPU smoke before it (batch 4) showed the same step-0 loss for both and val 4.99
 against 5.40, which only showed Muon was wired in.

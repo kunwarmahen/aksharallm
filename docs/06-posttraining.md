@@ -895,8 +895,33 @@ python -m aksharallm.train.sft --base checkpoints/small-code-py-dense-sft/sft_be
 python -m aksharallm.tools eval checkpoints/small-code-py-tools/sft_best.pt --label after
 ```
 
-**Queued 2026-11-20** (`logs/queue/day-1120c.sh`), with the same score on the starting model
-first. **Not built yet:** GRPO on these problems, with the reward computed after the tool has
+**Measured 2026-11-20.** 140 problems (20 of each kind, seed 99, never in training), greedy.
+SFT: 148 steps, 8.6 minutes, val 0.705.
+
+| kind | before: with tool / direct | after: with tool / direct | after: called the tool |
+|---|---|---|---|
+| multiply | 0 / 0 | **20 / 0** | 20 |
+| sum | 0 / 0 | **20 / 0** | 20 |
+| letters | 2 / 2 | **20 / 0** | 20 |
+| days | 0 / 0 | **20 / 0** | 20 |
+| interest | 0 / 0 | **20 / 0** | 20 |
+| prime | 0 / 0 | **20 / 0** | 20 |
+| **remainder** (held out) | 0 / 0 | **0 / 0** | 20 |
+| all | 2 / 2 | **120 / 0** | 140 |
+
+- **On the five trained kinds it is perfect**: 120 of 120, against 2 for the starting model,
+  which never once wrote a call. Paired, with-tool after vs direct before: 118 won, 0 lost.
+- **The held-out kind is the real finding.** It called the tool on all 20 remainder
+  questions and got all 20 wrong, the same way every time: it wrote `print(a * b)`.
+  `Compute 8312212 mod 586` became 4,870,956,232. It learned "two numbers, call the tool",
+  and reached for the nearest template it knew rather than the operation asked for. At 300M
+  and six templates, the skill is the templates, not the general idea; more *kinds* in
+  training, not more examples, is what would test whether it can generalise.
+- **Without the tool it now answers nothing right** (direct 2 → 0). It still writes the call
+  and, told there is no tool, guesses. A model trained to delegate unlearns trying.
+- **Forgetting is small**: Python held-out loss 1.322 → 1.331 on the blend's Python span.
+
+**Not built yet:** GRPO on these problems, with the reward computed after the tool has
 run. That needs the sampler to run tool calls in the middle of a completion, which
 `sample_groups_batched` does not do.
 

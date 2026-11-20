@@ -908,8 +908,35 @@ its checkpoint to 60k steps. The cosine is recomputed over 60k, so the learning 
 from its 30k floor to about half the peak and then decays again; a loss bump is expected.
 Its log starts at step 30,000.
 
-**Queued 2026-11-20** (`logs/queue/day-1120.sh`): the unseen pair, the author's pair and the
-seen pair on the 30k model, then `audiolm-many-long`, then its seen and unseen reports.
+**Measured 2026-11-20.** 40 sentences per row, own length, the asr-libri460 judge. "Voice
+closer" is how many of the 40 come out closer (speaker cosine) to their own speaker than to a
+different one. Embedding = the reference clip's speaker embedding only; cloned = the same
+embedding plus that clip's codes as a prompt. Every pair is the same sentences and the same
+reference.
+
+| model, speakers | original / codec WER | TTS WER: embedding → cloned | voice closer | cosine to own voice: embedding → cloned (codec, same speaker) |
+|---|---|---|---|---|
+| 30k, seen | 9.8 / 10.4% | 52.0 → 56.8% (cloned better 14, worse 22, p 0.24) | 36 / 36 | 0.378 → 0.371 (0.496, 0.772) |
+| 30k, **unseen** (test-clean) | 13.3 / 13.6% | 64.6 → 64.6% (19 / 15, p 0.61) | 30 / 30 | 0.169 → 0.219 (0.441, 0.616) |
+| 60k, **unseen** | 13.3 / 13.6% | **45.1** → 59.4% (12 / 26, **p 0.03**) | 29 / 31 | 0.175 → **0.224** (27 / 13, **p 0.04**) |
+| 30k, the author (8 sentences) | 68.5 / 81.8% | 55.8 → 88.7% (1 / 6) | – | 0.172 → 0.204 (0.248, 0.589) |
+
+- **Voices it never heard work from the embedding alone**: 30 of 40 unseen speakers come out
+  closer to themselves than to someone else, with no prompt. The speaker embedding
+  generalises.
+- **Cloning moves the voice a little and costs words.** On the 60k model the prompt pulls 27
+  of 40 sentences closer to the speaker (p 0.04; cosine 0.175 → 0.224), and makes 26 of 40
+  harder to transcribe (p 0.03). The 30k model showed neither effect clearly. Both TTS
+  cosines are still far below the codec's 0.441 ceiling: the voice is recognisably *a* match,
+  not a convincing copy.
+- **The author's row cannot be judged.** The recogniser gets 68.5% WER on the author's own
+  *original* recordings (its known blind spot; docs/23), so a TTS WER is meaningless there,
+  and only 8 sentences had a usable prompt clip. Cosines rise slightly with the prompt
+  (0.172 → 0.204) against a same-speaker 0.589. A judge that can hear this voice is needed
+  first.
+- **More steps paid**: `audiolm-many-long` val 3.928 → **3.816** (still falling at 60k).
+  Seen, own length: WER 57.3 → **41.3%** (31 better, 8 worse, p 0.0003), voice closer 37 → 38;
+  unseen with the embedding: 64.6 → 45.1% (27 / 8, p 0.002).
 
 **Does codebook 0 carry the words? No more than before.** The content codebook's open
 question, tested by `codec-transfer --judged 1,4,8`: the recogniser transcribes audio decoded

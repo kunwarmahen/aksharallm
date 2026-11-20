@@ -476,7 +476,7 @@ is a capability that only appears with scale; you cannot get it by asking.
 and puts a Gated DeltaNet layer (a fixed-size memory per head, no KV cache) in the rest:
 
 ```bash
-scripts/experiment.sh tiny-hybrid       # tiny-adamw + full_attn_every: 3 (queued 2026-11-20)
+scripts/experiment.sh tiny-hybrid       # tiny-adamw + full_attn_every: 3 (val 1.458 vs 1.475; no cliff at 2x its window)
 python -m aksharallm.longctx curve checkpoints/tiny-hybrid/ckpt_best.pt --len 1024 --windows 32
 ```
 
@@ -502,8 +502,9 @@ The expensive routes. Each one is a real research direction rather than a switch
 
   **How you know it worked:** on the same held-out problems, accuracy with the tool beats
   accuracy without it, paired per problem, including the kind it never trained on. The SFT
-  between those two commands is in [doc 6](06-posttraining.md) § "Tool use" (queued
-  2026-11-20).
+  between those two commands is in [doc 6](06-posttraining.md) § "Tool use". Measured
+  2026-11-20: 120 of 120 on the trained kinds (from 2), 0 of 20 on the held-out kind, where it
+  called the tool and wrote a multiplication instead of `%`.
 
 - **Distillation** — train a small model to copy a big one's *probabilities*, not just its
   answers. Both models must share a tokenizer, so here it is between our own models. Start
@@ -584,7 +585,7 @@ The expensive routes. Each one is a real research direction rather than a switch
   2026-11-20):** `scripts/experiment.sh small-student-muon`, val 3.267 vs `small-student`'s
   3.371, ARC-Easy 43.2 vs 39.0% (paired p 0.006), for 3.5% more wall clock. Over the long
   budget: `scripts/experiment.sh small-student-long-muon` against `small-student-long`'s
-  3.0616 (running 2026-11-20).
+  3.0616: 2.972, ahead from step 1,000, benchmarks no different (ARC p 0.36, PIQA p 0.85).
 - **Scale up** — a bigger model on more tokens. The honest answer to most quality problems,
   and the one that costs the most.
 
@@ -614,7 +615,7 @@ token, so it needs no codec and no new trainer:
 
 ```bash
 python -m aksharallm.world prepare                 # 60,000 random games -> data/world/
-scripts/experiment.sh world-sokoban                # ~10 min on a 3090 (queued 2026-11-20)
+scripts/experiment.sh world-sokoban                # ~6 min on a 3090; 100% exact frames (solved)
 python -m aksharallm.world eval checkpoints/world-sokoban/ckpt_best.pt
 python -m aksharallm.world play checkpoints/world-sokoban/ckpt_best.pt
 ```
@@ -666,7 +667,7 @@ python -m aksharallm.audio codec-transfer checkpoints/codec-many-content/ckpt_be
 python -m aksharallm.audio speak checkpoints/audiolm-many/ckpt_best.pt "Any sentence." --prompt logs/audio/speak/voice-1089-unseen.wav --prompt-text "after early nightfall the yellow lamps would light up here and there the squalid quarter of the brothels"   # clone a voice by continuing a recording of it
 python -m aksharallm.audio encode-many checkpoints/codec-many/ckpt_best.pt --corpus data/asr/test-clean --out data/audio/many-unseen-codes --speaker checkpoints/speaker-libri/ckpt_best.pt
 python -m aksharallm.audio tts-report checkpoints/audiolm-many/ckpt_best.pt --codes data/audio/many-unseen-codes --val-clips 200 --prompt   # speakers it never heard, cloned
-scripts/audio.sh audiolm-many-long  # audiolm-many continued to 60k steps (queued 2026-11-20)
+scripts/audio.sh audiolm-many-long  # audiolm-many continued to 60k steps (WER 57 -> 41%)
 python -m aksharallm.audio speaker-eval checkpoints/speaker-libri/ckpt_best.pt   # its EER on unseen speakers (0.42%)
 python -m aksharallm.vision caption vision-shapes  # caption held-out images and score them
 scripts/audio.sh asr-synth                         # a recogniser, no download, minutes

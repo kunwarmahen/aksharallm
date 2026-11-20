@@ -358,7 +358,33 @@ DeltaNet blocks, two attention blocks; 14.39M parameters against 13.77M). It ask
 things: val loss at matched steps and at matched wall clock, and loss by position **past**
 the trained 512 tokens (`longctx curve --len 1024`). Four of its six blocks have no
 positions at all, so the question is whether it degrades less beyond its window.
-**Queued 2026-11-20** (`logs/queue/day-1120b.sh`); the result goes here.
+
+**Measured 2026-11-20** (8,000 steps each, same data and seed, the card to itself):
+
+| | val (final) | val @ 2,500 | s/step | MFU | wall clock |
+|---|---|---|---|---|---|
+| `tiny-adamw` (all attention) | 1.4752 | 1.6945 | 0.107 | 51% | 14.6 min |
+| `tiny-hybrid` (4 of 6 DeltaNet) | **1.4584** | **1.6664** | 0.189 | 30% | 26.2 min |
+
+Loss by position, 32 windows of 1,024 tokens (twice the trained 512):
+
+| positions | 0–127 | 256–383 | 384–511 | 512–639 | 640–767 | 768–895 | 896–1023 |
+|---|---|---|---|---|---|---|---|
+| `tiny-adamw` | 1.567 | 1.323 | 1.422 | 1.989 | 3.825 | 5.051 | 4.978 |
+| `tiny-hybrid` | 1.528 | 1.318 | 1.401 | 1.325 | 1.331 | 1.561 | 1.526 |
+
+- **Per step, the hybrid is slightly better**: −0.017 (−1.1%) at the end, ahead at every
+  eval. One seed, so a direction.
+- **Per hour, it is not**: each step costs 1.77× as long, and AdamW at the hybrid's 26
+  minutes would be far past 8,000 steps. A fused kernel is what would change that, not the
+  architecture.
+- **Past its window, the difference is the whole story.** All-attention falls off a cliff at
+  position 640 (+2.4 nats; ppl 4 → 145). The hybrid has no cliff at all: 1,024 tokens read
+  about as well as 512. That is with two RoPE attention blocks still in it, seeing positions
+  it never trained on. The four position-free blocks are enough to carry it. Caveats:
+  TinyStories documents are short, so most of a 1,024-token window is several stories, and
+  this is fluency, not retrieval. A needle test would say whether it can *find* something
+  past 512.
 
 ## Grouped-Query Attention (GQA)
 
