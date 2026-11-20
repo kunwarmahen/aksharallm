@@ -71,5 +71,8 @@ scripts/experiment.sh tiny-muon       # the same run with optim.name: muon
 ```
 
 Or press Start on either run in the portal. Compare their **val** losses at the same step.
+Measured here: 1.4418 for Muon against 1.4752 for AdamW. The same pair at ~100M
+(`small-student` / `small-student-muon`) ended 3.267 against 3.371, and Muon also won on
+ARC-Easy and PIQA ([doc 5](docs/05-pretraining.md)).
 The control is a re-run rather than `tiny`'s old 1.472, because that run's batches were not
 seeded, so the comparison would not be like for like.

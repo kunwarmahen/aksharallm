@@ -942,16 +942,19 @@ flowchart LR
 
 ### Future work (recorded 2026-11-19)
 
-Built but not yet run on the card: **Muon** against AdamW at 13.8M (`tiny-adamw` /
-`tiny-muon`, [doc 5](docs/05-pretraining.md)); **a codec retrained on many voices**, with and
-without a **content codebook** (`codec-many`, `codec-many-content`), and a **speaker model**
-to say whether a voice still sounds like itself (`speaker-libri`) ([doc 21](docs/21-audio.md)).
+Built and run 2026-11-19/20: **Muon** against AdamW, at 13.8M and at ~100M, where it won
+by 3.1% in val and on ARC-Easy and PIQA for 3.5% more time ([doc 5](docs/05-pretraining.md)).
+Also run: **a codec retrained on many voices** (`codec-many`: other voices 9.1 → 3.7 dB MCD);
+a **content codebook** (`codec-many-content`, no measurable gain, closed); a **speaker model**
+(`speaker-libri`, 0.42% EER); and **multi-speaker TTS** (`audiolm-many`), which speaks in
+the voice of a reference clip, closer to its own speaker on 37 of 40 sentences, at 57% WER
+([doc 21](docs/21-audio.md)).
 
 Not built yet, in the order they depend on each other or by value per GPU hour:
 
-- **Multi-speaker TTS** on the new codec, first with one learned vector per speaker, then
-  **voice cloning from a 3-second prompt** (the prompt's codes before the text), then **TTS
-  in the author's own voice**, using the dictation recordings.
+- **Voice cloning from a 3-second prompt** (the prompt's codes before the text, in place of
+  `audiolm-many`'s speaker embedding), then **TTS in the author's own voice**, using the
+  dictation recordings.
 - **Small full-duplex voice chat**: listen and speak at once, two audio streams and a text
   stream. Every piece exists here; it waits for the multi-speaker codec.
 - **Hybrid linear attention**: Gated DeltaNet layers with one full-attention layer in four,

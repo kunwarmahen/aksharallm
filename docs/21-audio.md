@@ -761,7 +761,9 @@ What it says:
   ended at 0.545, i.e. codebook 0 reaches a cosine of about 0.45 with the recogniser's
   states. What this report *cannot* say is whether the words moved into codebook 0, which was
   the point: that pays off in a TTS that predicts codebook 0 from text, and needs a probe of
-  codebook 0 alone (WER with only book 0 decoded, or a linear phone probe). **Not tested.**
+  codebook 0 alone (WER with only book 0 decoded, or a linear phone probe). **Tested
+  2026-11-20 (below): it did not.** Book 0 alone transcribes no better from the content
+  codec than from the plain one.
 - **The voice column needs a caveat of its own.** Even `codec-lj` on LJ, at MCD 2.54, scores
   only 0.60 against a same-speaker reference of 0.87. A reconstruction of the *same* clip
   sounds less like the speaker, to this model, than a different clip does. The speaker model
@@ -769,10 +771,10 @@ What it says:
   voice cosines between codecs, which works, and do not read 0.45 as "half the voice is gone".
 
 **For the TTS:** use `codec-many` (it is: `audiolm-many`, below). It is the gate the audio LM
-was waiting for, and the content variant offers nothing to justify its cost until the
-codebook-0 probe says otherwise.
+was waiting for, and the content variant offers nothing to justify its cost: the codebook-0
+probe (below) found nothing either.
 
-### Many voices, one TTS: `audiolm-many` (built 2026-11-19, queued `logs/queue/many.sh`)
+### Many voices, one TTS: `audiolm-many` (built 2026-11-19, trained 2026-11-20)
 
 `audiolm-lj-stop` speaks in one voice because it only ever heard one. With `codec-many`
 carrying other voices, the same audio LM can be trained on all of them, if it is told *whose*
@@ -825,10 +827,58 @@ original of a sentence by a *different* speaker. If the conditioning works, "own
 original) is the ceiling the codes allow, and the caveat above applies: compare these
 cosines with each other, not with 1.
 
-**Does codebook 0 carry the words?** The content codebook's open question gets its test in
-the same queue: `codec-transfer --judged 1,4,8` has the recogniser transcribe audio decoded
-from codebook 0 *alone*, for `codec-many` and `codec-many-content`. If the content loss did
-its job, the content codec's book-0 WER is clearly lower, paired per clip.
+**Measured 2026-11-20** (`logs/queue/many.sh`, 00:35–02:13, 30k steps in 1 h 38 min). The
+dataset kept 118,915 clips for training after dropping 26,306 longer than 15.4 s; 147 held
+out, by many different speakers. Val fell at every eval and was still falling at the end
+(5.62 at 1k → 4.01 at 20k → **3.928** at 29k), so unlike the one-voice run nothing was
+memorised, and more steps would still help. The report, 40 held-out sentences by many
+speakers, judged by `asr-libri460`:
+
+| row | WER | CER |
+|---|---|---|
+| original recording | 8.2% | 1.5% |
+| codec-many reconstruction | 9.2% | 1.9% |
+| TTS, its own length (stop head) | **57.3%** | 36.2% |
+| TTS, given the real length | 62.2% | 46.1% |
+
+- **The voice is the headline.** The cosine to the TTS sentence's own speaker averaged
+  **0.388**, to a different speaker 0.014, and the TTS was closer to its own speaker on **37
+  of 40** sentences (sign test p 2e-8; 38/40 at the real length). For scale: two recordings by
+  one speaker score 0.793 and the codec itself 0.488, so the TTS keeps most of what the codes
+  can carry. A reference clip in front of the text is enough to choose the voice.
+- **The words are about where the one-voice model was** (`audiolm-lj-stop`: 54.9% at its own
+  length on LJ). These are harder sentences (many readers, up to 15 s), so the two numbers are
+  not paired and only say "no worse". One runaway in 40.
+- **Its own length did better than the real one** (57.3 vs 62.2%), unlike the one-voice
+  model. The spoken length ran 1.08× the real one (median): a slightly slower reading is easier
+  to transcribe. A direction from one run, not a finding.
+- **The fox sentence**, heard by the recogniser:
+
+  | voice | heard |
+  |---|---|
+  | `audiolm-lj-stop` (one voice, 2026-11-19) | the quick brown fox jumps ofe zy dos and noblty is surpriss |
+  | `audiolm-many`, `--speaker-id LJ` | e quick brown fox jumps over the laze doll and nobody is surprised |
+  | `audiolm-many`, `--voice` an unseen test-clean speaker (1089) | the quick brown fox jhumpsed over the lazye dogly surprised it |
+
+  One sentence each, so listen rather than count: `logs/audio/speak/fox-many-*.wav`.
+- **What next for it:** more steps (val was still falling), and an honest test of an unseen
+  voice: the report's held-out sentences are by speakers it trained on, and the cosine on the
+  1089 fox has not been measured against that speaker's own recordings.
+
+**Does codebook 0 carry the words? No more than before.** The content codebook's open
+question, tested by `codec-transfer --judged 1,4,8`: the recogniser transcribes audio decoded
+from codebook 0 *alone*, for both codecs, on the same clips.
+
+| book 0 alone | LJ WER | other voices WER | other voices CER |
+|---|---|---|---|
+| `codec-many` | 26.8% | 42.4% | 20.3% |
+| `codec-many-content` | 27.5% | 40.2% | 19.6% |
+
+Paired per clip, content better / worse: LJ 27 / 24 (p 0.78), other voices WER 55 / 46
+(p 0.43), CER 62 / 50 (p 0.30). With 4 or 8 books it is the same coin toss. So 100,000 steps of
+content loss (cosine about 0.45 with the recogniser's states) did not move the words into the
+first codebook in any way the recogniser can hear. **Idea closed for this size**: if it comes
+back, it needs a much stronger weight or a different target (phones, not encoder states).
 
 ### The corpus that makes this measurable
 

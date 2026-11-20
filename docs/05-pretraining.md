@@ -214,11 +214,35 @@ loader was seeded (gotcha 16), so its batches cannot be reproduced.
   Newton-Schulz matmuls). In the 879 s the AdamW run took, Muon reached step ~6,500 and val
   **1.4636**, 0.012 below AdamW's *final* 1.4752.
 - **One seed, one size.** A 0.03 gap between two single runs is a direction. The
-  distillation pair (docs/24) is the warning: a lead at 13.8M did not survive at 100M. The
-  test that would settle it is the same pair at the ~100M student size: `small-student-muon`
-  (`configs/small-student-muon.yaml`, `small-student` plus `optim.name: muon`), whose control
-  `small-student` already trained (val 3.371 at 2,000 steps). Queued 2026-11-19 in
-  `logs/queue/many.sh`, ~2 h.
+  distillation pair (docs/24) is the warning: a lead at 13.8M did not survive at 100M. So the
+  same pair ran at the ~100M student size, below.
+
+**Measured 2026-11-20 at ~101M** (`small-student-muon` = `small-student` plus
+`optim.name: muon`, 2,000 steps on the blend, same seed and batches; run by
+`logs/queue/many.sh`):
+
+| | val @500 | val @1k | val @1.5k | final val | prose | Python | ARC-Easy | PIQA | wall clock |
+|---|---|---|---|---|---|---|---|---|---|
+| `small-student` (AdamW) | **4.211** | 3.646 | 3.451 | 3.3705 | 3.615 | 2.138 | 39.0% | 55.7% | 1h49m |
+| `small-student-muon` | 4.292 | 3.526 | 3.338 | **3.2673** | **3.512** | **2.030** | **43.2%** | **58.0%** | 1h53m |
+| `small-student-long` (AdamW, 2.9× the steps) | | | | 3.0616 | 3.301 | 1.812 | 44.2% | 59.6% | ~5h15m |
+
+- **The lead survived the jump to 100M, and grew**: −0.103 (−3.1%) in val, −0.10 on prose and
+  −0.11 on Python alike. Behind at step 500 (Muon's early steps are noisier), ahead from
+  step 1,000 on.
+- **The benchmarks moved with it, paired per item against the AdamW control:** ARC-Easy 38
+  won / 17 lost (sign test p 0.006), PIQA 68 / 45 (p 0.04). The first optimizer change in this
+  repo to show up past the error bar on a benchmark.
+- **It costs 3.5% more wall clock here** (6,758 vs 6,526 s), against 23% at 13.8M: the
+  Newton-Schulz matmuls are a fixed cost per matrix, and a bigger model's forward and
+  backward hide them.
+- **Against the other ways of spending the same budget:** it beats the distilled student
+  (val 3.2812, which cost 2.9× the compute for its teacher) at 1.04×. More steps still win —
+  `small-student-long` at 2.9× the compute is ahead on val — but on the benchmarks the two
+  are not distinguishable (ARC 31 / 36, p 0.63; PIQA 54 / 70, p 0.18).
+- Still one seed. What it says is that **Muon is the better default for the next run at this
+  size**; a long-run pair (`small-student-long` with Muon) would say whether the lead holds
+  over 5,800 steps.
 
 The 40-step CPU smoke before it (batch 4) showed the same step-0 loss for both and val 4.99
 against 5.40, which only showed Muon was wired in.
