@@ -588,7 +588,7 @@ because the decoder cannot render those voices anyway. A codebook-only fix is ru
 **So the codec has to be retrained on many voices — encoder and decoder, not only the
 codebooks — before the audio LM is.**
 
-### The many-voices codec: `codec-many` (built 2026-11-19, training from 2026-11-19)
+### The many-voices codec: `codec-many` (built and trained 2026-11-19)
 
 `configs/codec-many.yaml` is `codec-lj`'s architecture exactly, with two changes:
 
@@ -629,7 +629,7 @@ starting gap in the trainer's own terms: val **2.29 on LJ against 3.77 and 5.26*
 LibriSpeech tails. It also shows codebook usage at 18–24% on the new mix against codec-lj's
 61–70% on LJ, so the dead-entry restarts will have work to do early.
 
-### A content codebook: `codec-many-content` (built 2026-11-19, queued after `codec-many`)
+### A content codebook: `codec-many-content` (built and trained 2026-11-19)
 
 Codebook 0 of today's codec carries whatever cuts the reconstruction error most, so it holds
 the words and the voice together. A TTS over those codes has to guess the voice from text,
@@ -666,11 +666,11 @@ flowchart LR
 `configs/codec-many-content.yaml` is `codec-many.yaml` with only `loss.content_weight: 1.0`
 and `loss.content_teacher` added, so the pair answers this one question. On the CPU both run
 at the same 4.2 audio-s/s, because there the codec dominates the step. On the card the
-recogniser's forward pass is a larger share; the guess is 30–50% slower, to be measured. **To
-decide before either runs:** train one, or both as a controlled pair. Both is about 2 × 2.7
-GPU hours plus the teacher's cost.
+recogniser's forward pass is a larger share. Measured on the 3090: 0.109 s/step against
+0.098, **12% slower**, not the 30–50% guessed. Both were trained as a controlled pair; the
+results are below.
 
-### Does it still sound like that person? A speaker model (built and training 2026-11-19)
+### Does it still sound like that person? A speaker model (built and trained 2026-11-19)
 
 Neither MCD nor WER can see voice identity. A codec could turn every speaker into one voice
 and still score well on both. So `audio/speaker.py` is a speaker embedding, from scratch: it
@@ -720,6 +720,56 @@ A run with a smaller sample than the default (64 LJ clips, 3 x 40 speakers) writ
 under its own name (`...-lj6-test-cleanx1.json`), and the Audio tab never shows one as the
 result. A quick check came within one command of overwriting the full report. The tab's
 panel now has one row per codec, so `codec-lj` and `codec-many` can be read side by side.
+
+### Measured: three codecs, one judge, paired per clip (2026-11-19)
+
+Both new codecs trained 100,000 steps on the 3090 (2 h 49 m and 3 h 10 m), and the speaker
+model 20,000 steps (16 min). `speaker-eval` on test-clean's 40 unseen speakers (160 clips,
+12,720 pairs): **EER 0.42%**, against 27% untrained. Then `codec-transfer --speaker` on all
+three codecs, with the default sample: 64 held-out LJ clips ("home") and 120 test-clean clips
+from 40 speakers ("other").
+
+| codec | MCD@8 home | MCD@8 other | WER @8 home (orig 6.3%) | WER @8 other (orig 9.0%) | voice cos @8 other |
+|---|---|---|---|---|---|
+| `codec-lj` | **2.54** | 9.12 | 7.5% | 15.5% | 0.28 |
+| `codec-many` | 2.96 | **3.73** | 7.3% | **10.0%** | **0.45** |
+| `codec-many-content` | 3.01 | 3.79 | 7.5% | 10.6% | 0.45 |
+
+The voice references, from the same speaker model on the originals: two clips of one speaker
+score **0.825**, two different speakers **0.011**.
+
+Paired per clip (worse / better, sign test):
+
+| comparison | other voices, words @8 | other voices, voice @8 | LJ, words @8 | LJ, voice @8 |
+|---|---|---|---|---|
+| `codec-many` vs `codec-lj` | **15 / 53, p 4e-6** | **19 / 101, p 1e-14** | 9 / 9, p 1 | 61 / 3 (worse), p 5e-15 |
+| `-content` vs `codec-many` | 23 / 16, p 0.34 | 55 / 65, p 0.41 | 8 / 6, p 0.79 | 36 / 28, p 0.38 |
+
+What it says:
+
+- **Training on many voices fixed the codec for many voices.** MCD on new speakers fell from
+  9.1 to 3.7 dB, better than `codec-lj` managed at *one* book on its own voice. At 8 books the
+  recogniser's errors are no longer significantly worse than on the original audio (30 / 20
+  clips, p 0.20; `codec-lj` was 60 / 12, p 8e-9). Every one of the 120 clips has a lower MCD.
+- **LJ paid a little.** MCD@8 2.54 → 2.96 on 64 of 64 clips, and the speaker model scores 61
+  of 64 LJ reconstructions further from the original. The *words* did not move (9 / 9). The
+  LJ val loss jumped from 2.29 to 3.02 in the first 1,000 steps (fresh optimizer, new data)
+  and was still falling at the end (2.57 at step 99k), as was every corpus's. The run was
+  not finished learning; more steps would likely recover some of LJ.
+- **The content codebook bought nothing we can measure.** Every paired comparison against
+  `codec-many` is a coin toss (all p > 0.3), at 12% more time per step. Its content loss
+  ended at 0.545, i.e. codebook 0 reaches a cosine of about 0.45 with the recogniser's
+  states. What this report *cannot* say is whether the words moved into codebook 0, which was
+  the point: that pays off in a TTS that predicts codebook 0 from text, and needs a probe of
+  codebook 0 alone (WER with only book 0 decoded, or a linear phone probe). **Not tested.**
+- **The voice column needs a caveat of its own.** Even `codec-lj` on LJ, at MCD 2.54, scores
+  only 0.60 against a same-speaker reference of 0.87. A reconstruction of the *same* clip
+  sounds less like the speaker, to this model, than a different clip does. The speaker model
+  trained on clean recordings and reads codec artefacts as a channel change. So compare
+  voice cosines between codecs, which works, and do not read 0.45 as "half the voice is gone".
+
+**For the TTS:** use `codec-many`. It is the gate the audio LM was waiting for, and the
+content variant offers nothing to justify its cost until a codebook-0 probe says otherwise.
 
 ### The corpus that makes this measurable
 

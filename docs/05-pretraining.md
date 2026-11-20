@@ -199,12 +199,26 @@ scripts/experiment.sh tiny-muon      # the same run with Muon
 ```
 
 Compare the two with each other, not with `tiny`'s 1.472: `tiny` trained before the data
-loader was seeded (gotcha 16), so its batches cannot be reproduced. **Not run yet on the
-card.** A 40-step CPU smoke (batch 4) showed the same step-0 loss for both, and val 4.99 for
-Muon against 5.40 for AdamW. That only shows Muon is wired in and takes larger steps early;
-it says nothing about the end of a run. Muon's steps were 0.67 s against 0.50 s on the CPU,
-where the Newton-Schulz matmuls run in fp32. On the card they run in bf16 and are a smaller
-share of the step.
+loader was seeded (gotcha 16), so its batches cannot be reproduced.
+
+**Measured 2026-11-19 on the 3090, 8,000 steps each, same seed and batches:**
+
+| | val @1k | val @4k | val @6.5k | final val (8k) | s/step | wall clock | MFU |
+|---|---|---|---|---|---|---|---|
+| `tiny-adamw` | 1.913 | 1.599 | 1.500 | **1.4752** | 0.107 | 14m39s | 51% |
+| `tiny-muon` | 1.834 | 1.551 | 1.464 | **1.4418** | 0.132 | 17m56s | 41% |
+
+- **Per step, Muon wins by 0.033 (−2.3%)** and was ahead at every one of the sixteen evals.
+  The gap opened early (−0.08 at step 1,000) and narrowed to about −0.03, where it held.
+- **Per second, it still wins, by less.** A Muon step costs 23% more on the card (the
+  Newton-Schulz matmuls). In the 879 s the AdamW run took, Muon reached step ~6,500 and val
+  **1.4636**, 0.012 below AdamW's *final* 1.4752.
+- **One seed, one size.** A 0.03 gap between two single runs is a direction. The
+  distillation pair (docs/24) is the warning: a lead at 13.8M did not survive at 100M. The
+  test that would settle it is the same pair at the ~100M student size.
+
+The 40-step CPU smoke before it (batch 4) showed the same step-0 loss for both and val 4.99
+against 5.40, which only showed Muon was wired in.
 
 A resume never mixes the two: an AdamW checkpoint has a different number of parameter groups
 and refuses to load into Muon, and the other way round too.

@@ -553,8 +553,9 @@ The expensive routes. Each one is a real research direction rather than a switch
 
   **How you know it worked:** `tiny-muon`'s val loss ends below `tiny-adamw`'s at the same
   step. Both are in the portal's run picker with Start on the dashboard, and the trainer's
-  header line `optimizer` says which one ran ([doc 5](05-pretraining.md)). Not run on the
-  card yet.
+  header line `optimizer` says which one ran ([doc 5](05-pretraining.md)). **Run
+  2026-11-19:** val 1.4418 vs 1.4752 at 8,000 steps, and still ahead at matched wall clock
+  (Muon's step is 23% slower). One seed at 13.8M, so a direction, not a law.
 - **Scale up** — a bigger model on more tokens. The honest answer to most quality problems,
   and the one that costs the most.
 
@@ -610,10 +611,10 @@ scripts/audio.sh audiolm-lj-stop                   # ...plus a stop head, so it 
 python -m aksharallm.audio tts-report checkpoints/audiolm-lj-stop/ckpt_best.pt --duration own   # judged by asr-libri460 (54.9% WER)
 python -m aksharallm.audio speak checkpoints/audiolm-lj-stop/ckpt_best.pt "Any sentence you like."
 python -m aksharallm.audio codec-transfer checkpoints/codec-lj/ckpt_best.pt --cpu   # does the codec carry other voices? (no: 9.1 vs 2.5 dB)
-scripts/audio.sh codec-many         # the codec again on LJ + LibriSpeech 460 h, from codec-lj (queued 2026-11-19)
-scripts/audio.sh codec-many-content # the same, with codebook 0 taught by our recogniser (queued 2026-11-19)
+scripts/audio.sh codec-many         # the codec again on LJ + LibriSpeech 460 h, from codec-lj (run 2026-11-19: other voices 9.1 → 3.7 dB)
+scripts/audio.sh codec-many-content # the same, with codebook 0 taught by our recogniser (run 2026-11-19: no better than codec-many)
 scripts/audio.sh speaker-libri      # a speaker model: does a voice still sound like itself? (trained 2026-11-19, ~16 min)
-python -m aksharallm.audio speaker-eval checkpoints/speaker-libri/ckpt_best.pt   # its EER on unseen speakers
+python -m aksharallm.audio speaker-eval checkpoints/speaker-libri/ckpt_best.pt   # its EER on unseen speakers (0.42%)
 python -m aksharallm.vision caption vision-shapes  # caption held-out images and score them
 scripts/audio.sh asr-synth                         # a recogniser, no download, minutes
 python -m aksharallm.asr fetch train-clean-100     # then pack it, and scripts/audio.sh asr-libri100
