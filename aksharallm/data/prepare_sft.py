@@ -149,7 +149,9 @@ def is_valid(messages) -> bool:
     if not any(m.get("role") == "assistant" and m.get("content", "").strip()
                for m in messages):
         return False  # nothing to train on
-    return all(m.get("role") in ("system", "user", "assistant") and m.get("content")
+    # `tool` is a tool's output (aksharallm/tools, docs/06 § "Tool use"): context the model
+    # reads, never a target, because `render_chat` trains on assistant turns alone.
+    return all(m.get("role") in ("system", "user", "assistant", "tool") and m.get("content")
                for m in messages)
 
 
