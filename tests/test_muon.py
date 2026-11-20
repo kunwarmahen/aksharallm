@@ -131,14 +131,17 @@ def test_the_two_arms_differ_in_exactly_one_key():
     assert a["model"] == tiny["model"] and a["train"]["max_steps"] == tiny["train"]["max_steps"]
 
 
-def test_the_100m_muon_arm_is_its_control_plus_one_key():
-    """small-student (trained 2026-11-02) is the control; only the Muon arm is new."""
+@pytest.mark.parametrize("control", ["small-student", "small-student-long"])
+def test_the_100m_muon_arm_is_its_control_plus_one_key(control):
+    """small-student (2026-11-02) and small-student-long (2026-11-05) are the controls; only
+    the Muon arms are new."""
     import yaml
 
-    a = yaml.safe_load(open("configs/small-student.yaml"))
-    b = yaml.safe_load(open("configs/small-student-muon.yaml"))
+    arm = control + "-muon"
+    a = yaml.safe_load(open(f"configs/{control}.yaml"))
+    b = yaml.safe_load(open(f"configs/{arm}.yaml"))
     assert "name" not in a["optim"] and b["optim"].pop("name") == "muon"
-    assert b.pop("name") == "small-student-muon" and a.pop("name") == "small-student"
-    assert b["train"].pop("out_dir") == "checkpoints/small-student-muon"
+    assert b.pop("name") == arm and a.pop("name") == control
+    assert b["train"].pop("out_dir") == f"checkpoints/{arm}"
     a["train"].pop("out_dir")
     assert a == b

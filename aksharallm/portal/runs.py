@@ -83,6 +83,7 @@ LAUNCHERS: dict[str, dict] = {
     # the distilled arm's GPU time.
     "small-student": {"script": "scripts/experiment.sh", "args": ["small-student"]},
     "small-student-muon": {"script": "scripts/experiment.sh", "args": ["small-student-muon"]},
+    "small-student-long-muon": {"script": "scripts/experiment.sh", "args": ["small-student-long-muon"]},
     "small-distil": {"script": "scripts/experiment.sh", "args": ["small-distil"]},
     "small-student-long": {"script": "scripts/experiment.sh", "args": ["small-student-long"]},
     # Audio and vision: a different launcher, the same pid/meta/log contract. docs/21, 22.
@@ -95,6 +96,7 @@ LAUNCHERS: dict[str, dict] = {
     "audiolm-lj": {"script": "scripts/audio.sh", "args": ["audiolm-lj"]},
     "audiolm-lj-stop": {"script": "scripts/audio.sh", "args": ["audiolm-lj-stop"]},
     "audiolm-many": {"script": "scripts/audio.sh", "args": ["audiolm-many"]},
+    "audiolm-many-long": {"script": "scripts/audio.sh", "args": ["audiolm-many-long"]},
     # The speech recogniser (Phase 7, docs/23): same launcher, an `asr:` config.
     "asr-synth": {"script": "scripts/audio.sh", "args": ["asr-synth"]},
     "asr-libri100": {"script": "scripts/audio.sh", "args": ["asr-libri100"]},

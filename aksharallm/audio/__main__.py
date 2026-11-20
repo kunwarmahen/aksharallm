@@ -216,7 +216,7 @@ def cmd_encode_many(args) -> int:
         spk = load_speaker(args.speaker, device).eval()
     import functools
     encode_many(codec, args.corpus, args.out, speaker_model=spk, seed=args.seed,
-                progress=functools.partial(print, flush=True))
+                one_speaker=args.one_speaker, progress=functools.partial(print, flush=True))
     return 0
 
 
@@ -401,45 +401,73 @@ def cmd_tts_report(args) -> int:
     model, tok, blob = load_tts(args.checkpoint, device)
     codec = load_codec(blob["codec"], device)
     data = blob["config"]["data"]
-    corpus = Path(data.get("corpus") or data["codes"])
-    val = UtteranceDataset(data["codes"], load_transcripts(corpus), tok, split="val",
-                           n_codebooks=model.cfg.n_codebooks, max_frames=model.cfg.max_frames,
-                           max_text=model.cfg.max_text, val_clips=data["val_clips"])
+    cfg = model.cfg
+    # --codes: another codes directory (same codec), e.g. speakers the model never heard.
+    codes_dir = Path(args.codes or data["codes"])
+    corpus = codes_dir if args.codes else Path(data.get("corpus") or data["codes"])
+    val_clips = args.val_clips or data["val_clips"]
+    multi = model.spk_proj is not None
+    if (args.prompt or args.prompt_items) and not multi:
+        raise SystemExit("--prompt needs a multi-speaker checkpoint (data.speaker_model)")
+    val = UtteranceDataset(codes_dir, load_transcripts(corpus), tok, split="val",
+                           n_codebooks=cfg.n_codebooks, max_frames=cfg.max_frames,
+                           max_text=cfg.max_text, val_clips=val_clips, speakers=multi)
     # The original recordings: the packed corpus, or (a multi-speaker codes directory from
     # `encode-many`) every corpus it was made from, found by clip name.
     if (corpus / "audio.bin").is_file():
         sources = [corpus]
     else:
-        sources = [Path(c) for c in Manifest.load(Path(data["codes"]) / "manifest.json").sources[0]["corpora"]]
+        sources = [Path(c) for c in Manifest.load(codes_dir / "manifest.json").sources[0]["corpora"]]
     where = {}
     for c in sources:
         m = Manifest.load(c / "manifest.json")
         mm = np.memmap(c / "audio.bin", dtype="<i2", mode="r")
         for i, nm in enumerate(m.names):
-            where[nm] = (mm, m.offsets[i], m.offsets[i + 1])
+            where[Path(nm).name] = (mm, m.offsets[i], m.offsets[i + 1])
     names = val.base.manifest.names
-    n = min(args.n, len(val))
-    utts, origs = [], []
-    for j in range(n):
-        mm, a, b = where[names[val.items[j][0]]]
-        utts.append(val.get(j))
+    rng = np.random.default_rng(args.seed)
+    utts, origs, speakers, prompts, who, skipped = [], [], [], [], [], 0
+    for j in range(len(val)):
+        if len(utts) == args.n:
+            break
+        codes, ids = val.get(j)
+        pr = None
+        if args.prompt or args.prompt_items:
+            # Cloning: the speaker's shortest other clip, whole, then this sentence, in one
+            # context. Sentences that do not fit beside their prompt are skipped and counted.
+            pr = val.prompt(j, args.prompt_frames)
+            if (pr is None or pr[1].shape[-1] + codes.shape[-1] > cfg.max_frames
+                    or len(pr[0]) + len(ids) - 1 > cfg.max_text):
+                skipped += 1
+                continue
+        mm, a, b = where[Path(names[val.items[j][0]]).name]
+        utts.append((codes, ids))
         origs.append(mm[a:b].astype(np.float32) / 32768.0)
-    speakers = None
-    if model.spk_proj is not None:
-        # Each sentence spoken in its own speaker's voice, from a DIFFERENT clip by them.
-        val = UtteranceDataset(data["codes"], load_transcripts(corpus), tok, split="val",
-                               n_codebooks=model.cfg.n_codebooks, max_frames=model.cfg.max_frames,
-                               max_text=model.cfg.max_text, val_clips=data["val_clips"],
-                               speakers=True)
-        rng = np.random.default_rng(args.seed)
-        speakers = [val.reference(j, rng) for j in range(n)]
-        who = [val.speaker[val.items[j][0]] for j in range(n)]
+        prompts.append(pr)
+        if multi:
+            matched = args.prompt or args.prompt_items
+            # Each sentence spoken in its own speaker's voice, from a DIFFERENT clip by them
+            # (with --prompt, the prompt clip's own embedding: one reference, two views).
+            r = val.prompt_index(j, args.prompt_frames) if matched else val.reference_index(j, rng)
+            speakers.append(torch.from_numpy(val.speaker_emb[r].astype(np.float32)))
+            who.append(val.speaker[val.items[j][0]])
+    n = len(utts)
+    if not multi:
+        speakers = None
+    if not args.prompt:
+        prompts = None
+    tag = (f"-{codes_dir.name}" if args.codes else "") + (
+        "-prompt" if args.prompt else "-promptitems" if args.prompt_items else "")
 
     run = Path(args.checkpoint).parent.name
-    out_dir = Path(args.out_dir or f"logs/audio/tts-{run}-{args.duration}")
+    out_dir = Path(args.out_dir or f"logs/audio/tts-{run}-{args.duration}{tag}")
     out_dir.mkdir(parents=True, exist_ok=True)
     asr_model, _ = load_recognizer(resolve_asr(args.asr), device)
-    print(f"tts         {args.checkpoint} (step {blob.get('step')}), {n} held-out sentences")
+    print(f"tts         {args.checkpoint} (step {blob.get('step')}), {n} held-out sentences"
+          + (f" from {codes_dir}" if args.codes else ""))
+    if args.prompt:
+        print(f"voice       cloned by continuation: each speaker's shortest other clip "
+              f"(<= {args.prompt_frames} frames) is forced first; {skipped} sentences did not fit")
     print(f"judge       {args.asr}, greedy\ndevice      {device}\n")
     fpc = blob.get("frames_per_char") or _frames_per_char(blob, tok, model)
     kept = {}
@@ -452,7 +480,12 @@ def cmd_tts_report(args) -> int:
                      lambda ws: asr_transcribe(asr_model, [_min_len(w) for w in ws], device),
                      temperature=args.temperature, seed=args.seed, device=device,
                      keep=keep, duration=args.duration, frames_per_char=fpc,
-                     speakers=speakers)
+                     speakers=speakers, prompts=prompts)
+    if args.prompt:
+        rep["prompt"] = {"max_frames": args.prompt_frames, "skipped": skipped,
+                         "frames": [p[1].shape[-1] for p in prompts]}
+    if args.codes:
+        rep["codes"] = str(codes_dir)
     if speakers is not None:
         rep["voice"] = _tts_voice(data["speaker_model"], kept, who, n, device)
         v = rep["voice"]
@@ -468,7 +501,7 @@ def cmd_tts_report(args) -> int:
     print(f"  TTS duration: {rep['duration']}; spoken/real length median "
           f"{rep['length_ratio']['median']:.2f}. Intelligibility is not quality:")
     print(f"  listen to {out_dir}/NN-tts.wav beside NN-original.wav.")
-    path = Path("logs/audio") / f"tts-{run}-step{blob.get('step')}-{args.duration}.json"
+    path = Path("logs/audio") / f"tts-{run}-step{blob.get('step')}-{args.duration}{tag}.json"
     path.write_text(_json.dumps({"checkpoint": str(args.checkpoint), "step": blob.get("step"),
                                  "judge": args.asr, **rep}, indent=1))
     print(f"wrote {path}")
@@ -547,13 +580,31 @@ def cmd_speak(args) -> int:
         fpc = blob.get("frames_per_char") or _frames_per_char(blob, tok, model)
         how = f"{fpc:.2f} frames per character (it has no stop head)"
     codec = load_codec(blob["codec"], device)
-    voice = None
+    voice, prompt_codes = None, None
+    if args.prompt:
+        # Cloning by continuation: the recording's codes go first, its transcript before the
+        # text, and the model carries on in that voice (docs/21 § "Cloning from a prompt").
+        if model.spk_proj is None:
+            raise SystemExit("--prompt needs a multi-speaker checkpoint (data.speaker_model)")
+        if not args.prompt_text:
+            raise SystemExit("--prompt needs --prompt-text: the words the recording says")
+        from .speech import prompted_text
+        args.voice = args.voice or args.prompt
+        w = load_audio(args.prompt, sample_rate=codec.cfg.sample_rate).samples
+        with torch.no_grad():
+            prompt_codes = codec.encode(torch.from_numpy(w)[None].to(device))[0]
+        ids = prompted_text(tok, tok.encode(normalise_text(args.prompt_text)), ids)
+        print(f"prompt      {args.prompt}: {prompt_codes.shape[-1]} frames, "
+              f"{normalise_text(args.prompt_text)!r}")
+        if prompt_codes.shape[-1] >= model.cfg.max_frames or len(ids) > model.cfg.max_text:
+            raise SystemExit("prompt + text do not fit this model's context: use a shorter "
+                             "prompt or sentence")
     if model.spk_proj is not None:
         voice, said = _voice(args, blob, device)
         print(f"voice       {said}")
     gen = torch.Generator(device=device).manual_seed(args.seed)
     codes = speak(model, ids, args.frames, temperature=args.temperature, device=device,
-                  generator=gen, frames_per_char=fpc, speaker=voice)
+                  generator=gen, frames_per_char=fpc, speaker=voice, prompt_codes=prompt_codes)
     wave = codec.decode(codes.to(device))[0].float().cpu().numpy()
     out = Path(args.out or f"logs/audio/speak/{'-'.join(text.split()[:6]) or 'speech'}.wav")
     write_wav(out, wave, codec.cfg.sample_rate)
@@ -714,6 +765,8 @@ def main(argv=None) -> int:
     s.add_argument("--speaker", default=None, metavar="PT", help="speaker-libri checkpoint: "
                    "also write one embedding per clip (speaker_emb.npy)")
     s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--one-speaker", default=None, metavar="NAME", help="label every clip as one "
+                   "speaker (e.g. several corpora of one person's voice)")
     s.set_defaults(fn=cmd_encode_many)
 
     s = codec_args(sub.add_parser("encode", help="turn a packed corpus into codec tokens"))
@@ -760,6 +813,15 @@ def main(argv=None) -> int:
     s.add_argument("--out-dir", default=None, help="WAVs to listen to (default logs/audio/tts-<run>)")
     s.add_argument("--duration", choices=["real", "own"], default="real",
                    help="real = given each sentence's recorded length; own = the model decides")
+    s.add_argument("--codes", default=None, metavar="DIR", help="score another codes directory "
+                   "(same codec; e.g. encode-many of test-clean = speakers it never heard)")
+    s.add_argument("--val-clips", type=int, default=None, help="with --codes: how many of its "
+                   "last clips are the sentences (the rest are the voice references)")
+    s.add_argument("--prompt", action="store_true", help="multi-speaker: clone each voice by "
+                   "continuing a recording of it (its shortest other clip), not only its embedding")
+    s.add_argument("--prompt-items", action="store_true", help="the control for --prompt: the "
+                   "same sentences and the same reference clip's embedding, without its codes")
+    s.add_argument("--prompt-frames", type=int, default=250, help="longest prompt (50 per s)")
     s.add_argument("--cpu", action="store_true", help="force the CPU (a run has the card)")
     s.set_defaults(fn=cmd_tts_report)
 
@@ -771,6 +833,9 @@ def main(argv=None) -> int:
                    "in this recording's voice")
     s.add_argument("--speaker-id", default="LJ", help="multi-speaker models without --voice: "
                    "a speaker in the training set (LibriSpeech id, or LJ)")
+    s.add_argument("--prompt", default=None, metavar="WAV", help="multi-speaker models: clone "
+                   "this recording's voice by continuing it (a few seconds is enough)")
+    s.add_argument("--prompt-text", default=None, help="with --prompt: what the recording says")
     s.add_argument("--frames", type=int, default=None, help="force a length (50 per second)")
     s.add_argument("--temperature", type=float, default=0.8)
     s.add_argument("--seed", type=int, default=0)

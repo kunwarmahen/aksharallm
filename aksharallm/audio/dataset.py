@@ -448,6 +448,7 @@ class UtteranceDataset:
         if not self.items:
             raise ValueError(f"no {split} utterance fits {max_frames} frames / {max_text} ids")
         self.rng = np.random.default_rng(seed)
+        self._transcripts, self._tok = transcripts, tokenizer
 
     def _load_speakers(self, d: Path, val_clips: int) -> None:
         """`speakers.json` + `speaker_emb.npy`, from `encode_many`. A row's reference is a
@@ -468,15 +469,44 @@ class UtteranceDataset:
         for i in range(n_train):
             self.pool.setdefault(self.speaker[i], []).append(i)
 
-    def reference(self, j: int, rng: np.random.Generator | None = None) -> torch.Tensor:
-        """A speaker embedding for item `j`: another training clip by the same speaker."""
+    def reference_index(self, j: int, rng: np.random.Generator | None = None) -> int:
+        """The manifest index of item `j`'s reference: another training clip by its speaker."""
         i = self.items[j][0]
         pool = self.pool.get(self.speaker[i], [i])
         rng = rng or self.rng
         r = int(pool[rng.integers(len(pool))])
         if r == i and len(pool) > 1:
             r = int(pool[(pool.index(i) + 1) % len(pool)])
-        return torch.from_numpy(self.speaker_emb[r].astype(np.float32))
+        return r
+
+    def reference(self, j: int, rng: np.random.Generator | None = None) -> torch.Tensor:
+        """A speaker embedding for item `j`: another training clip by the same speaker."""
+        return torch.from_numpy(self.speaker_emb[self.reference_index(j, rng)].astype(np.float32))
+
+    def prompt_index(self, j: int, max_frames: int) -> int | None:
+        """The SHORTEST training clip by item `j`'s speaker, other than `j`, if it is at most
+        `max_frames` long: the voice prompt for cloning (`speak(prompt_codes=...)`). Shortest,
+        because the prompt and the new sentence share one context; whole, because a cropped
+        clip's transcript would no longer say what its codes say."""
+        i = self.items[j][0]
+        off = self.base.manifest.offsets
+        frames = lambda k: off[k + 1] - off[k]  # noqa: E731  (a codes manifest counts frames)
+        cands = [k for k in self.pool.get(self.speaker[i], []) if k != i]
+        if not cands:
+            return None
+        k = min(cands, key=frames)
+        return k if frames(k) <= max_frames else None
+
+    def prompt(self, j: int, max_frames: int) -> tuple[list[int], torch.Tensor] | None:
+        """`(transcript ids, codes (N, P))` of item `j`'s voice prompt, or None (see
+        `prompt_index`)."""
+        k = self.prompt_index(j, max_frames)
+        if k is None:
+            return None
+        text = self._transcripts.get(Path(self.base.manifest.names[k]).name)
+        if text is None:
+            return None
+        return self._tok.encode(normalise_text(text)), self.base.clip(k)
 
     def __len__(self) -> int:
         return len(self.items)
@@ -668,14 +698,15 @@ def speaker_of(name: str, corpus_speaker: str) -> str:
 
 def encode_many(codec, corpora: list[str | Path], out_dir: str | Path, *, speaker_model=None,
                 seed: int = 0, max_batch: int = 32, max_batch_s: float = 240.0,
-                progress=print) -> Manifest:
+                one_speaker: str | None = None, progress=print) -> Manifest:
     """Encode several packed corpora into ONE codes directory, for a multi-speaker audio LM.
 
     Writes, beside `codes.bin` + `manifest.json` (the layout `CodeDataset` reads):
 
     * `transcripts.json` -- every corpus's transcripts merged, keyed by clip file name (the
       names are unique across LJSpeech and LibriSpeech, and a clash is refused);
-    * `speakers.json` -- `{clip name: speaker}`, from `speaker_of` (LJSpeech is `LJ`);
+    * `speakers.json` -- `{clip name: speaker}`, from `speaker_of` (LJSpeech is `LJ`), or
+      `one_speaker` for every clip;
     * `speaker_emb.npy` -- `(n_clips, D)` float16, one `speaker-libri` embedding per clip,
       in manifest order, when a speaker model is given. Computed here because the audio is
       already being read; a second pass over 488 hours would cost as much again.
@@ -706,7 +737,9 @@ def encode_many(codec, corpora: list[str | Path], out_dir: str | Path, *, speake
         mm = np.memmap(c / "audio.bin", dtype="<i2", mode="r")
         clips += [(mm, man.offsets[i], man.offsets[i + 1], man.names[i]) for i in range(man.n_clips)]
         one = "LJ" if c.name == "lj" else c.name
-        who.update({Path(x).name: speaker_of(x, one) for x in man.names})
+        # `one_speaker`: every clip is one voice (e.g. the author's test and training takes,
+        # two corpora that would otherwise read as two speakers)
+        who.update({Path(x).name: one_speaker or speaker_of(x, one) for x in man.names})
     order = np.random.default_rng(seed).permutation(len(clips))
 
     # Encoded in BATCHES of similar length (one clip at a time left the card 60% idle: 56 min

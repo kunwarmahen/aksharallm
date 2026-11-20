@@ -12,7 +12,7 @@ import torch
 
 from aksharallm.audio.delay import special_ids
 from aksharallm.audio.lm import AudioLM, AudioLMConfig
-from aksharallm.audio.speech import speak, utterance_loss
+from aksharallm.audio.speech import prompted_text, speak, utterance_loss
 from aksharallm.audio.text import CharTokenizer
 from aksharallm.config import ModelConfig
 
@@ -54,6 +54,33 @@ def test_the_same_text_comes_out_in_the_voice_it_is_asked_for():
         opt.step()
     for clip, v in zip(clips, voices):
         assert torch.equal(speak(model, ids, clip.shape[-1], top_k=1, speaker=v)[0], clip)
+
+
+def test_a_voice_prompt_is_continued_and_only_the_new_frames_come_back():
+    """Two recordings of the same sentence, by the same voice, whose first halves differ.
+    Text and speaker are identical, so only the prompt frames can say which second half
+    follows: if `speak` sampled the prompt instead of forcing it, both prompts would get the
+    same continuation; if it returned the wrong slice, the frames would not line up."""
+    torch.manual_seed(0)
+    tok = CharTokenizer.from_texts(["ab cd"])
+    ids = tok.encode("ab cd")
+    assert prompted_text(tok, tok.encode("ab"), tok.encode("cd")) == ids
+    g = torch.Generator().manual_seed(5)
+    halves = [(torch.randint(0, SIZE, (BOOKS, 4), generator=g),
+               torch.randint(0, SIZE, (BOOKS, 5), generator=g)) for _ in range(2)]
+    whole = [torch.cat(h, dim=-1) for h in halves]
+    v = torch.nn.functional.normalize(torch.randn(1, DIM, generator=g), dim=-1)
+    model = AudioLM(tiny(tok.vocab_size))
+    opt = torch.optim.AdamW(model.parameters(), lr=3e-3, weight_decay=0.0)
+    for _ in range(500):
+        loss = utterance_loss(model, whole, [ids, ids], True, speaker=v.expand(2, -1))
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    for first, second in halves:
+        got = speak(model, ids, second.shape[-1], top_k=1, speaker=v[0], prompt_codes=first)
+        assert got.shape == (1, BOOKS, second.shape[-1])
+        assert torch.equal(got[0], second)
 
 
 def test_a_ragged_multispeaker_batch_scores_what_its_rows_score_alone():
@@ -196,6 +223,16 @@ def test_a_reference_is_another_training_clip_by_the_same_speaker(two_corpora):
             assert i not in hit                     # never the clip itself
     clips, texts = ds.batch(4)
     assert ds.speaker_batch().shape == (4, DIM)
+    # the cloning prompt: the speaker's SHORTEST other training clip, whole, with its words
+    off = ds.base.manifest.offsets
+    for j in range(len(ds)):
+        i = ds.items[j][0]
+        k = ds.prompt_index(j, 999)
+        same = [m for m in ds.pool[ds.speaker[i]] if m != i]
+        assert k in same and off[k + 1] - off[k] == min(off[m + 1] - off[m] for m in same)
+        ids, codes = ds.prompt(j, 999)
+        assert torch.equal(codes, ds.base.clip(k)) and tok.decode(ids[1:-1]) == tr[ds.base.manifest.names[k]]
+        assert ds.prompt_index(j, 0) is None             # too long for the room given
 
 
 def test_a_judged_codebook_list_gets_its_own_report_name():
@@ -205,3 +242,14 @@ def test_a_judged_codebook_list_gets_its_own_report_name():
     base = dict(home_clips=64, per_speaker=3, home="data/audio/lj", other="data/asr/test-clean")
     assert transfer_suffix(SimpleNamespace(**base, judged="4,8")) == ""
     assert transfer_suffix(SimpleNamespace(**base, judged="1,4,8")) == "-judged1-4-8"
+
+
+def test_one_speaker_labels_every_corpus_as_one_voice(two_corpora):
+    """The author's test and training takes are two corpora of one voice; without this they
+    would be two speakers and a reference could never come from the other set."""
+    from aksharallm.audio.dataset import encode_many
+    root, codec, spk, names = two_corpora
+    encode_many(codec, [root / "lj", root / "ls"], root / "one", speaker_model=None,
+                one_speaker="me", progress=None)
+    who = json.loads((root / "one" / "speakers.json").read_text())
+    assert set(who) == set(names) and set(who.values()) == {"me"}

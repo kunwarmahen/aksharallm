@@ -201,8 +201,15 @@ def speak(
     generator: torch.Generator | None = None,
     frames_per_char: float | None = None,
     speaker: torch.Tensor | None = None,
+    prompt_codes: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """TTS. Text ids in, undelayed codes `(1, N, T)` out — feed them to `codec.decode`.
+
+    `prompt_codes` `(N, P)` clones a voice by CONTINUATION: the first P frames are forced to
+    a recording, and `text_ids` must then be that recording's transcript followed by the new
+    sentence (`prompted_text`). To the model it is one longer utterance by one speaker, which
+    is exactly what it trained on; only the frames after the prompt are returned, and
+    `n_frames` counts those alone.
 
     How long to speak, in order of preference: `n_frames` if given; else the model's own
     stop head (`predict_stop`), which ends the utterance when it says codebook 0 is done;
@@ -222,8 +229,11 @@ def speak(
         if not frames_per_char:
             raise ValueError("this model has no stop head: pass n_frames or frames_per_char")
         t_frames = round(frames_per_char * max(1, len(text_ids) - 2))
+    P = 0 if prompt_codes is None else int(prompt_codes.shape[-1])
+    if P >= cfg.max_frames:
+        raise ValueError(f"a {P}-frame prompt leaves no room in {cfg.max_frames} frames")
     if t_frames is not None:
-        t_frames = max(1, min(int(t_frames), cfg.max_frames))
+        t_frames = P + max(1, min(int(t_frames), cfg.max_frames - P))
     text = torch.tensor([text_ids], dtype=torch.long, device=device)
     seq = torch.full((1, n, 1), model.bos_id, dtype=torch.long, device=device)
     prefix = None
@@ -244,7 +254,7 @@ def speak(
         if t_frames is None:
             # The stop head reads the same position the heads do. Asked at s == 0 it would
             # end an utterance before its first frame, so a sentence gets at least one.
-            if s >= 1 and torch.sigmoid(model.stop_head(last).float()).item() > 0.5:
+            if s >= P + 1 and torch.sigmoid(model.stop_head(last).float()).item() > 0.5:
                 t_frames = s
             elif s >= cfg.max_frames:
                 t_frames = cfg.max_frames
@@ -253,6 +263,9 @@ def speak(
         for k in range(n):
             if not (k <= s and (t_frames is None or s < k + t_frames)):
                 continue
+            if s - k < P:                       # inside the prompt: the recording, not a guess
+                nxt[0, k, 0] = prompt_codes[k, s - k]
+                continue
             row = step[k].float() / max(temperature, 1e-6)
             if top_k:
                 cut = torch.topk(row, min(top_k, row.numel())).values[-1]
@@ -260,7 +273,13 @@ def speak(
             nxt[0, k, 0] = torch.multinomial(torch.softmax(row, -1), 1, generator=generator)
         seq = torch.cat([seq, nxt], dim=-1)
         s += 1
-    return undelay(seq[:, :, 1:], n_frames=t_frames)
+    return undelay(seq[:, :, 1:], n_frames=t_frames)[:, :, P:]
+
+
+def prompted_text(tok, prompt_ids: list[int], text_ids: list[int]) -> list[int]:
+    """`[BOS] prompt transcript ␣ new sentence [EOS]`: the text side of voice cloning by
+    continuation, for `speak(prompt_codes=...)`."""
+    return prompt_ids[:-1] + [tok.stoi[" "]] + text_ids[1:]
 
 
 @torch.no_grad()
@@ -372,7 +391,7 @@ def load_tts(path, device: str = "cpu"):
 @torch.no_grad()
 def tts_ladder(model, tok, codec, utterances, originals, transcribe_fn, *, temperature=0.8,
                seed=0, device="cpu", keep=None, duration="real",
-               frames_per_char=None, speakers=None) -> dict:
+               frames_per_char=None, speakers=None, prompts=None) -> dict:
     """The same sentences three ways, judged by one independent recogniser.
 
         original   the recording itself            -> the judge's own error on this voice
@@ -385,17 +404,22 @@ def tts_ladder(model, tok, codec, utterances, originals, transcribe_fn, *, tempe
 
     `utterances` is `[(codes (N, T), text ids)]`, `originals` the matching float waveforms,
     `transcribe_fn(list_of_waves) -> list_of_str`. `keep(j, name, wave)` is called for each
-    waveform, so the caller can write them out to listen to.
+    waveform, so the caller can write them out to listen to. `prompts[j]`, if given, is a
+    `(transcript ids, codes)` recording the TTS continues from (voice cloning); the score is
+    on the new sentence only.
     """
     gen = torch.Generator(device=device).manual_seed(seed)
     refs, waves, lengths = [], {"original": [], "codec": [], "tts": []}, []
     for j, ((codes, ids), orig) in enumerate(zip(utterances, originals)):
         refs.append(plain_words(tok.decode(ids[1:-1])))
         recon = codec.decode(codes.unsqueeze(0).to(device))[0].float().cpu().numpy()
-        spoken = speak(model, ids, codes.shape[-1] if duration == "real" else None,
+        pr = None if prompts is None else prompts[j]
+        spoken = speak(model, ids if pr is None else prompted_text(tok, pr[0], ids),
+                       codes.shape[-1] if duration == "real" else None,
                        temperature=temperature, device=device, generator=gen,
                        frames_per_char=frames_per_char,
-                       speaker=None if speakers is None else speakers[j])
+                       speaker=None if speakers is None else speakers[j],
+                       prompt_codes=None if pr is None else pr[1].to(device))
         lengths.append((codes.shape[-1], spoken.shape[-1]))
         tts = codec.decode(spoken.to(device))[0].float().cpu().numpy()
         for name, w in (("original", orig), ("codec", recon), ("tts", tts)):
