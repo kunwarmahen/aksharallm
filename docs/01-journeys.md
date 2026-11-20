@@ -492,6 +492,19 @@ attention"); the measured answer goes there.
 
 The expensive routes. Each one is a real research direction rather than a switch.
 
+- **Give it a tool** — teach the chat model to write a Python call for what it cannot do in
+  its head (multiplying, counting letters, dates), read the result and answer.
+
+  ```bash
+  python -m aksharallm.tools data                    # 30k teaching conversations
+  python -m aksharallm.tools eval checkpoints/small-code-py-tools/sft_best.pt --label after
+  ```
+
+  **How you know it worked:** on the same held-out problems, accuracy with the tool beats
+  accuracy without it, paired per problem, including the kind it never trained on. The SFT
+  between those two commands is in [doc 6](06-posttraining.md) § "Tool use" (queued
+  2026-11-20).
+
 - **Distillation** — train a small model to copy a big one's *probabilities*, not just its
   answers. Both models must share a tokenizer, so here it is between our own models. Start
   with the controlled pair: the same ~5M student from scratch and taught by `tiny`.

@@ -846,6 +846,60 @@ result rather than a wasted run.
 
 ---
 
+## Tool use: teach the chat model to call Python (built 2026-11-20)
+
+A 300M model cannot multiply two five-digit numbers in its head, and nor can most people.
+Both can write `print(48213 * 9071)`. Tool use is teaching the model to do that, run the
+call, read the result and answer. It is one more SFT dataset, plus a loop at inference.
+
+```mermaid
+flowchart LR
+    U["user: What is 48213 times 9071?"] --> A1["assistant:<br/>&lt;tool&gt;print(48213 * 9071)&lt;/tool&gt;"]
+    A1 --> S["sandbox<br/>(GRPO's reward runner)"]
+    S --> T["tool: 437340123"]
+    T --> A2["assistant:<br/>The answer is 437340123."]
+```
+
+- **The problems** (`aksharallm/tools/problems.py`) are the ones small models are famously bad
+  at: multiplying, adding a list, counting letters in a word, days between two dates,
+  compound interest, the n-th prime. Each has an exact answer, so a reply is right or wrong.
+  Every reference call is run in the sandbox by a test, so the data never says the tool
+  printed something it does not.
+- **The tool's output is read, never trained on.** `tool` is a fourth chat role. Like the
+  user's turns it carries no loss, so the model learns to *write* the call and to *read* the
+  result, and is never taught to predict what the tool says. A model trained to predict the
+  output would learn to guess, which is the habit the tool exists to replace.
+- **One kind is held out of training entirely** (remainders, `a mod b`), so the score can say
+  whether the model learned "use the tool for arithmetic" or only "use it for these six
+  templates".
+- **The loop** (`tools/agent.py`): generate; if the turn contains `<tool>…</tool>`, run it in
+  the sandbox, append the call and a `tool` turn with its stdout, and generate again, at most
+  three times. Greedy throughout, so the score is reproducible.
+- **Scored paired**: the same 140 held-out problems with the tool and **without** it (a call
+  the model writes is left unanswered and it must state a number), by kind, with a sign test
+  on the per-problem differences.
+
+The run starts from `small-code-py-dense-sft`, the best chat model on disk. It trains 2 epochs
+on `data/sft-tools`: 30,000 tool conversations (2,494 blocks) mixed 50/50 with SmolTalk, so
+the model keeps its chat. Then `eval domains` checks for forgetting, as after any SFT.
+
+```bash
+python -m aksharallm.tools data                                        # 30k conversations, JSONL
+python -m aksharallm.data.prepare_sft jsonl --file data/tools/sft.jsonl \
+    --tokenizer data/blend/tokenizer.json --out-dir data/sft-tools-only
+python -m aksharallm.data.mix_sft --part data/sft-tools-only:1.0 --part data/sft:0.05 \
+    --out-dir data/sft-tools --tokenizer data/blend/tokenizer.json
+python -m aksharallm.train.sft --base checkpoints/small-code-py-dense-sft/sft_best.pt \
+    --data-dir data/sft-tools --tokenizer data/blend/tokenizer.json \
+    --out-dir checkpoints/small-code-py-tools --epochs 2 --batch-size 8 --grad-accum 8
+python -m aksharallm.tools eval checkpoints/small-code-py-tools/sft_best.pt --label after
+```
+
+**Queued 2026-11-20** (`logs/queue/day-1120c.sh`), with the same score on the starting model
+first. **Not built yet:** GRPO on these problems, with the reward computed after the tool has
+run. That needs the sampler to run tool calls in the middle of a completion, which
+`sample_groups_batched` does not do.
+
 ## The code, in reading order
 
 Three stages, three trainers, and they share the pretraining loop's shape — read
@@ -875,6 +929,14 @@ Three stages, three trainers, and they share the pretraining loop's shape — re
 | 7 | same file | `CodeReward` / `SubstringReward` behind the `RewardFn` protocol, then `sample_group` → `build_batch` → `main` |
 | 8 | [`aksharallm/infer/sandbox.py`](../aksharallm/infer/sandbox.py) | `run_program` — the reward itself. Read its docstring on what the isolation is and is not |
 | 9 | [`scripts/stage.sh`](../scripts/stage.sh) | the gate: which checkpoint each stage requires before it will start ([doc 10](10-running-and-watching.md)) |
+
+**Part 4 — tool use**
+
+| # | file | what to look for |
+|---|---|---|
+| 10 | [`aksharallm/tools/problems.py`](../aksharallm/tools/problems.py) | `make` (seven kinds, each with its reference call and exact answer), `conversation` (the four turns), `HELD_OUT_KIND` |
+| 11 | [`aksharallm/tools/agent.py`](../aksharallm/tools/agent.py) | `solve` (the loop: generate, run, append the `tool` turn, again), then `score` (paired, with and without the tool) |
+| 12 | [`aksharallm/data/prepare_sft.py`](../aksharallm/data/prepare_sft.py) → `is_valid` | the `tool` role, allowed and never trained on (`render_chat` trains on assistant turns alone). `tests/test_tools.py` |
 
 What pins it: `tests/test_pipeline.py::test_sft_mask_alignment_matches_targets` and the
 `test_dpo_*` group (`test_dpo_loss_is_ln2_when_policy_equals_reference` is the one to read
