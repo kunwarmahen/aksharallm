@@ -42,8 +42,8 @@ def section_of(text: str) -> str:
     return after.split("\n## ", 1)[0]
 
 
-def test_there_are_twentyfour_chapters():
-    assert len(CHAPTERS) == 25, [p.name for p in CHAPTERS]
+def test_there_are_twentysix_chapters():
+    assert len(CHAPTERS) == 26, [p.name for p in CHAPTERS]
 
 
 @pytest.mark.parametrize("doc", CHAPTERS, ids=lambda p: p.stem)

@@ -865,6 +865,52 @@ speakers, judged by `asr-libri460`:
   voice: the report's held-out sentences are by speakers it trained on, and the cosine on the
   1089 fox has not been measured against that speaker's own recordings.
 
+### Cloning from a prompt, and voices it never heard (built 2026-11-20)
+
+The report above holds out *sentences*, not *speakers*: every voice in it was also in
+training. Two additions answer the harder question, and both need no new training.
+
+- **Speakers it never heard.** `encode-many` of LibriSpeech **test-clean** (40 speakers, none
+  in train-clean-100/360) with the same codec and speaker model gives
+  `data/audio/many-unseen-codes`; `tts-report --codes DIR --val-clips 200` scores the TTS
+  on it, each sentence in its own (new) speaker's voice. The same for the author's 80
+  recorded takes (`data/audio/many-me-codes`, `encode-many --one-speaker me`, since two
+  corpora of one voice would otherwise read as two speakers).
+- **Cloning by continuation** (`speak --prompt clip.wav --prompt-text "what it says"`,
+  `tts-report --prompt`). The model already speaks *continuations*: a training row is one
+  utterance by one speaker. So a recording's codes are forced in as the first frames, its
+  transcript goes in front of the new sentence (`speech.prompted_text`), and the model carries
+  on in that voice. Only the frames after the prompt are returned. The report's prompt is the
+  speaker's **shortest** other clip (at most 250 frames, 5 s), **whole**: a cropped clip's
+  transcript would no longer say what its codes say. Sentences that do not fit beside their
+  prompt in 768 frames are skipped and counted.
+
+```mermaid
+flowchart LR
+    P["a recording:<br/>its codes + its words"] --> R["[speaker][prompt words ␣ new words]<br/>[BOS + prompt codes →"]
+    R --> M["audiolm-many"]
+    M --> N["→ new frames]<br/>returned alone"]
+```
+
+The control for cloning is `--prompt-items`: the **same** sentences and the **same**
+reference clip's speaker embedding, with only the codes prompt left out. So a paired
+comparison isolates exactly what the codes add. `tests/test_multispeaker.py` pins it: a model
+that memorised two recordings of one sentence, by one voice, whose first halves differ, must
+continue each prompt with its own second half. Only the prompt can tell them apart. The test
+fails if the prompt is sampled rather than forced, or if the returned slice is off by one.
+
+First try, on CPU, with the 30k model: speaker 1089 (unseen) prompted with one of his own
+clips said the fox sentence as *"the quick brown fox shums over the lazy dibius surprised"*,
+in his voice. The scored runs are queued below.
+
+**And more steps.** `configs/audiolm-many-long.yaml` continues `audiolm-many` from a copy of
+its checkpoint to 60k steps. The cosine is recomputed over 60k, so the learning rate jumps
+from its 30k floor to about half the peak and then decays again; a loss bump is expected.
+Its log starts at step 30,000.
+
+**Queued 2026-11-20** (`logs/queue/day-1120.sh`): the unseen pair, the author's pair and the
+seen pair on the 30k model, then `audiolm-many-long`, then its seen and unseen reports.
+
 **Does codebook 0 carry the words? No more than before.** The content codebook's open
 question, tested by `codec-transfer --judged 1,4,8`: the recogniser transcribes audio decoded
 from codebook 0 *alone*, for both codecs, on the same clips.

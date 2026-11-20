@@ -95,6 +95,7 @@ DOC_HINTS = (
     ("aksharallm/lora", "docs/12-lora.md"),
     ("aksharallm/synth", "docs/14-synthetic-data.md"),
     ("aksharallm/learn", "docs/16-learning-path.md"),
+    ("aksharallm/world", "docs/25-world-model.md"),
     ("aksharallm/infer/speculative", "docs/07-inference.md"),
     ("aksharallm/infer", "docs/07-inference.md"),
     ("aksharallm/serve", "docs/17-serving.md"),

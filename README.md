@@ -119,6 +119,7 @@ grep is one line away from the prose. `tests/test_docs.py` fails if either point
 | 22 | [Vision](docs/22-vision.md) | A picture into a model that has never seen one: patches instead of a codec, a two-layer projector that is the whole of LLaVA, and a corpus whose captions are known exactly so the answer can be *scored* rather than admired — plus the double shift that trained to a loss of 0.003 and captioned everything `'w green'` |
 | 23 | [Speech recognition](docs/23-speech-recognition.md) | Dictation that is still right on day two: a from-scratch Conformer trained with a from-scratch CTC (bit-identical to PyTorch's in float64), measured against a published list of what a dictation app gets wrong once used — and the first check found our own model writing words on silence until it was shown clips with nothing to say. Then the dictation layer: a punctuation tagger that cannot write a word of its own, corrections that teach it your names (8% → 54% after one fix), and a keyboard shortcut that types into any app |
 | 24 | [Distillation](docs/24-distillation.md) | A small model taught by a big one: the teacher's whole next-token distribution as a second target, softened by a temperature and scaled by T² so the temperature does not quietly turn it down. Only between models that share a tokenizer, checked by the file's contents rather than its size. A fourth objective in the one training loop, with the logits computed in recomputed chunks because they, not the weights, are the memory |
+| 25 | [A world model](docs/25-world-model.md) | The transformer predicting the next frame of a game we wrote (push boxes onto goals) from the frames before it and an action. Every cell is a token, so there is no codec and no new trainer. Scored exactly, because we know the rules: whole frames by outcome against what copying the last frame would score, and open-loop rollouts that count impossible frames |
 
 ---
 
@@ -952,18 +953,17 @@ the voice of a reference clip, closer to its own speaker on 37 of 40 sentences, 
 
 Not built yet, in the order they depend on each other or by value per GPU hour:
 
-- **Voice cloning from a 3-second prompt** (the prompt's codes before the text, in place of
-  `audiolm-many`'s speaker embedding), then **TTS in the author's own voice**, using the
-  dictation recordings.
+- **Voice cloning from a prompt**: ✅ built 2026-11-20 (`speak --prompt`, `tts-report
+  --prompt`, scored on 40 unseen speakers and on the author's own recordings; queued).
 - **Small full-duplex voice chat**: listen and speak at once, two audio streams and a text
   stream. Every piece exists here; it waits for the multi-speaker codec.
-- **Hybrid linear attention**: Gated DeltaNet layers with one full-attention layer in four,
-  at 13.8M, judged on needle-in-a-haystack recall as well as loss.
+- **Hybrid linear attention**: ✅ built 2026-11-20 (`model.full_attn_every`, a Gated DeltaNet
+  layer from scratch, [doc 4](docs/04-model.md)); `tiny-hybrid` queued against `tiny-adamw`.
 - **Turning a trained autoregressive model into a diffusion one** instead of training from
   scratch, measured in tokens per forward pass.
 - **A small model for agents**: tool-use SFT on the 300M, with GRPO graded by the sandbox.
-- **A toy world model**: a game we write, a frame tokenizer, and the transformer predicting
-  the next frame from an action, so its accuracy can be checked exactly.
+- **A toy world model**: ✅ built 2026-11-20 ([doc 25](docs/25-world-model.md)); `world-sokoban`
+  queued.
 
 ---
 

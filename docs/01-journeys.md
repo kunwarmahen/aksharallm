@@ -472,6 +472,18 @@ On this project, extended 4x, the 300M model found a needle at 4,096 tokens **92
 time** (chance is 25%) — while the 13.8M model sat at chance. Retrieval over a long context
 is a capability that only appears with scale; you cannot get it by asking.
 
+**Or change the memory itself.** A hybrid model keeps softmax attention in one block of N
+and puts a Gated DeltaNet layer (a fixed-size memory per head, no KV cache) in the rest:
+
+```bash
+scripts/experiment.sh tiny-hybrid       # tiny-adamw + full_attn_every: 3 (queued 2026-11-20)
+python -m aksharallm.longctx curve checkpoints/tiny-hybrid/ckpt_best.pt --len 1024 --windows 32
+```
+
+**How you know it worked:** its val loss sits near `tiny-adamw`'s 1.4752, and its loss by
+position past 512 rises less. It is built and tested ([doc 4](04-model.md) § "Linear
+attention"); the measured answer goes there.
+
 📖 [chapter 19 — long context](19-long-context.md)
 
 ---
@@ -557,7 +569,9 @@ The expensive routes. Each one is a real research direction rather than a switch
   2026-11-19:** val 1.4418 vs 1.4752 at 8,000 steps, and still ahead at matched wall clock
   (Muon's step is 23% slower). One seed at 13.8M, so a direction, not a law. **At ~100M (run
   2026-11-20):** `scripts/experiment.sh small-student-muon`, val 3.267 vs `small-student`'s
-  3.371, ARC-Easy 43.2 vs 39.0% (paired p 0.006), for 3.5% more wall clock.
+  3.371, ARC-Easy 43.2 vs 39.0% (paired p 0.006), for 3.5% more wall clock. Over the long
+  budget: `scripts/experiment.sh small-student-long-muon` against `small-student-long`'s
+  3.0616 (running 2026-11-20).
 - **Scale up** — a bigger model on more tokens. The honest answer to most quality problems,
   and the one that costs the most.
 
@@ -576,11 +590,27 @@ flowchart TD
     T --> V["🖼️ vision<br/>an image is already a grid of numbers"]
     A --> R["🎙️ dictation<br/>speech in, text out<br/>(its own encoder, CTC)"]
     T --> D["🎲 diffusion<br/>fill in blanks instead of<br/>predicting the next token"]
+    T --> W["🎮 world model<br/>the next frame of a game<br/>we wrote"]
     classDef s fill:#2d6cdf,stroke:#1a4a9e,color:#fff
     class T s
 ```
 
-The point of all three is how little had to change. Audio needed a codec and got TTS and ASR
+**A world model** is the fourth: the transformer predicting the next *frame* of a game we
+wrote (push boxes onto goals), from the frames before it and the action. Each cell is a
+token, so it needs no codec and no new trainer:
+
+```bash
+python -m aksharallm.world prepare                 # 60,000 random games -> data/world/
+scripts/experiment.sh world-sokoban                # ~10 min on a 3090 (queued 2026-11-20)
+python -m aksharallm.world eval checkpoints/world-sokoban/ckpt_best.pt
+python -m aksharallm.world play checkpoints/world-sokoban/ckpt_best.pt
+```
+
+**How you know it worked:** next-frame exact accuracy on `moved` and `pushed` (where copying
+the last frame scores 0%), and rollouts that stay exact for several steps without producing
+an impossible frame. 📖 [chapter 25 — world model](25-world-model.md)
+
+The point of every one is how little had to change. Audio needed a codec and got TTS and ASR
 as *one model in two orders*. Vision needed no codec at all — patches replace one — and
 trains 0.82M new parameters against 13.77M frozen ones. Diffusion needed no second trainer:
 the existing pretraining loop grew one seam for the objective.
@@ -620,6 +650,10 @@ python -m aksharallm.audio encode-many checkpoints/codec-many/ckpt_best.pt --cor
 scripts/audio.sh audiolm-many       # multi-speaker TTS on codec-many, voice from a reference clip (run 2026-11-20: 57% WER, own voice 37/40)
 python -m aksharallm.audio speak checkpoints/audiolm-many/ckpt_best.pt "Any sentence." --voice logs/audio/speak/voice-1089-unseen.wav
 python -m aksharallm.audio codec-transfer checkpoints/codec-many-content/ckpt_best.pt --judged 1,4,8   # does codebook 0 alone carry the words? (no better than codec-many's)
+python -m aksharallm.audio speak checkpoints/audiolm-many/ckpt_best.pt "Any sentence." --prompt logs/audio/speak/voice-1089-unseen.wav --prompt-text "after early nightfall the yellow lamps would light up here and there the squalid quarter of the brothels"   # clone a voice by continuing a recording of it
+python -m aksharallm.audio encode-many checkpoints/codec-many/ckpt_best.pt --corpus data/asr/test-clean --out data/audio/many-unseen-codes --speaker checkpoints/speaker-libri/ckpt_best.pt
+python -m aksharallm.audio tts-report checkpoints/audiolm-many/ckpt_best.pt --codes data/audio/many-unseen-codes --val-clips 200 --prompt   # speakers it never heard, cloned
+scripts/audio.sh audiolm-many-long  # audiolm-many continued to 60k steps (queued 2026-11-20)
 python -m aksharallm.audio speaker-eval checkpoints/speaker-libri/ckpt_best.pt   # its EER on unseen speakers (0.42%)
 python -m aksharallm.vision caption vision-shapes  # caption held-out images and score them
 scripts/audio.sh asr-synth                         # a recogniser, no download, minutes

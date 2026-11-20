@@ -303,6 +303,63 @@ a window costs no memory and saves no time — see [doc 19](19-long-context.md).
 
 ---
 
+## Linear attention: Gated DeltaNet, and a hybrid model
+
+Softmax attention compares each query with **every** key before it. Its memory is the KV
+cache, which grows with the context, and its cost per token grows too. A linear-attention
+layer keeps a fixed-size memory instead: one `head_dim × head_dim` matrix `S` per head,
+which each token updates and the query reads.
+
+```mermaid
+flowchart LR
+    X["token t<br/>(q, k, v, a, b)"] --> F["S ← a · S<br/>forget a little"]
+    F --> R["read = kᵀS<br/>what k returns now"]
+    R --> W["S ← S + k · b(v − read)ᵀ<br/>write only the correction"]
+    W --> O["o = qᵀS"]
+```
+
+- **The delta rule** is the line that matters. The first linear attentions only ever *added*
+  `k vᵀ`, so two keys pointing the same way blurred together. Here a token reads what the
+  memory already says for its key and writes only the difference, scaled by `b ∈ (0, 1)`. That
+  is one step of online least squares: write `v1` at `k`, then `v2` at the same `k`, and
+  reading `k` returns `v2`, not `v1 + v2` (`test_the_delta_rule_recalls_an_overwritten_value_exactly`).
+- **The gate** `a ∈ (0, 1)` (from Mamba-2) lets a head forget on purpose. Heads start with a
+  spread of half-lives, from a few tokens to a few thousand.
+- **Around it**, the layer is the one Gated DeltaNet and Qwen3-Next use: q/k/v projections, a
+  4-tap causal depthwise convolution, L2-normalised q and k, and an output gate
+  `RMSNorm(o) · silu(W_g x)`. It ignores RoPE, because a recurrence already knows the order of
+  what it read.
+
+**Two forms of the same function.** `recurrent_gated_delta_rule` is the update above, one
+token at a time: obviously right, and too slow to train with. `chunk_gated_delta_rule` cuts
+the sequence into chunks of 64. Inside a chunk, the 64 sequential corrections become one
+triangular solve, `(I + A)⁻¹` with `A = strictly_lower((b·k)kᵀ ∘ Γ)` (the "WY" form), and
+the state is carried only from chunk to chunk. `tests/test_deltanet.py` holds the two forms to
+each other in float64, on a length that is not a multiple of the chunk, for values (1e-10)
+and gradients (1e-9). Six of seven deliberate mutants failed the suite. The seventh
+(leaving the diagonal in `A`) is not a bug: `solve_triangular(unitriangular=True)` never reads
+the diagonal.
+
+**The hybrid.** `model.full_attn_every: N` keeps softmax attention in one block of N
+(blocks N−1, 2N−1, …) and puts a Gated DeltaNet layer in the others. Everything else (norms,
+residuals, the FFN, the trainer) is unchanged; the layer takes `Attention`'s arguments, so
+`Block` picks one or the other in a single line. What it costs:
+
+- **Speed.** The chunked recurrence is plain PyTorch, not a fused kernel. On `tiny`'s shape,
+  compiled, a hybrid microbatch took 190 ms against 108 ms for all-softmax attention
+  (measured while another run shared the card, so read only the ratio, about 1.8×).
+- **Generation.** No KV cache for the recurrent blocks, so `infer/generate.py` re-reads the
+  whole prefix for every token: quadratic and slow, but correct, which is what a training
+  sample and the Playground need. A recurrent decode (carry `S` and the conv tail) is the
+  obvious next step. The serving engine refuses a hybrid model.
+
+The experiment is `configs/tiny-hybrid.yaml`: `tiny-adamw` plus `full_attn_every: 3` (four
+DeltaNet blocks, two attention blocks; 14.39M parameters against 13.77M). It asks two
+things: val loss at matched steps and at matched wall clock, and loss by position **past**
+the trained 512 tokens (`longctx curve --len 1024`). Four of its six blocks have no
+positions at all, so the question is whether it degrades less beyond its window.
+**Queued 2026-11-20** (`logs/queue/day-1120b.sh`); the result goes here.
+
 ## Grouped-Query Attention (GQA)
 
 Standard attention gives every head its own keys and values. GQA lets several query heads
@@ -515,6 +572,7 @@ data flow:
 | 9 | [`aksharallm/model/moe.py`](../aksharallm/model/moe.py) | optional — the one component that replaces step 6's FFN. [doc 15](15-moe.md) |
 | 10 | [`aksharallm/model/flash.py`](../aksharallm/model/flash.py) | optional — step 4's attention, written out in Triton instead of called. Read the module docstring first (it is the derivation), then `_fwd_kernel`'s four-line online-softmax rescale, then `_bwd_kv_kernel` / `_bwd_q_kernel` and why there are two of them |
 | 11 | [`aksharallm/model/rope.py`](../aksharallm/model/rope.py) | optional — step 5's frequency ladder, and the four ways of stretching it past the trained window. [doc 19](19-long-context.md) |
+| 12 | [`aksharallm/model/deltanet.py`](../aksharallm/model/deltanet.py) | optional — the other mixer. `recurrent_gated_delta_rule` first (the definition), then `chunk_gated_delta_rule` (the same function, chunked), then `GatedDeltaNet.forward`, and `ModelConfig.linear_layer` for which blocks get it. `tests/test_deltanet.py` |
 
 What pins it: `tests/test_model.py` is the shortest honest summary of this chapter —
 `test_causality`, `test_rope_preserves_norm_and_relative_position`, `test_weight_tying`,
