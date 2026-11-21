@@ -1,7 +1,7 @@
 """The Tools tab's back end: does the chat model reach for a Python call, and is it right?
 
 * **results** — every `tools eval` on disk (`logs/tools/*.json`), by kind, with and without
-  the tool; the held-out kind (never in training) flagged, because it is the column that says
+  the tool; the held-out kinds of the report's problem set (v1 or v2) flagged, because it is the column that says
   whether the model learned an idea or six templates.
 * **compare** — two reports on the same problems, paired per problem (before vs after the
   tool SFT), through `tools.agent.compare`, the same function `tools compare` prints.
@@ -75,7 +75,7 @@ class ToolUse:
         return [{"name": p.name, "checkpoint": d.get("checkpoint"), "n": d.get("n"),
                  "tool": d.get("tool"), "direct": d.get("direct"), "called": d.get("called"),
                  "paired": d.get("paired"), "by_kind": d.get("by_kind"),
-                 "held_out": HELD_OUT_KIND}
+                 "set": d.get("set", "v1"), "held_out": d.get("held_out") or [HELD_OUT_KIND]}
                 for p, d in self._rows() if "by_kind" in d]
 
     def overview(self) -> dict:
@@ -138,8 +138,12 @@ class ToolUse:
     def start(self, spec: dict) -> dict:
         kind = spec.get("kind")
         cpu = ["--cpu"] if training(self.root) else []
+        pset = spec.get("set") or "v1"
+        if pset not in ("v1", "v2"):
+            raise JobError(f"unknown problem set {pset!r}")
         if kind == "data":
-            return self.jobs.start(["data"], "write 30,000 teaching conversations")
+            return self.jobs.start(["data", "--set", pset],
+                                   f"write 30,000 teaching conversations (set {pset})")
         if kind == "eval":
             rel = str(spec.get("checkpoint") or "")
             if rel not in {c["rel"] for c in self.checkpoints()}:
@@ -150,6 +154,6 @@ class ToolUse:
             per = int(spec.get("per_kind") or 20)
             if not 1 <= per <= 100:
                 raise JobError("problems per kind must be 1-100")
-            return self.jobs.start(["eval", rel, "--label", label, "--per-kind", str(per), *cpu],
-                                   f"score {rel} ({label})")
+            return self.jobs.start(["eval", rel, "--set", pset, "--label", label,
+                                    "--per-kind", str(per), *cpu], f"score {rel} ({label}, set {pset})")
         raise JobError(f"unknown job {kind!r}")

@@ -75,3 +75,34 @@ def test_the_loop_runs_the_call_and_hands_back_its_output(monkeypatch):
     seen.clear()
     r = agent.solve(None, None, "What is 6 times 7?", use_tool=False)
     assert r["calls"] == 0 and "42" not in seen[1][-1]
+
+
+# ---- set v2: twenty trained kinds, four held out (does breadth turn templates into a habit?) ----
+
+from aksharallm.tools.problems import SETS, eval_kinds  # noqa: E402
+
+
+@needs_sandbox
+def test_every_v2_reference_call_prints_its_answer():
+    kinds = eval_kinds("v2")
+    for p in problems(2 * len(kinds), seed=11, kinds=kinds):
+        r = sandbox.run_program(p.code, timeout_s=5.0)
+        assert agent.same_number(agent.final_number(r.stdout), p.answer), (p.kind, p.code, r)
+
+
+def test_a_set_never_trains_on_what_it_holds_out():
+    for name, s in SETS.items():
+        assert not set(s["train"]) & set(s["held_out"]), name
+        assert {p.kind for p in problems(10 * len(s["train"]), seed=2, kinds=s["train"])} \
+            == set(s["train"])
+    assert len(SETS["v2"]["train"]) == 20 and "remainder" in SETS["v2"]["held_out"]
+    assert set(SETS["v1"]["train"]) < set(SETS["v2"]["train"])
+
+
+def test_v1_reports_still_mean_what_they_meant():
+    """A saved v1 report was asked `problems(n, 99, KINDS)`; eval_kinds('v1') must be that
+    exact tuple, in that order, or a v1 re-run would ask different questions."""
+    assert eval_kinds("v1") == KINDS
+    a = [p.question for p in problems(14, 99, KINDS)]
+    b = [p.question for p in problems(14, 99, eval_kinds("v1"))]
+    assert a == b

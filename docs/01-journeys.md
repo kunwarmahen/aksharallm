@@ -507,7 +507,10 @@ The expensive routes. Each one is a real research direction rather than a switch
   accuracy without it, paired per problem, including the kind it never trained on. The SFT
   between those two commands is in [doc 6](06-posttraining.md) § "Tool use". Measured
   2026-11-20: 120 of 120 on the trained kinds (from 2), 0 of 20 on the held-out kind, where it
-  called the tool and wrote a multiplication instead of `%`.
+  called the tool and wrote a multiplication instead of `%`. Set v2 (twenty trained kinds,
+  four held out) asks whether breadth fixes that:
+  `python -m aksharallm.tools data --set v2`, then the same SFT, then
+  `python -m aksharallm.tools eval <ckpt> --set v2` on both tool models and `tools compare`.
 
 - **Distillation** — train a small model to copy a big one's *probabilities*, not just its
   answers. Both models must share a tokenizer, so here it is between our own models. Start

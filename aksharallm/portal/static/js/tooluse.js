@@ -16,8 +16,10 @@ function kindsTable(a, b) {
   const head = b
     ? '<tr><th>kind</th><th>a: with tool</th><th>b: with tool</th><th>a: without</th><th>b: without</th><th>b called the tool</th></tr>'
     : '<tr><th>kind</th><th>with the tool</th><th>without</th><th>called the tool</th></tr>';
+  const held = a.held_out || [tu.held];
   const row = (k) => {
-    const name = k === tu.held ? `<span class="tu-held">${escHtml(k)} (never trained on)</span>` : escHtml(k);
+    const name = held.includes(k)
+      ? `<span class="tu-held">${escHtml(k)} (held out of set ${escHtml(a.set || 'v1')})</span>` : escHtml(k);
     const last = b || a;
     const called = `${Math.round(last.by_kind[k].called * last.by_kind[k].n)}/${last.by_kind[k].n}`;
     return b
@@ -70,7 +72,7 @@ async function load() {
   const res = await api('/api/tooluse');
   tu.results = res.results || [];
   tu.held = res.held_out;
-  const opts = tu.results.map((r) => `<option value="${escHtml(r.name)}">${escHtml(r.name)} — ${fmt.pct(r.tool)} with the tool</option>`).join('');
+  const opts = tu.results.map((r) => `<option value="${escHtml(r.name)}">${escHtml(r.name)} — set ${escHtml(r.set || 'v1')}, ${fmt.pct(r.tool)} with the tool</option>`).join('');
   const keepA = $('#tu-a').value; const keepB = $('#tu-b').value;
   $('#tu-a').innerHTML = opts;
   $('#tu-b').innerHTML = '<option value="">(nothing)</option>' + opts;
@@ -118,8 +120,10 @@ registerTab('tooluse', {
     $('#tu-b').onchange = show;
     $('#tu-ask').onclick = ask;
     $('#tu-question').onkeydown = (e) => { if (e.key === 'Enter') ask(); };
-    $('#tu-eval').onclick = () => tu.job.start({ kind: 'eval', checkpoint: $('#tu-ckpt').value, label: $('#tu-label').value });
-    $('#tu-data').onclick = () => tu.job.start({ kind: 'data' });
+    $('#tu-eval').onclick = () => tu.job.start({
+      kind: 'eval', checkpoint: $('#tu-ckpt').value, label: $('#tu-label').value, set: $('#tu-set').value,
+    });
+    $('#tu-data').onclick = () => tu.job.start({ kind: 'data', set: $('#tu-set').value });
     await load().catch((e) => flash(`tools: ${e.message}`, 'error'));
   },
   leave() { if (tu.job) tu.job.stop(); },

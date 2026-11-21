@@ -174,3 +174,17 @@ def test_the_world_tab_reads_a_keys_result_and_both_datasets(tmp_path):
     assert ov["results"][0]["calibration"]["kl"] == 0.2
     assert {(x["dir"], x["game"]) for x in ov["data"]} == {("data/world", "sokoban"),
                                                          ("data/world-keys", "keys")}
+
+
+def test_the_tools_jobs_take_a_problem_set_and_refuse_an_unknown_one(tmp_path, monkeypatch):
+    from aksharallm.portal.tooluse import ToolUse
+    t = ToolUse(tmp_path)
+    monkeypatch.setattr(t, "checkpoints", lambda: [{"rel": "c.pt"}])
+    started = []
+    monkeypatch.setattr(t.jobs, "start", lambda argv, label: started.append(argv) or {})
+    t.start({"kind": "data", "set": "v2"})
+    t.start({"kind": "eval", "checkpoint": "c.pt", "set": "v2", "label": "x"})
+    assert started[0] == ["data", "--set", "v2"]
+    assert started[1][:4] == ["eval", "c.pt", "--set", "v2"]
+    with pytest.raises(JobError, match="problem set"):
+        t.start({"kind": "data", "set": "v3; rm -rf ~"})

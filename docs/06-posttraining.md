@@ -922,7 +922,7 @@ SFT: 148 steps, 8.6 minutes, val 0.705.
 | **remainder** (held out) | 0 / 0 | **0 / 0** | 20 |
 | all | 2 / 2 | **120 / 0** | 140 |
 
-- **On the five trained kinds it is perfect**: 120 of 120, against 2 for the starting model,
+- **On the six trained kinds it is perfect**: 120 of 120, against 2 for the starting model,
   which never once wrote a call. Paired, with-tool after vs direct before: 118 won, 0 lost.
 - **The held-out kind is the real finding.** It called the tool on all 20 remainder
   questions and got all 20 wrong, the same way every time: it wrote `print(a * b)`.
@@ -933,6 +933,47 @@ SFT: 148 steps, 8.6 minutes, val 0.705.
 - **Without the tool it now answers nothing right** (direct 2 → 0). It still writes the call
   and, told there is no tool, guesses. A model trained to delegate unlearns trying.
 - **Forgetting is small**: Python held-out loss 1.322 → 1.331 on the blend's Python span.
+
+### Set v2: does breadth turn templates into a habit? (built 2026-11-20, queued)
+
+The obvious next question, asked as a controlled pair. Set `v2` trains **twenty** kinds
+instead of six: the six from v1 plus subtract, divide, power, square root, mean, maximum,
+minimum, factorial, lcm, vowels, length, percent, seconds and Fibonacci. It holds out
+**four**, each next to something trained, so a model that learned the idea has something to
+stand on and one that learned templates does not:
+
+| held out of v2 | its nearest trained kind | the call it needs |
+|---|---|---|
+| remainder (also v1's held-out kind) | divide | `a % b` |
+| gcd | lcm | `math.gcd(a, b)` |
+| digit sum | letters, length | `sum(int(d) for d in str(n))` |
+| day of the year | days between dates | `.timetuple().tm_yday` |
+
+Everything else is v1's recipe: 30,000 conversations (so 1,500 per kind instead of 5,000),
+the same 5% SmolTalk mix, the same start model, SFT and schedule. Both tool models are then
+scored on the same 480 v2 problems (24 kinds × 20), so `tools compare` pairs them per
+problem. The four held-out rows are the result; the fourteen kinds v1 never saw are a second,
+weaker one (they are held out for v1 but trained for v2).
+
+```bash
+python -m aksharallm.tools data --set v2                              # -> data/tools/sft-v2.jsonl
+python -m aksharallm.data.prepare_sft jsonl --file data/tools/sft-v2.jsonl \
+    --tokenizer data/blend/tokenizer.json --out-dir data/sft-tools-v2-only
+python -m aksharallm.data.mix_sft --part data/sft-tools-v2-only:1.0 --part data/sft:0.05 \
+    --out-dir data/sft-tools-v2 --tokenizer data/blend/tokenizer.json
+python -m aksharallm.train.sft --base checkpoints/small-code-py-dense-sft/sft_best.pt \
+    --data-dir data/sft-tools-v2 --tokenizer data/blend/tokenizer.json \
+    --out-dir checkpoints/small-code-py-tools-v2 --epochs 2 --batch-size 8 --grad-accum 8
+python -m aksharallm.tools eval checkpoints/small-code-py-tools/sft_best.pt --set v2 --label setv2
+python -m aksharallm.tools eval checkpoints/small-code-py-tools-v2/sft_best.pt --set v2 --label setv2
+python -m aksharallm.tools compare logs/tools/small-code-py-tools-setv2.json \
+    logs/tools/small-code-py-tools-v2-setv2.json
+```
+
+The Tools tab's job box has a **Problem set** picker for both jobs, and each report marks the
+held-out kinds of its own set. Every v2 reference call is run in the sandbox by a test, and
+a test pins that `--set v1` asks exactly the questions it always asked, so old reports still
+mean what they meant.
 
 **Not built yet:** GRPO on these problems, with the reward computed after the tool has
 run. That needs the sampler to run tool calls in the middle of a completion, which
@@ -972,7 +1013,7 @@ Three stages, three trainers, and they share the pretraining loop's shape — re
 
 | # | file | what to look for |
 |---|---|---|
-| 10 | [`aksharallm/tools/problems.py`](../aksharallm/tools/problems.py) | `make` (seven kinds, each with its reference call and exact answer), `conversation` (the four turns), `HELD_OUT_KIND` |
+| 10 | [`aksharallm/tools/problems.py`](../aksharallm/tools/problems.py) | `make` (seven kinds, each with its reference call and exact answer) and `_make_v2` (seventeen more), `conversation` (the four turns), `HELD_OUT_KIND`, and `SETS` (v1: 6 trained / 1 held out; v2: 20 / 4) with `eval_kinds` |
 | 11 | [`aksharallm/tools/agent.py`](../aksharallm/tools/agent.py) | `solve` (the loop: generate, run, append the `tool` turn, again), then `score` (paired, with and without the tool) |
 | 12 | [`aksharallm/data/prepare_sft.py`](../aksharallm/data/prepare_sft.py) → `is_valid` | the `tool` role, allowed and never trained on (`render_chat` trains on assistant turns alone). `tests/test_tools.py` |
 | 13 | [`aksharallm/tools/agent.py`](../aksharallm/tools/agent.py) → `compare` · [`portal/tooluse.py`](../aksharallm/portal/tooluse.py) | two reports paired per problem, refusing different problems; the Tools tab (files are `tooluse.*`, a generic word kept out of static filenames). `tests/test_portal_newtabs.py` |

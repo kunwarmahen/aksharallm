@@ -1,6 +1,7 @@
 """`python -m aksharallm.tools data|eval` (docs/06 § "Tool use").
 
-  data   write the teaching conversations as JSONL, for `prepare_sft jsonl`
+  data   write the teaching conversations as JSONL, for `prepare_sft jsonl` (--set v2: twenty
+         kinds, four held out)
   eval   paired: the same held-out problems with the tool and without, by kind, including a
          kind never seen in training; JSON to logs/tools/<run>-<label>.json
   ask    one question to a chat checkpoint, with or without the tool; prints the transcript
@@ -24,13 +25,16 @@ EVAL_SEED = 99
 
 
 def cmd_data(args) -> int:
-    from .problems import TRAIN_KINDS, conversation, problems
-    out = Path(args.out)
+    from .problems import SETS, conversation, problems
+    train = SETS[args.set]["train"]
+    out = Path(args.out or ("data/tools/sft.jsonl" if args.set == "v1"
+                            else f"data/tools/sft-{args.set}.jsonl"))
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w") as f:
-        for p in problems(args.n, args.seed, TRAIN_KINDS):
+        for p in problems(args.n, args.seed, train):
             f.write(json.dumps({"messages": conversation(p), "kind": p.kind}) + "\n")
-    print(f"wrote {args.n} conversations ({', '.join(TRAIN_KINDS)}) -> {out}")
+    print(f"wrote {args.n} conversations, set {args.set} ({len(train)} kinds: "
+          f"{', '.join(train)}) -> {out}")
     return 0
 
 
@@ -38,18 +42,20 @@ def cmd_eval(args) -> int:
     from ..infer.cli import load_model
     from ..tokenizer.tokenizer import Tokenizer
     from .agent import score
-    from .problems import KINDS, problems
+    from .problems import SETS, eval_kinds, problems
     device = "cuda" if torch.cuda.is_available() and not args.cpu else "cpu"
     model, ckpt = load_model(args.checkpoint, device)
     tok = Tokenizer(args.tokenizer)
-    probs = problems(args.per_kind * len(KINDS), EVAL_SEED, KINDS)
+    kinds, held = eval_kinds(args.set), SETS[args.set]["held_out"]
+    probs = problems(args.per_kind * len(kinds), EVAL_SEED, kinds)
     t = time.time()
     rep = score(model, tok, probs, device=device)
     print(f"{args.checkpoint}: {rep['n']} problems, greedy")
     print(f"{'kind':>10} {'n':>4} {'tool':>7} {'direct':>7} {'called':>7}")
     for k, r in rep["by_kind"].items():
         print(f"{k:>10} {r['n']:>4} {r['tool'] * 100:>6.0f}% {r['direct'] * 100:>6.0f}% "
-              f"{r['called'] * 100:>6.0f}%" + ("   (never trained on)" if k == "remainder" else ""))
+              f"{r['called'] * 100:>6.0f}%" + ("   (held out of this set's training)"
+                                                 if k in held else ""))
     pr = rep["paired"]
     print(f"{'all':>10} {rep['n']:>4} {rep['tool'] * 100:>6.1f}% {rep['direct'] * 100:>6.1f}% "
           f"{rep['called'] * 100:>6.0f}%   paired: tool only {pr['tool_only']}, direct only "
@@ -58,6 +64,7 @@ def cmd_eval(args) -> int:
     out = Path("logs/tools") / f"{run}-{args.label}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"checkpoint": args.checkpoint, "step": ckpt.get("step"),
+                               "set": args.set, "held_out": list(held),
                                "seed": EVAL_SEED, "seconds": round(time.time() - t, 1),
                                **rep}, indent=1))
     print(f"wrote {out}")
@@ -105,11 +112,14 @@ def cmd_results(args) -> int:
     if not rows:
         print("no reports yet: python -m aksharallm.tools eval <checkpoint>")
         return 0
-    print(f"{'file':<46} {'n':>4} {'tool':>7} {'direct':>7} {'called':>7}")
+    print(f"{'file':<46} {'set':>4} {'n':>4} {'tool':>7} {'direct':>7} {'called':>7} {'held out, tool':>15}")
     for p in rows:
         d = json.loads(p.read_text())
-        print(f"{p.name:<46} {d['n']:>4} {d['tool'] * 100:>6.1f}% {d['direct'] * 100:>6.1f}% "
-              f"{d['called'] * 100:>6.0f}%")
+        held = d.get("held_out") or ["remainder"]
+        h = [d["by_kind"][k] for k in held if k in d.get("by_kind", {})]
+        ho = sum(r["tool"] * r["n"] for r in h) / max(1, sum(r["n"] for r in h))
+        print(f"{p.name:<46} {d.get('set', 'v1'):>4} {d['n']:>4} {d['tool'] * 100:>6.1f}% "
+              f"{d['direct'] * 100:>6.1f}% {d['called'] * 100:>6.0f}% {ho * 100:>14.1f}%")
     return 0
 
 
@@ -118,7 +128,9 @@ def main(argv=None) -> int:
                                 description="tool use: teach and score a Python tool call")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("data", help="teaching conversations -> JSONL for prepare_sft")
-    s.add_argument("--out", default="data/tools/sft.jsonl")
+    s.add_argument("--set", choices=("v1", "v2"), default="v1",
+                   help="v1: 6 kinds trained, 1 held out; v2: 20 trained, 4 held out")
+    s.add_argument("--out", default=None, help="default data/tools/sft.jsonl (v1), sft-<set>.jsonl")
     s.add_argument("--n", type=int, default=30_000)
     s.add_argument("--seed", type=int, default=0)
     s.set_defaults(fn=cmd_data)
@@ -126,6 +138,8 @@ def main(argv=None) -> int:
     s.add_argument("checkpoint")
     s.add_argument("--tokenizer", default="data/blend/tokenizer.json")
     s.add_argument("--per-kind", type=int, default=20)
+    s.add_argument("--set", choices=("v1", "v2"), default="v1",
+                   help="which kinds to ask: every kind of the set, trained and held out")
     s.add_argument("--label", default="tools")
     s.add_argument("--cpu", action="store_true")
     s.set_defaults(fn=cmd_eval)
