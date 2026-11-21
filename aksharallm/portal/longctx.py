@@ -154,7 +154,7 @@ class LongContext:
         tab because it answers the other half of the same question — reading further costs
         attention, and attention is quadratic in how far you read.
         """
-        if kind not in ("curve", "sweep", "needle", "flash", "extend"):
+        if kind not in ("curve", "sweep", "needle", "flash", "extend", "recall"):
             raise InferError(f"unknown measurement {kind!r}")
         if self.status()["running"]:
             raise InferError("a measurement is already running — stop it or wait")
@@ -180,6 +180,16 @@ class LongContext:
                    "--device", "cpu", "--quiet",
                    "--method", method, "--factor", str(opts.get("factor") or 4.0)]
             return self._spawn(cmd, kind, "cpu", "writing a checkpoint is disk work")
+
+        if kind == "recall":
+            # Associative recall (longctx/recall.py) needs a model trained on data/recall; the
+            # CLI refuses any other vocabulary and says so, which the job log shows.
+            device = "cpu" if self._training() else "cuda"
+            cmd = [sys.executable, "-m", "aksharallm.longctx", "recall", ckpt_id, "--quiet",
+                   "--device", device] + (["--force-gpu"] if device == "cuda" else [])
+            return self._spawn(cmd, kind, device,
+                               "a run is training, so this is on the CPU" if device == "cpu"
+                               else "the card is free")
 
         cmd = [sys.executable, "-m", "aksharallm.longctx", kind, ckpt_id, "--quiet"]
         # The device decision is made here rather than offered as a checkbox: a long
@@ -281,6 +291,12 @@ class LongContext:
                 {"method": r["method"], "loss": r["curve"]["loss"],
                  "cliff": (r.get("cliff") or {}).get("position")}
                 for r in blob["rows"]]
+        elif "by_gap" in blob:        # associative recall
+            row["kind"] = "recall"
+            row["arch"] = blob.get("kind")
+            row["trained"] = blob.get("trained_window")
+            row["inside"] = blob["by_gap"][0]["accuracy"] if blob["by_gap"] else None
+            row["farthest"] = blob["by_gap"][-1]["accuracy"] if blob["by_gap"] else None
         elif "grid" in blob:          # a needle sweep
             row["kind"] = "needle"
             row["accuracy"] = blob.get("accuracy")

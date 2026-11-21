@@ -1,0 +1,74 @@
+"""Associative recall (longctx/recall.py): a task that is all retrieval.
+
+The scorer is held to two models whose answers are known: one that really looks each key up
+must score 100%, one that copies the previous token must score 0. Between them they pin the
+off-by-one that matters most (the value at `pos` is read from the logits at `pos - 1`).
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import numpy as np
+import torch
+
+from aksharallm.longctx import recall
+from aksharallm.longctx.recall import (KEY0, N_VALUES, QUERY, VALUE0, VOCAB, accuracy,
+                                       document, max_len, prepare, score)
+
+
+class _Lookup(torch.nn.Module):
+    """After '?', at a key, puts all its mass on the value that followed that key earlier."""
+    cfg = SimpleNamespace()
+
+    def forward(self, x, full_logits=True):
+        out = torch.zeros(*x.shape, len(VOCAB))
+        for b, row in enumerate(x.tolist()):
+            seen, after_q = {}, False
+            for t, tok in enumerate(row):
+                if tok == QUERY:
+                    after_q = True
+                if not after_q and KEY0 <= tok < VALUE0 and t + 1 < len(row):
+                    seen[tok] = row[t + 1]
+                if after_q and tok in seen:
+                    out[b, t, seen[tok]] = 10.0
+        return out, None
+
+
+class _Copy(torch.nn.Module):
+    cfg = SimpleNamespace()
+
+    def forward(self, x, full_logits=True):
+        return 10.0 * torch.nn.functional.one_hot(x, len(VOCAB)).float(), None
+
+
+def test_a_document_hides_each_answer_behind_its_key():
+    rng = np.random.default_rng(0)
+    toks, answers = document(rng, pairs=10, gap=5, queries=4)
+    assert len(answers) == 4 and toks.count(QUERY) == 1
+    pairs = {toks[i]: toks[i + 1] for i in range(1, 21, 2)}
+    assert len(pairs) == 10                                   # keys are distinct
+    for pos in answers:
+        assert toks[pos] == pairs[toks[pos - 1]]               # the value of the key before it
+    assert max(toks) < len(VOCAB) == 148
+
+
+def test_the_scorer_gives_a_real_lookup_everything_and_a_copier_nothing():
+    for model, want in ((_Lookup(), 1.0), (_Copy(), 0.0)):
+        r = accuracy(model, pairs=12, gap=40, n=8)
+        assert r["accuracy"] == want and r["n"] == 8 * 8
+        assert r["chance_any"] == 1 / N_VALUES and r["chance_in_doc"] == 1 / 12
+
+
+def test_the_sweeps_reach_past_the_trained_window_and_fit_the_rope_table():
+    r = score(_Lookup(), n=2, by_pairs=(8,), by_gap=(0, 768))
+    assert [x["accuracy"] for x in r["by_pairs"] + r["by_gap"]] == [1.0, 1.0, 1.0]
+    assert r["by_gap"][-1]["length"] > 512
+    assert max_len() >= max(x["length"] for x in score(_Lookup(), n=1)["by_gap"])
+
+
+def test_the_training_data_stays_in_its_vocabulary(tmp_path):
+    meta = prepare(tmp_path, train_tokens=20_000, val_tokens=2_000, progress=None)
+    arr = np.fromfile(tmp_path / "train.bin", dtype=np.uint16)
+    assert arr.size == 20_000 and arr.max() < len(VOCAB) and meta["documents"]["train"] > 50
+    assert (arr == QUERY).sum() == meta["documents"]["train"] or (arr == QUERY).sum() + 1 == meta["documents"]["train"]

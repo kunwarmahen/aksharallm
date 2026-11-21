@@ -543,3 +543,20 @@ def test_a_result_name_cannot_escape_the_results_folder(tmp_path):
     for bad in ("../../etc/passwd", "sub/dir.json", "notjson.txt"):
         with pytest.raises(InferError):
             lc.result(bad)
+
+
+def test_the_tab_lists_a_recall_result_and_starts_the_recall_command(tmp_path, monkeypatch):
+    import json
+    lc = portal(tmp_path)
+    (tmp_path / "logs/longctx").mkdir(parents=True)
+    row = {"pairs": 16, "gap": 0, "length": 50, "n": 8, "accuracy": 0.9,
+           "chance_any": 1 / 64, "chance_in_doc": 1 / 16}
+    (tmp_path / "logs/longctx/recall-toy-step1.json").write_text(json.dumps(
+        {"checkpoint": "x", "kind": "hybrid, DeltaNet in 4/6", "trained_window": 512,
+         "by_pairs": [row], "by_gap": [row, {**row, "gap": 1536, "accuracy": 0.1}]}))
+    (head,) = lc.results()
+    assert head["kind"] == "recall" and head["inside"] == 0.9 and head["farthest"] == 0.1
+    spawned = []
+    monkeypatch.setattr(lc, "_spawn", lambda cmd, kind, device, why: spawned.append(cmd) or {})
+    lc.start("recall", "toy/ckpt_best.pt")
+    assert spawned[0][2:5] == ["aksharallm.longctx", "recall", "toy/ckpt_best.pt"]

@@ -325,6 +325,53 @@ from far away. **Scaling makes the positions legible; using them is a capability
 capabilities come from training** — which is why both numbers are published rather than only
 the good one.
 
+### A task that is all retrieval, so a small model can be asked (built 2026-11-21)
+
+The needle cannot compare small architectures: at 13.8M every model is at chance, so it says
+nothing about whether a design *can* retrieve. And the position curve is fluency, not
+retrieval: the hybrid of [doc 4](04-model.md) § "Linear attention" showed no loss cliff past
+its 512-token window, which leaves open whether its DeltaNet memory gives back anything it
+was told. `longctx/recall.py` is the version that can tell at any size, because the task is
+nothing but looking things up:
+
+```
+<|endoftext|>  K17 V3  K40 V9  ...  K2 V51     F F F ... F      ?   K40 V9  K2 V51 ...
+               \_____ pairs: a key, its value _____/  \_ gap _/      \_ queries _/
+```
+
+Keys are distinct and values random, so a query's value can only come from finding its key
+earlier and reading what followed. The vocabulary is 148 words. Training documents are short
+(4–48 pairs, gaps mostly under 32 tokens), and scoring sweeps two things: **how many pairs**
+it can hold (8–48) and **how far back** it can reach, with gaps out to 1,536 tokens — three
+times past the 512 positions training ever showed.
+
+```mermaid
+flowchart LR
+    D["recall-dense<br/>attention in all 6"] --> Q{"retrieves past<br/>512 tokens?"}
+    H["recall-hybrid<br/>DeltaNet in 4, attention in 2"] --> Q
+    N["recall-deltanet<br/>DeltaNet in all 6<br/>(no positions at all)"] --> Q
+```
+
+Three configs one model key apart (`full_attn_every` absent / 3 / 7, where 7 > 6 layers means
+no block is attention), same data, same budget. The expectation worth testing: dense attention
+retrieves perfectly inside its window and falls off past it (the RoPE angles it never saw);
+an all-DeltaNet model has no positions, so distance should not matter to it, but its memory
+is a fixed 64 × 64 matrix per head, so the number of pairs should; the hybrid is both. The
+scorer is held to an oracle that looks keys up (100%) and a copier (0%), which pins the
+off-by-one that matters: the value at position `p` is read from the logits at `p − 1`.
+
+Retrieval is learned suddenly, when an induction circuit forms, and often late. The training
+documents therefore query every pair and spend little on filler, so ~18% of tokens sit behind
+a lookup (at 16 queries per document it was 11%, and a 4-layer model on the CPU was still at
+chance after 12M tokens). The loss falls by about 0.74 nats when it happens: the query values
+go from a guess over 64 to a lookup.
+
+```bash
+python -m aksharallm.longctx recall-data                    # data/recall, ~1 min on the CPU
+scripts/experiment.sh recall-dense                          # and recall-hybrid, recall-deltanet
+python -m aksharallm.longctx recall recall-hybrid --device cuda
+```
+
 ---
 
 ## Doing it
@@ -406,6 +453,7 @@ real thing; extending it to a window is bounded work and is the obvious next opt
 | 6 | [`longctx/extend.py`](../aksharallm/longctx/extend.py) | `plan_extension` — a pure function, so the portal can show what *would* change without writing 1.2 GB to find out |
 | 7 | [`longctx/curve.py`](../aksharallm/longctx/curve.py) | `reduction="none"` is the point of the file; then `cliff()`, and why it anchors to the in-window mean rather than position 0 |
 | 8 | [`longctx/haystack.py`](../aksharallm/longctx/haystack.py) | `build_context` (the needle goes in at a *token* boundary) and `_score_candidates` (the off-by-one that would score every candidate on the wrong tokens) |
+| 8b | [`longctx/recall.py`](../aksharallm/longctx/recall.py) | `document` (an answer is hidden behind its key), `accuracy` (the value at `p` is read from the logits at `p − 1`), and `load_for_recall`, which sizes the RoPE table for the longest document without touching a weight |
 | 9 | [`longctx/__main__.py`](../aksharallm/longctx/__main__.py) | `sweep` is the command the chapter exists for; `_check_device` is the courtesy that stops a measurement killing a run |
 | 10 | [`aksharallm/portal/longctx.py`](../aksharallm/portal/longctx.py) | the Context tab's server side. `plan` is free (metadata only, no weights) and `start` is a detached job, one at a time; note that no path ever arrives from the browser — `default_out_name` decides where an extension lands |
 
@@ -413,7 +461,8 @@ What pins it: `tests/test_longctx.py`. The four worth reading are
 `test_none_is_bit_for_bit_the_old_cache` (every existing checkpoint depends on the default
 not moving a single angle), `test_a_window_wider_than_the_sequence_changes_nothing` and
 `test_changing_a_token_outside_the_window_cannot_reach_the_last_position` (the window does
-nothing when it should and something when it should), and `test_extending_twice_compounds`.
+nothing when it should and something when it should), and `test_extending_twice_compounds`. `tests/test_recall.py` holds the recall scorer to an
+oracle that looks every key up (100%) and a copier (0%).
 
 ---
 

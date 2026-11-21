@@ -403,7 +403,9 @@ Loss by position, 32 windows of 1,024 tokens (twice the trained 512):
   it never trained on. The four position-free blocks are enough to carry it. Caveats:
   TinyStories documents are short, so most of a 1,024-token window is several stories, and
   this is fluency, not retrieval. A needle test would say whether it can *find* something
-  past 512.
+  past 512, but at 13.8M every model fails it. [Doc 19](19-long-context.md) § "A task that
+  is all retrieval" is the version that can tell: associative recall, dense against hybrid
+  against all-DeltaNet, inside and past the window.
 
 ## Grouped-Query Attention (GQA)
 

@@ -13,6 +13,10 @@
     # can it still find something back there?
     python -m aksharallm.longctx needle small-code --lengths 512 1024 2048
 
+    # a task that is all retrieval (recall.py): dense vs hybrid vs all-DeltaNet
+    python -m aksharallm.longctx recall-data                 # -> data/recall, CPU
+    python -m aksharallm.longctx recall recall-hybrid --device cuda
+
 The portal's **Context** tab drives the same functions. This exists so the numbers are
 available over ssh, and because `sweep` is the one command that answers the question the
 whole chapter is about.
@@ -108,7 +112,7 @@ def _check_device(args) -> None:
     is there because the user is the one who decides, and sometimes the run has just been
     stopped and the pid file has not caught up.
     """
-    if not str(args.device).startswith("cuda") or getattr(args, "force_gpu", False):
+    if not str(getattr(args, "device", "cpu")).startswith("cuda") or getattr(args, "force_gpu", False):
         return
     root = Path(args.root) if args.root else repo_root()
     live = [p.parent.name for p in (root / "checkpoints").glob("*/train.pid")
@@ -261,6 +265,57 @@ def _write(args, kind: str, payload: dict) -> Path:
     return path
 
 
+def cmd_recall_data(args) -> int:
+    from .recall import prepare
+    meta = prepare(args.out, train_tokens=args.train_tokens, val_tokens=args.val_tokens,
+                   seed=args.seed)
+    print(json.dumps({k: meta[k] for k in ("tokens", "documents", "train")}, indent=1))
+    print(f"wrote {args.out}/train.bin, val.bin, tokenizer.json, meta.json")
+    return 0
+
+
+def _recall_ckpt(root: Path, name: str) -> Path:
+    p = Path(name)
+    for cand in (p, root / p, root / "checkpoints" / name,
+                 root / "checkpoints" / name / "ckpt_best.pt"):
+        if cand.is_file():
+            return cand
+    raise FileNotFoundError(f"no checkpoint {name!r} (a .pt path, or a run in checkpoints/)")
+
+
+def cmd_recall(args) -> int:
+    from .recall import N_VALUES, load_for_recall, score
+    root = Path(args.root) if args.root else repo_root()
+    path = _recall_ckpt(root, args.checkpoint)
+    model, ck, trained = load_for_recall(path, args.device)
+    if model.cfg.vocab_size != 148:
+        raise ValueError(f"{path} has a {model.cfg.vocab_size}-token vocabulary; a recall model "
+                         "has 148 (train one on data/recall)")
+    kind = ("all DeltaNet" if model.cfg.full_attn_every > model.cfg.n_layers else
+            f"hybrid, DeltaNet in {sum(model.cfg.linear_layer(i) for i in range(model.cfg.n_layers))}"
+            f"/{model.cfg.n_layers}" if model.cfg.full_attn_every else "dense attention")
+    print(f"{path}  ({kind}, trained on {trained}-token windows)")
+    t = time.time()
+    r = score(model, n=args.docs, device=args.device,
+              progress=None if args.quiet else print)
+    print(f"\n  by pairs (gap 32)       chance: any value {1 / N_VALUES:.1%}, "
+          "this document's values 1/pairs")
+    for x in r["by_pairs"]:
+        print(f"    {x['pairs']:>3} pairs  len {x['length']:>5}   {x['accuracy'] * 100:5.1f}%   "
+              f"(1/pairs {x['chance_in_doc'] * 100:4.1f}%)")
+    print(f"  by gap (16 pairs)       past {trained} tokens the pairs are outside the trained window")
+    for x in r["by_gap"]:
+        far = "  <- past the window" if x["length"] > trained else ""
+        print(f"    gap {x['gap']:>5}  len {x['length']:>5}   {x['accuracy'] * 100:5.1f}%{far}")
+    out = root / RESULTS / f"recall-{path.parent.name}-step{ck.get('step')}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({"checkpoint": str(path), "step": ck.get("step"), "kind": kind,
+                               "trained_window": trained, **r,
+                               "seconds": round(time.time() - t, 1)}, indent=1))
+    print(f"wrote {out}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m aksharallm.longctx",
                                 description=__doc__.split("\n")[0])
@@ -320,6 +375,22 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("--trials", type=int, default=3)
     n.add_argument("--candidates", type=int, default=4)
     n.set_defaults(fn=cmd_needle)
+
+    r = sub.add_parser("recall-data", help="associative-recall documents for the pretraining loop")
+    r.add_argument("--out", default="data/recall")
+    r.add_argument("--train-tokens", type=int, default=240_000_000)
+    r.add_argument("--val-tokens", type=int, default=2_000_000)
+    r.add_argument("--seed", type=int, default=0)
+    r.set_defaults(fn=cmd_recall_data)
+
+    q = sub.add_parser("recall", help="recall accuracy by number of pairs and by distance")
+    q.add_argument("checkpoint", help="a .pt, or a run name (checkpoints/<run>/ckpt_best.pt)")
+    q.add_argument("--device", default="cpu")
+    q.add_argument("--docs", type=int, default=64, help="documents per shape")
+    q.add_argument("--quiet", action="store_true")
+    q.add_argument("--force-gpu", action="store_true",
+                   help="use the GPU even while a run is training")
+    q.set_defaults(fn=cmd_recall)
     return p
 
 

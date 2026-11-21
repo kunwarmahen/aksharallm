@@ -115,6 +115,14 @@ async function start(kind) {
     } catch (err) { flash(err.message, 'error'); }
     return;
   }
+  if (kind === 'recall') {
+    try {
+      const res = await post('/api/longctx/start', body);
+      flash(`Started — ${res.why_device}.`, 'ok');
+      poll(1500);
+    } catch (err) { flash(err.message, 'error'); }
+    return;
+  }
   if (kind === 'needle') {
     body.trials = Number($('#lc-trials').value) || 3;
     body.lengths = [512, 1024, 2048];
@@ -152,7 +160,7 @@ async function poll(delay = 2000) {
      * already running". The buttons have to refuse it first: a control that looks available
      * and then fails server-side teaches the reader to distrust every other control on the
      * page. Same gate as the Eval tab's audits, for the same reason. */
-    for (const id of ['#lc-run-curve', '#lc-run-sweep', '#lc-run-needle', '#lc-run-flash',
+    for (const id of ['#lc-run-curve', '#lc-run-sweep', '#lc-run-needle', '#lc-run-flash', '#lc-run-recall',
                       '#lc-extend']) {
       const btn = $(id);
       if (!btn) continue;
@@ -198,6 +206,9 @@ function renderResults(rows) {
         + `<strong>${escHtml(best.method)}</strong> ${fmt.num(best.loss, 3)}`;
     } else if (r.kind === 'needle') {
       summary = `${fmt.num(r.accuracy * 100, 1)}% retrieved (chance ${fmt.num(r.chance * 100, 0)}%)`;
+    } else if (r.kind === 'recall') {
+      summary = `${escHtml(r.arch || '')}: ${fmt.pct(r.inside)} recalled close by, `
+        + `${fmt.pct(r.farthest)} at the farthest gap (chance 1.6%)`;
     } else {
       summary = `loss ${fmt.num(r.loss, 3)}`;
     }
@@ -219,6 +230,7 @@ async function openResult(name) {
     lc.open = blob;
     if (blob.rows) renderSweep(blob);
     else if (blob.grid) renderNeedle(blob);
+    else if (blob.by_gap) renderRecall(blob);
     else renderCurve(blob, blob.seq_len);
   } catch (err) { flash(err.message, 'error'); }
 }
@@ -322,6 +334,22 @@ function table(series) {
 /* The needle grid. Cells are shaded against the chance line rather than against zero — a
  * grid of 25%s from a four-way choice is a grid of nothing, and colouring it as "a quarter
  * of the way there" would be the single most misleading thing this tab could draw. */
+/* Associative recall: two small tables, how many pairs it can hold and how far back it can
+ * reach. A row past the trained window is marked, because that is the row the comparison of
+ * dense, hybrid and all-DeltaNet models is about. */
+function renderRecall(blob) {
+  const row = (x, label, far) => `<tr><th>${label}</th><td>${fmt.int(x.length)}</td>`
+    + `<td><strong>${fmt.pct(x.accuracy)}</strong></td><td>${far ? 'past the window' : ''}</td></tr>`;
+  $('#lc-detail').innerHTML =
+    `<p class="hint">${escHtml(blob.kind || '')}, trained on ${fmt.int(blob.trained_window)}-token windows. `
+    + 'Chance is 1.6% (any of 64 values); about 1/pairs if it only knows the answer is one of this '
+    + 'document\'s values.</p>'
+    + '<table class="lc-table"><thead><tr><th>pairs (gap 32)</th><th>length</th><th>recalled</th><th></th></tr></thead><tbody>'
+    + blob.by_pairs.map((x) => row(x, fmt.int(x.pairs), false)).join('') + '</tbody></table>'
+    + '<table class="lc-table"><thead><tr><th>gap (16 pairs)</th><th>length</th><th>recalled</th><th></th></tr></thead><tbody>'
+    + blob.by_gap.map((x) => row(x, fmt.int(x.gap), x.length > blob.trained_window)).join('') + '</tbody></table>';
+}
+
 function renderNeedle(blob) {
   const head = blob.lengths.map((n) => `<th>${fmt.int(n)}</th>`).join('');
   const rows = blob.grid.map((row) => {
@@ -384,6 +412,7 @@ async function openLongCtxTab() {
     $('#lc-run-curve').addEventListener('click', () => start('curve'));
     $('#lc-run-sweep').addEventListener('click', () => start('sweep'));
     $('#lc-run-needle').addEventListener('click', () => start('needle'));
+    $('#lc-run-recall').addEventListener('click', () => start('recall'));
     $('#lc-run-flash').addEventListener('click', () => start('flash'));
     $('#lc-extend').addEventListener('click', extendCheckpoint);
     $('#lc-stop').addEventListener('click', async () => {

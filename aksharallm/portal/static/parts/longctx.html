@@ -96,12 +96,18 @@
         lot of ordinary text and asks for it back. A model can be perfectly fluent at position
         6,000 and completely unable to find anything there — fluency is local, retrieval is
         not.</p>
+      <p class="hint">A small model fails the needle whatever its design. <strong>Score
+        recall</strong> asks the same question of a model trained on nothing but looking
+        things up (<code>recall-dense</code>, <code>recall-hybrid</code>,
+        <code>recall-deltanet</code>): how many key–value pairs it can hold, and how far back
+        it can still find one, past its trained window too.</p>
       <div class="lc-controls">
         <label class="field"><span class="field-label">trials / cell</span>
           <input id="lc-trials" type="number" min="1" max="20" value="3"></label>
       </div>
       <div class="lc-btns">
         <button id="lc-run-needle" class="ghost" type="button">Run the needle test</button>
+        <button id="lc-run-recall" class="ghost" type="button" title="for a model trained on data/recall (recall-dense, -hybrid, -deltanet)">Score recall</button>
         <button id="lc-stop" class="ghost" type="button" hidden>Stop</button>
       </div>
     </div>
