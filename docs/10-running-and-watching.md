@@ -612,6 +612,10 @@ The panels, in plain terms:
   read these numbers. Like every other button it shells out — here to
   `python -m aksharallm.quant` — and it drops to the CPU while a run is training, because a
   GPTQ job can allocate more than the card has left. See [doc 11](11-quantization.md).
+- **Finetune** — LoRA and QLoRA, led by the **memory budget** (full fine-tune against LoRA
+  against QLoRA for the chosen checkpoint) rather than the Run button, because whether it
+  fits is the first question. Shells out to `train.sft` / `train.dpo` with `--lora`/`--qlora`;
+  adapters then appear in the Playground's adapter picker. See [doc 12](12-lora.md).
 - **Eval** — run real benchmarks against a checkpoint (MMLU, ARC, HellaSwag, PIQA, GSM8K,
   HumanEval, an LLM-judge) and see the answer *in context*. The tab leads with the **trend
   chart** — one suite across every checkpoint ever measured, with the chance line drawn as
@@ -630,7 +634,41 @@ The panels, in plain terms:
   teacher is loaded by Ollama in another process — so it reports the contention and leaves
   the choice to you. Shells out to `python -m aksharallm.synth`. See
   [doc 14](14-synthetic-data.md).
-- **Learn** — the repo as a course ([doc 16](16-learning-path.md)). Twenty-four lessons, each
+- **Interp** — look inside a checkpoint: attention maps, the logit lens (which block
+  decided), activation patching by position and by head, and the sparse autoencoder's
+  features. Runs inline on the Playground's resident model, so it inherits the same
+  CPU-while-training rule. See [doc 18](18-interpretability.md).
+- **Context** — how far a model can read. A free **plan** panel (what a RoPE extension
+  would change, from the checkpoint's header alone), then the measurements as one detached
+  job at a time: the loss-by-position curve, a sweep of every scaling method, the
+  needle-in-a-haystack grid, **Score recall** (associative recall for a model trained on
+  `data/recall`: how many pairs it holds and how far back it reaches) and the FlashAttention
+  benchmark. See [doc 19](19-long-context.md).
+- **Diffusion** — the masked-diffusion model: watch a sentence denoise step by step, infill
+  a gap, and measure the ELBO, with the warning that it is a bound and not comparable with
+  an autoregressive loss. See [doc 20](20-diffusion.md).
+- **Audio** — the codec and the audio language model: the bitrate ladder played against the
+  original with spectrograms, codebook usage, how the codec carries other voices, and the
+  **TTS** panel (every report, two reports paired, clips, and Speak). See
+  [doc 21](21-audio.md).
+- **Vision** — captions beside the images they describe, with a chip per fact (count,
+  colour, shape) so the pattern of failure is visible, including on colour–shape pairs never
+  seen in training. See [doc 22](22-vision.md).
+- **Dictation** — the speech recogniser and the dictation layer: speak or upload, the
+  day-two checks (silence, speakers, names, corrections), what it has learned from your
+  corrections, your-voice recordings, and every `asr` command as a button. See
+  [doc 23](23-speech-recognition.md).
+- **World** — the world model: scores by outcome beside what copying the last frame would
+  get, rollout bars, a game played open loop beside the truth, and for the **keys** game the
+  calibration table and the door-belief table with its base rate. The Game picker makes the
+  data for sokoban, keys, or keys with the **blind agent** (whose moves never give away the
+  key), and "score on" evaluates a model on either agent's games. See
+  [doc 25](25-world-model.md).
+- **Tools** — the tool-use model: each report by kind with the held-out kinds marked, two
+  reports paired per problem, **Ask it** with the full transcript, and jobs to write the
+  data or score a model on problem set v1, v2 or `rl` (GRPO's twelve kinds plus v2's four
+  held out). See [doc 6](06-posttraining.md) § "Tool use".
+- **Learn** — the repo as a course ([doc 16](16-learning-path.md)). Twenty-eight lessons, each
   one *read the doc → open the file → break it → watch a real pytest node go red*. Lessons
   unlock as their prerequisites are finished, a locked one says what is missing, and a lesson
   completes only once its check has been **red and then green** — the check passes on clean

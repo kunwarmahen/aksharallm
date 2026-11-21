@@ -42,7 +42,7 @@ It fails in the safe direction: someone who did the work and reverted before pre
 button simply presses it once more. And red is deliberately *not* styled as an error — it is
 the middle of the exercise, and the panel says so.
 
-## The twenty-four lessons
+## The twenty-eight lessons
 
 Filename order is the curriculum; the prereq graph is the constraint.
 
@@ -72,6 +72,10 @@ Filename order is the curriculum; the prereq graph is the constraint.
 | 22 | **distillation** | a student taught by the teacher's whole distribution, and the `T²` that keeps a temperature honest | take out the `T²` |
 | 23 | **muon** | an optimizer that treats a weight matrix as a matrix, and the factor that lets it share AdamW's `lr` | take the scale away |
 | 24 | **speaker** | a voice-identity score, and the equal error rate it is judged by | compute the EER backwards |
+| 25 | **linear-attention** | a memory of fixed size instead of a KV cache, and what generation must carry between tokens | forget the convolution's tail |
+| 26 | **world-model** | a model that predicts game frames, and a test a model can pass by watching the player | let the agent peek |
+| 27 | **tool-use** | a call run in the middle of a completion, and the tokens never trained on | train on the tool's answer |
+| 28 | **recall** | a task that is all lookup, and the off-by-one that would score it wrong | read from the wrong position |
 
 Most of the exercises are **real bugs from this repo** — they are in `PLAN.md`'s "Bugs found
 and fixed" list. `is_causal` during single-token decode masks away the entire KV cache: the
@@ -130,7 +134,7 @@ python -m aksharallm.learn reset [id]       # do one properly again
 same `learning/progress.json`, so the terminal and the browser never disagree about what you
 have done.
 
-The tab opens on the first unfinished unlocked lesson rather than a list of twenty-four, locked
+The tab opens on the first unfinished unlocked lesson rather than a list of twenty-eight, locked
 lessons say what is missing rather than being merely greyed out, and three buttons hand off to
 the rest of the portal: **read the doc** (Docs tab), **open the file** (Code tab, where a
 local model will explain the lines before you break them), and **try it** (Playground, on the
@@ -140,7 +144,7 @@ probe the lesson is about).
 
 | # | file | what to look for |
 |---|---|---|
-| 1 | [`docs/lessons/01-data.md`](lessons/01-data.md) | one lesson, and the shape of all twenty-four: frontmatter (`doc`, `files`, `verify`, `prereqs`, `minutes`), explanation, exercise. The `files:` list is this chapter's version of every other chapter's reading order |
+| 1 | [`docs/lessons/01-data.md`](lessons/01-data.md) | one lesson, and the shape of all twenty-eight: frontmatter (`doc`, `files`, `verify`, `prereqs`, `minutes`), explanation, exercise. The `files:` list is this chapter's version of every other chapter's reading order |
 | 2 | [`learn/lessons.py`](../aksharallm/learn/lessons.py) | `Lesson`, the frontmatter parser, the prereq graph, and `validate()` — every referenced doc and file exists, ids unique, no cycle |
 | 3 | [`learn/progress.py`](../aksharallm/learn/progress.py) | `learning/progress.json`, and the red-then-green state machine: a lesson completes only after its check has been seen failing *and* then passing |
 | 4 | [`learn/check.py`](../aksharallm/learn/check.py) | running one pytest node id and turning its output into something worth reading |

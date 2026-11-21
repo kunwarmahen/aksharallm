@@ -619,7 +619,7 @@ data flow:
 | 9 | [`aksharallm/model/moe.py`](../aksharallm/model/moe.py) | optional — the one component that replaces step 6's FFN. [doc 15](15-moe.md) |
 | 10 | [`aksharallm/model/flash.py`](../aksharallm/model/flash.py) | optional — step 4's attention, written out in Triton instead of called. Read the module docstring first (it is the derivation), then `_fwd_kernel`'s four-line online-softmax rescale, then `_bwd_kv_kernel` / `_bwd_q_kernel` and why there are two of them |
 | 11 | [`aksharallm/model/rope.py`](../aksharallm/model/rope.py) | optional — step 5's frequency ladder, and the four ways of stretching it past the trained window. [doc 19](19-long-context.md) |
-| 12 | [`aksharallm/model/deltanet.py`](../aksharallm/model/deltanet.py) | optional — the other mixer. `recurrent_gated_delta_rule` first (the definition), then `chunk_gated_delta_rule` (the same function, chunked), then `GatedDeltaNet.forward` and `RecurrentState` (its decode cache), and `ModelConfig.linear_layer` for which blocks get it. `tests/test_deltanet.py` |
+| 12 | [`aksharallm/model/deltanet.py`](../aksharallm/model/deltanet.py) | optional — the other mixer. `recurrent_gated_delta_rule` first (the definition), then `chunk_gated_delta_rule` (the same function, chunked), then `GatedDeltaNet.forward` and `RecurrentState` (its decode cache), and `ModelConfig.linear_layer` for which blocks get it. `tests/test_deltanet.py`. Forget the convolution's tail in [lesson 25](lessons/25-linear-attention.md) |
 
 What pins it: `tests/test_model.py` is the shortest honest summary of this chapter —
 `test_causality`, `test_rope_preserves_norm_and_relative_position`, `test_weight_tying`,

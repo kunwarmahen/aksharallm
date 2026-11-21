@@ -279,7 +279,7 @@ it never overwrites the run's own. The World tab has the blind agent in its Game
 | 6 | same file → `rollout` | the model's own frames fed back, and `parse` counting impossible ones |
 | 7 | [`world/__main__.py`](../aksharallm/world/__main__.py) | `prepare`, `eval` (writes `logs/world/<run>-step<N>.json`), `play`, `results` |
 | 7b | [`world/keys.py`](../aksharallm/world/keys.py) → `apply`, `transition` | the harder world: keys, doors, the hidden `held`, and the exact distribution with slips |
-| 7b′ | same file → `policy`, `policy_blind` | the leak: the aware agent's walk gives the key away; the blind one chooses from the frame alone |
+| 7b′ | same file → `policy`, `policy_blind` | the leak: the aware agent's walk gives the key away; the blind one chooses from the frame alone. Let it peek in [lesson 26](lessons/26-world-model.md) |
 | 7c | [`world/calibrate.py`](../aksharallm/world/calibrate.py) → `transitions`, `score` | merged candidate frames, KL from the world, the door belief split by where the pickup was, and `base_rate`: what a belief from the window alone can reach |
 | 8 | [`portal/world.py`](../aksharallm/portal/world.py) · [`static/js/world.js`](../aksharallm/portal/static/js/world.js) | the World tab: results, `play` inline, the two jobs through `portal/jobs.py`. World models are found by their vocabulary (15 words sokoban, 17 keys), not by name |
 
