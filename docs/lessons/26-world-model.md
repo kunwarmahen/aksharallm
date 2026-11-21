@@ -20,8 +20,8 @@ key vanishes when picked up and is never drawn again, so whether the next door o
 on something no frame shows.
 
 `world-keys` learned it: at doors whose pickup it had seen, it believed 0.95 that they would
-open. But at doors whose pickup happened **before** what it could read, it believed 0.59,
-where the window alone allows about 0.24.
+open. But over doors where no pickup was in view, its mean belief was 0.281 while only
+0.237 of them were really held: too sure.
 
 ```
 the agent holds a key ──► the policy walks it to a door 60% of the time
@@ -34,9 +34,14 @@ That is real inference, from behaviour. It is not memory, and it was a leak in t
 ## The fix: an agent that cannot give itself away
 
 `keys.policy_blind` chooses its moves from the frame alone: a door 35% of the time, a visible
-key 25%, a box 12%, whatever it carries. Then the only evidence of a key is a pickup in view.
-The scorer prints the **base rate** beside the door table, so a model that beats it on the
-middle row is visibly using something other than its window.
+key 25%, a box 12%, whatever it carries. Then a key is evidenced only by a pickup in view, or
+by the map (no key left on it). The scorer prints, for doors with no pickup in view, the share
+really held beside the model's mean belief: a calibrated model matches them.
+
+Measured: on the blind agent's games, the model trained on the **aware** agent believes 0.204
+where 0.065 is true, and 0.183 for agents holding nothing. The model trained on the **blind**
+agent believes 0.062 against 0.065, and still 0.86 when it saw the pickup. The leak was real,
+and removing it left the memory intact.
 
 ---
 

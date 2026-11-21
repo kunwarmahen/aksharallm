@@ -978,8 +978,10 @@ Not built yet, in the order they depend on each other or by value per GPU hour:
   never drawn once carried, a floor that slips one move in ten), is built and scored on
   calibration: KL from the true next-frame distribution and the door belief. Measured
   2026-11-21: KL 0.021 nats/frame, slips learned almost exactly; belief a door opens 0.95
-  when the pickup is in view, 0.59 when it is not, 0.19 with no key. The 0.59 is probably
-  the agent giving the key away by walking to doors; `--policy blind` removes that.
+  when the pickup is in view, 0.59 when it is not, 0.19 with no key. That was partly read
+  from the agent walking to doors when it had a key: with a blind agent (`--policy blind`),
+  the old model believes in keys 0.204 where 0.065 is true, and a model trained on the
+  blind agent is calibrated (0.062) and still remembers (0.86 when it saw the pickup).
 
 ---
 

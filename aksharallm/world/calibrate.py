@@ -22,8 +22,10 @@ Three measurements, per transition, grouped by what the intended move does:
                    held, picked up BEFORE the context   unknowable from the window
                    not held                              should be ~0
                A model that reads only the last frame scores the same in all three.
-               `base_rate` is the share of held keys among doors with no pickup in view:
-               the best a context-only model can believe on the middle row.
+               `base_rate` is the share of held keys among doors with no pickup in view,
+               and `unseen_belief` the model's mean belief over those doors: calibrated
+               when they match. The frame can still say more (a map with no key left), so
+               the base rate is a calibration target, not a ceiling on the middle row.
 
 Episodes come from the aware policy (the one `world-keys` trained on) or the blind one
 (`keys.policy_blind`), which never looks at what the agent carries; `policy` picks.
@@ -168,11 +170,15 @@ def summarise(rows: list[dict]) -> dict:
         doors[where] = {"n": len(g), "belief": _mean(x["belief"] for x in g),
                         "truth": 1.0 if where.startswith("held") else 0.0,
                         "right": _mean((x["belief"] > 0.5) == x["held"] for x in g)}
-    # What the window allows: of the doors with no pickup in view, the share where a key is
-    # held anyway. A model that reads only the context can do no better than this on the
-    # "before the context" row; beating it means it found evidence outside the frames.
+    # Doors with no pickup in view: the share where a key is held anyway, and the model's
+    # mean belief over the same doors. A calibrated model's mean matches the share. It is NOT
+    # a ceiling on the "before the context" row: the frame itself carries evidence (a map with
+    # no key left on it means one was probably taken: held 11.7% of the time against 4.0% with
+    # a key still showing, on the blind agent), so a model that reads it can believe more on
+    # held doors and less on empty-handed ones and still be calibrated.
     unseen = [r["door"] for r in rows if r.get("door") and not r["door"].get("seen", False)]
     base = _mean(x["held"] for x in unseen)
+    unseen_belief = _mean(x["belief"] for x in unseen)
     n = len(rows)
     p = _mean(r["mode_exact"] for r in rows)
     return {"next_frame": {"n": n, "exact": p, "stderr": (p * (1 - p) / n) ** 0.5 if n else None,
@@ -180,4 +186,4 @@ def summarise(rows: list[dict]) -> dict:
                            "by_outcome": by, "target": "most likely frame"},
             "calibration": {"kl": _mean(r["kl"] for r in rows),
                             "off": _mean(r["off"] for r in rows), "doors": doors,
-                            "base_rate": base}}
+                            "base_rate": base, "unseen_belief": unseen_belief}}

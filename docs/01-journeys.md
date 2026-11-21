@@ -665,9 +665,10 @@ scripts/experiment.sh world-keys                   # same model and budget
 python -m aksharallm.world eval checkpoints/world-keys/ckpt_best.pt --episodes 600
 ```
 
-`world-keys` believed a door would open 0.59 of the time when its key was picked up out of
-view, far above the base rate, probably because its agent walked to doors when it had a key.
-The blind agent never does, so only memory can answer:
+`world-keys` was too sure that agents had keys (mean belief 0.281 where 0.237 were held),
+because its agent walked to doors when it had one. The blind agent never does. Measured: on
+the blind agent's games the old model believes 0.204 where 0.065 is true; the one trained on
+them believes 0.062, and still 0.86 when it saw the pickup:
 
 ```bash
 python -m aksharallm.world prepare --game keys --policy blind     # -> data/world-keys-blind/
@@ -681,8 +682,8 @@ the truth).
 **How you know it worked:** next-frame exact accuracy on `moved` and `pushed` (where copying
 the last frame scores 0%), and rollouts that stay exact for several steps without producing
 an impossible frame. For `keys`: KL from the true next-frame distribution near 0, and at a
-door a belief near 1 when the pickup is in view and near 0 when nothing is held; with the
-blind agent, the middle row at the printed base rate.
+door a belief near 1 when the pickup is in view and near 0 when nothing is held, and a mean
+belief over doors with no pickup in view that matches the share really held (calibrated).
 📖 [chapter 25 — world model](25-world-model.md)
 
 The point of every one is how little had to change. Audio needed a codec and got TTS and ASR

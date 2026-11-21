@@ -156,7 +156,7 @@ reports, per intended move:
   | at a door, the agent… | what a model can know |
   |---|---|
   | holds a key it was **seen** picking up, inside the context | everything: should be ~1 |
-  | holds a key picked up **before** the context | nothing from the window: the base rate is the best possible |
+  | holds a key picked up **before** the context | no pickup to see, but the frame can hint (no key left on the map) |
   | holds no key | should be ~0, unless a key vanished in view and was not spent |
 
   A model that reads only the last frame scores the same in all three rows.
@@ -213,21 +213,18 @@ doors, where the answer depends on the hidden key:
 | holds no key | 657 | 0.187 | 0 | 87.1% |
 
 The top row is memory working: a pickup up to ~30 moves back in the context is used. The
-middle row should be the base rate if the window were the only evidence, and it is well
-above it (about 0.24 of doors without a pickup in view are held ones). The likeliest source
-is the agent, not the frames: `keys.policy` heads for a door 60% of the time when it holds
-a key, so *walking to a door* is itself evidence of a key. That is a real inference from
-behaviour, and a leak in the test. A policy that ignores `held` would remove it; this is a
-hypothesis, not checked.
+middle row looked too high: 0.237 of the doors without a pickup in view are held ones, and
+the model's mean belief over them was 0.281. The suspected source was the agent, not the
+frames: `keys.policy` heads for a door 60% of the time when it holds a key, so *walking to a
+door* is itself evidence of a key. The next section tested that and it held.
 
 Rollouts (own frames fed back, scored against the no-slip game): 100, 100, then 96% exact
 from step 3 to step 10, with 0 impossible frames.
 
 So the keys world is not solved the way Sokoban was: the model is calibrated where the
-frame is enough and uncertain exactly where it is not. The next version of the test is the
-same game with a `held`-blind policy, so that only memory can answer the middle row.
+frame is enough and uncertain exactly where it is not.
 
-### The leak, and the run without it (built 2026-11-21, queued)
+### The leak, and the run without it (measured 2026-11-21)
 
 `keys.policy_blind` is the same coverage policy choosing only from what the frame shows: it
 heads for a door 35% of the time, a visible key 25%, a box 12%, whatever the agent carries.
@@ -237,23 +234,47 @@ in hand must give the same move (and the aware policy must not, or the test prov
 ```mermaid
 flowchart LR
     A["aware agent<br/>holds a key -> walks to a door"] --> L["a walk to a door<br/>is evidence of a key"]
-    L --> M1["middle row 0.59<br/>(base rate ~0.24)"]
-    B["blind agent<br/>same odds either way"] --> N["only a pickup in view<br/>is evidence of a key"]
-    N --> M2["middle row should fall<br/>to the base rate"]
+    L --> M1["the model believes in keys<br/>whenever the agent heads for a door"]
+    B["blind agent<br/>same odds either way"] --> N["only a pickup in view,<br/>or the map, says a key is held"]
+    N --> M2["calibrated:<br/>mean belief = held share"]
 ```
 
-The scorer now prints the **base rate** beside the door table: of the doors with no pickup
-in view, the share where a key is held anyway. A model that reads only its window can believe
-no more than that on the middle row. Two runs answer the question:
+The scorer now prints, for the doors with no pickup in view, the **share where a key is held**
+and the **model's mean belief** over the same doors. A calibrated model's mean matches the
+share. The share is not a ceiling on the middle row, which was this section's first claim and
+was wrong: the frame itself carries evidence. On the blind agent, a key is held at 11.7% of
+such doors when the map shows no key left and 4.0% when one is still showing, so a model that
+reads the map can believe more on held doors and less on empty-handed ones and still be
+calibrated. Calibration is the test.
 
-| run | trained on | scored on | what it says |
-|---|---|---|---|
-| `world-keys` again, `--policy blind` | the aware agent | the blind agent | whether its 0.59 was read from the agent's walk: if so, it falls when the walk stops meaning anything |
-| `world-keys-blind` | the blind agent | the blind agent | memory alone: the top row should stay high, the middle row should sit at the base rate |
+Three evaluations, all on the blind agent's games except the first (1,000 games; 25,000
+transitions; doors 164 seen / 207 before / 2,974 empty-handed):
+
+| model | games | KL nats/frame | seen in context | before the context | holds no key | held share, no pickup in view | **model's mean belief there** |
+|---|---|---|---|---|---|---|---|
+| `world-keys` | aware agent (600 games) | 0.021 | 0.951 | 0.591 | 0.187 | 0.237 | 0.281 |
+| `world-keys` | **blind agent** | 0.042 | 0.953 | 0.507 | **0.183** | 0.065 | **0.204** |
+| `world-keys-blind` | blind agent | 0.025 | 0.864 | 0.241 | **0.051** | 0.065 | **0.062** |
+
+**The leak was real.** Shown games where walking to a door means nothing, the model trained on
+the aware agent still believes a door will open 0.183 of the time for an agent with no key, and
+its mean belief at doors without a pickup in view is **0.204 against 0.065 true**, three times
+too high. It learned that agents heading for doors have keys. It also puts 2.4% of its
+probability on impossible frames there (1.06% for the blind model) and gets the locked doors
+right 85% of the time against 99%.
+
+**Without the leak the model is calibrated, and it still remembers.** The blind model's mean
+belief is **0.062 against 0.065**. It believes 0.86 when it saw the pickup and 0.24 when it did
+not, against 0.05 for an empty-handed agent: the gap between 0.24 and 0.05 is the map (no key
+left), not the agent. Its one weakness is `unlocked`: the most likely frame is right only 43.7%
+of the time (P 0.48 against 0.90), because most doors that open were unlocked with a key picked
+up out of view, and the model is, correctly, unsure about those.
+
+Rollouts on the blind agent: 100% exact for six steps, 94% at ten, no impossible frames.
 
 The blind agent opens fewer doors (1.3% of moves against 2.2%) and finds more locked ones
-(10.6% against 4.0%), because it walks into doors without a key. Score it on 1,000 episodes
-rather than 600 so the "seen in context" row is not thin.
+(10.6% against 4.0%), because it walks into doors without a key, which is why it is scored on
+1,000 games rather than 600.
 
 ```bash
 python -m aksharallm.world prepare --game keys --policy blind     # data/world-keys-blind

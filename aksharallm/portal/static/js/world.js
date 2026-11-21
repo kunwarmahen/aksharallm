@@ -57,8 +57,11 @@ function showKeys(r) {
     + '<th>truth</th><th>right</th></tr></thead><tbody>'
     + Object.entries(doors).map(([w, d]) => `<tr><td>${escHtml(w)}</td><td>${fmt.int(d.n)}</td>`
       + `<td><b>${fmt.num(d.belief, 3)}</b></td><td>${d.truth}</td><td>${fmt.pct(d.right)}</td></tr>`).join('')
-    + (cal.base_rate == null ? '' : `<tr><td colspan="5" class="panel-note">base rate: ${fmt.num(cal.base_rate, 3)} of doors `
-      + 'with no pickup in view are held, the best a belief from the window alone can do on the middle row. '
+    + (cal.base_rate == null ? '' : `<tr><td colspan="5" class="panel-note">doors with no pickup in view: `
+      + `${fmt.num(cal.base_rate, 3)} held, the model's mean belief `
+      + (cal.unseen_belief == null ? '(not recorded in this file)' : fmt.num(cal.unseen_belief, 3))
+      + ' — calibrated when the two match. It is not a ceiling on the middle row: the frame can '
+      + 'still say a key was taken (no key left on the map). '
       + `Episodes from the <b>${escHtml(r.policy || 'aware')}</b> agent`
       + (r.trained_policy && r.trained_policy !== r.policy ? ` (the model trained on the ${escHtml(r.trained_policy)} one)` : '')
       + '.</td></tr>')

@@ -92,8 +92,10 @@ def cmd_eval(args) -> int:
         for where, r in sc["calibration"]["doors"].items():
             print(f"  {where:<26} n {r['n']:>5}   belief {r['belief']:.3f}   truth "
                   f"{r['truth']:.0f}   right {r['right'] * 100:.1f}%")
-        print(f"  base rate: {sc['calibration']['base_rate']:.3f} of doors with no pickup in "
-              "view are held (the best a context-only belief on the middle row)")
+        cal = sc["calibration"]
+        print(f"  doors with no pickup in view: {cal['base_rate']:.3f} held, model's mean belief "
+              f"{cal['unseen_belief']:.3f} (calibrated when these match; the frame can still "
+              "say more, e.g. no key left on the map)")
     else:
         nf = next_frame(model, episodes=args.episodes, history=args.history, device=device)
         print(f"next frame   {nf['exact'] * 100:.1f}% exact (± {nf['stderr'] * 100:.1f}, n={nf['n']}), "

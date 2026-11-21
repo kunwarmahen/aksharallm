@@ -252,6 +252,8 @@ def test_the_base_rate_is_the_held_share_of_doors_with_no_pickup_in_view():
     got = score(_CopyKeys(), episodes=150, steps=30, history=5, seed=9, policy="blind")
     assert got["policy"] == "blind"
     assert abs(got["calibration"]["base_rate"] - want) < 1e-12
+    # a model that never believes in keys has a mean belief near 0 over those doors
+    assert 0.0 <= got["calibration"]["unseen_belief"] < 0.01
     assert 0.0 < want < 0.5          # held keys exist without a pickup in view, but are rarer
 
 
