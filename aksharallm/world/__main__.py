@@ -3,6 +3,7 @@
   prepare   write data/world/{train,val}.bin + tokenizer.json from random games
   eval      next-frame accuracy by outcome, and open-loop rollouts, to logs/world/<run>-*.json
   play      one rollout printed beside the true game, to see where it goes wrong
+  results   every saved evaluation, one line each
 
 Read with: docs/25-world-model.md -- the chapter this implements; it ends with the order to
 read these files in.
@@ -15,7 +16,6 @@ import json
 import time
 from pathlib import Path
 
-import numpy as np
 import torch
 
 
@@ -71,28 +71,37 @@ def cmd_eval(args) -> int:
 
 
 def cmd_play(args) -> int:
-    from .data import FRAME, VOCAB, ids_of
-    from .game import SIZE, episode
+    from .evaluate import play
+    from .game import SIZE
     device = _device(args)
     model, _ = _load(args.checkpoint, device)
-    frames, actions, outcomes = episode(np.random.default_rng(args.seed), args.horizon)
-    seq = ids_of(frames[0])
-    with torch.no_grad():
-        for k in range(args.horizon):
-            seq += ids_of([actions[k]])
-            out = []
-            for _ in range(FRAME):
-                logits, _ = model(torch.tensor([(seq + out)[-model.cfg.max_seq_len:]],
-                                               device=device), full_logits=True)
-                out.append(int(logits[0, -1].argmax()))
-            pred, true = [VOCAB[i] for i in out], frames[k + 1]
-            mark = "ok" if pred == true else f"{sum(a != b for a, b in zip(pred, true))} cells wrong"
-            print(f"step {k + 1}: {actions[k]} ({outcomes[k]}) -> {mark}")
-            print(f"  {'true':<{2 * SIZE}}   model")
-            for r in range(SIZE):
-                print("  " + " ".join(true[r * SIZE:(r + 1) * SIZE]) + "   "
-                      + " ".join(pred[r * SIZE:(r + 1) * SIZE]))
-            seq = (seq + out)[-(model.cfg.max_seq_len - FRAME - 1):]
+    steps = play(model, horizon=args.horizon, seed=args.seed, device=device)
+    if args.json:
+        print(json.dumps(steps))
+        return 0
+    for st in steps[1:]:
+        mark = "ok" if not st["wrong"] else f"{st['wrong']} cells wrong"
+        mark += " (impossible frame)" if st["impossible"] else ""
+        print(f"step {st['step']}: {st['action']} ({st['outcome']}) -> {mark}")
+        print(f"  {'true':<{2 * SIZE}}   model")
+        for r in range(SIZE):
+            print("  " + " ".join(st["true"][r * SIZE:(r + 1) * SIZE]) + "   "
+                  + " ".join(st["model"][r * SIZE:(r + 1) * SIZE]))
+    return 0
+
+
+def cmd_results(args) -> int:
+    rows = sorted(Path("logs/world").glob("*.json"), key=lambda p: p.stat().st_mtime)
+    if not rows:
+        print("no evaluations yet: python -m aksharallm.world eval <checkpoint>")
+        return 0
+    print(f"{'file':<40} {'step':>6} {'exact':>7} {'copy':>6} {'rollout@last':>13} {'impossible':>11}")
+    for p in rows:
+        d = json.loads(p.read_text())
+        nf, ro = d["next_frame"], d["rollout"]
+        print(f"{p.name:<40} {d.get('step') or 0:>6} {nf['exact'] * 100:>6.1f}% "
+              f"{nf['copy_baseline'] * 100:>5.1f}% {ro['exact_by_step'][-1] * 100:>12.0f}% "
+              f"{max(ro['impossible_by_step']) * 100:>10.0f}%")
     return 0
 
 
@@ -119,7 +128,10 @@ def main(argv=None) -> int:
     s.add_argument("--horizon", type=int, default=5)
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--cpu", action="store_true")
+    s.add_argument("--json", action="store_true", help="the frames as JSON, not a picture")
     s.set_defaults(fn=cmd_play)
+    s = sub.add_parser("results", help="every saved evaluation, one line each")
+    s.set_defaults(fn=cmd_results)
     args = p.parse_args(argv)
     return args.fn(args)
 

@@ -109,5 +109,31 @@ def rollout(model, *, episodes: int = 50, horizon: int = 10,
             "impossible_by_step": (impossible / episodes).tolist(), "seed": seed}
 
 
+def play(model, *, horizon: int = 5, seed: int = 0, device: str = "cpu") -> list[dict]:
+    """One game, open loop: the model's frames fed back, each step beside the true frame.
+
+    The same loop as `rollout`, for one episode, keeping the frames so a person can see where
+    it goes wrong (`world play`, and the portal's World tab draw this)."""
+    frames, actions, outcomes = episode(np.random.default_rng(seed), horizon)
+    seq = ids_of(frames[0])
+    steps = [{"step": 0, "action": None, "outcome": None, "true": frames[0],
+              "model": frames[0], "wrong": 0, "impossible": False}]
+    with torch.no_grad():
+        for k in range(horizon):
+            seq = seq + ids_of([actions[k]])
+            out = []
+            for _ in range(FRAME):
+                x = torch.tensor([(seq + out)[-model.cfg.max_seq_len:]], device=device)
+                logits, _ = model(x, full_logits=True)
+                out.append(int(logits[0, -1].argmax()))
+            words = [VOCAB[i] for i in out]
+            steps.append({"step": k + 1, "action": actions[k], "outcome": outcomes[k],
+                          "true": frames[k + 1], "model": words,
+                          "wrong": sum(a != b for a, b in zip(words, frames[k + 1])),
+                          "impossible": parse(words) is None})
+            seq = (seq + out)[-(model.cfg.max_seq_len - FRAME - 1):]
+    return steps
+
+
 def _mean(xs):
     return float(sum(xs) / len(xs)) if xs else float("nan")

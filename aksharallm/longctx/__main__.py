@@ -158,6 +158,9 @@ def cmd_curve(args) -> int:
     print(f"cliff: at position {broke['position']} (+{broke['excess']:.2f} nats over the "
           f"in-window baseline {broke['baseline']:.2f})" if broke
           else "cliff: none — the curve never breaks")
+    # Written, not only printed: a measurement that is only printed does not exist, and the
+    # Context tab reads this folder (gotcha 20).
+    print(f"written to {_write(args, 'curve', {**curve, 'checkpoint': args.checkpoint, 'trained': trained, 'seq_len': args.len, 'scaling': scaling.describe(args.len), 'cliff': broke})}")
     return 0
 
 

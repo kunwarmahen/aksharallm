@@ -503,7 +503,7 @@ def cmd_tts_report(args) -> int:
     print(f"  listen to {out_dir}/NN-tts.wav beside NN-original.wav.")
     path = Path("logs/audio") / f"tts-{run}-step{blob.get('step')}-{args.duration}{tag}.json"
     path.write_text(_json.dumps({"checkpoint": str(args.checkpoint), "step": blob.get("step"),
-                                 "judge": args.asr, **rep}, indent=1))
+                                 "judge": args.asr, "out_dir": str(out_dir), **rep}, indent=1))
     print(f"wrote {path}")
     return 0
 
@@ -685,6 +685,44 @@ def cmd_codec_tokens(args) -> int:
     return 0
 
 
+def cmd_tts_reports(args) -> int:
+    """Every saved TTS report, one line each (the Audio tab's TTS panel reads the same)."""
+    from .ttsreports import load_all
+    rows = load_all(Path("."))
+    if not rows:
+        print("no TTS reports yet: python -m aksharallm.audio tts-report <ckpt>")
+        return 0
+    print(f"{'report':<62} {'voicing':<16} {'TTS WER':>8} {'orig':>6} {'voice':>6} {'closer':>7}")
+    for r in rows:
+        v = r["voice"] or {}
+        closer = f"{v['own_closer']}/{v['pairs']}" if v.get("pairs") else "–"
+        print(f"{r['name']:<62} {r['voicing']:<16} {(r['wer'].get('tts') or 0) * 100:>7.1f}% "
+              f"{(r['wer'].get('original') or 0) * 100:>5.1f}% "
+              f"{v.get('tts_own') or float('nan'):>6.3f} {closer:>7}")
+    return 0
+
+
+def cmd_tts_compare(args) -> int:
+    """Two reports on the same sentences, paired per sentence (b against a)."""
+    import json as _json
+    from .ttsreports import compare
+    a, b = (_json.loads(Path(x).read_text()) for x in (args.a, args.b))
+    try:
+        c = compare(a, b)
+    except ValueError as e:
+        raise SystemExit(str(e))
+    w = c["wer"]
+    print(f"a = {args.a}\nb = {args.b}\n{c['n']} sentences, paired\n")
+    print(f"words: WER a {w['a'] * 100:.1f}% -> b {w['b'] * 100:.1f}%; b had fewer errors on "
+          f"{w['b_better']}, more on {w['b_worse']} (sign test p {w['p']:.3g})")
+    if "voice" in c:
+        v = c["voice"]
+        print(f"voice: cosine to own speaker a {v['a']:.3f} -> b {v['b']:.3f}; b closer on "
+              f"{v['b_closer']}, further on {v['b_further']} (p {v['p']:.3g}); codec ceiling "
+              f"{v['ceiling']:.3f}, two recordings of one speaker {v['same_speaker']:.3f}")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="python -m aksharallm.audio", description=__doc__)
     p.add_argument("--sr", type=int, default=TARGET_SR, help="resample everything to this")
@@ -841,6 +879,14 @@ def main(argv=None) -> int:
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--cpu", action="store_true", help="force the CPU (a run has the card)")
     s.set_defaults(fn=cmd_speak)
+
+    s = sub.add_parser("tts-reports", help="every saved TTS report, one line each")
+    s.set_defaults(fn=cmd_tts_reports)
+    s = sub.add_parser("tts-compare", help="two TTS reports on the same sentences, paired "
+                       "per sentence (words and voice)")
+    s.add_argument("a")
+    s.add_argument("b")
+    s.set_defaults(fn=cmd_tts_compare)
 
     args = p.parse_args(argv)
     return args.fn(args)

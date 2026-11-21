@@ -107,6 +107,30 @@ def score(model, tok, probs: list[Problem], *, device: str = "cpu") -> dict:
             "by_kind": by, "rows": rows}
 
 
+def compare(a: dict, b: dict) -> dict:
+    """Two saved reports on the SAME problems, paired per problem (e.g. before and after the
+    tool SFT). Refuses two reports on different problems: a comparison of totals over
+    different questions is the mistake pairing exists to avoid."""
+    ra, rb = a["rows"], b["rows"]
+    if [r["question"] for r in ra] != [r["question"] for r in rb]:
+        raise ValueError("the two reports are not on the same problems (different seed or "
+                         "--per-kind), so they cannot be paired")
+    out = {}
+    for mode_a, mode_b, name in (("tool", "tool", "with the tool"),
+                                 ("direct", "direct", "without the tool"),
+                                 ("direct", "tool", "b with the tool vs a without")):
+        w = sum(y[mode_b] and not x[mode_a] for x, y in zip(ra, rb))
+        l = sum(x[mode_a] and not y[mode_b] for x, y in zip(ra, rb))
+        out[name] = {"b_only": w, "a_only": l, "p": _sign(w, l)}
+    kinds = sorted({r["kind"] for r in ra})
+    by = {k: {"n": sum(r["kind"] == k for r in ra),
+              "a_tool": sum(r["tool"] for r in ra if r["kind"] == k),
+              "b_tool": sum(r["tool"] for r in rb if r["kind"] == k),
+              "a_direct": sum(r["direct"] for r in ra if r["kind"] == k),
+              "b_direct": sum(r["direct"] for r in rb if r["kind"] == k)} for k in kinds}
+    return {"n": len(ra), "paired": out, "by_kind": by}
+
+
 def _sign(a: int, b: int) -> float:
     n, k = a + b, min(a, b)
     return min(1.0, 2 * sum(comb(n, i) for i in range(k + 1)) / 2 ** n) if n else 1.0

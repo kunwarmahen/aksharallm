@@ -3,6 +3,9 @@
   data   write the teaching conversations as JSONL, for `prepare_sft jsonl`
   eval   paired: the same held-out problems with the tool and without, by kind, including a
          kind never seen in training; JSON to logs/tools/<run>-<label>.json
+  ask    one question to a chat checkpoint, with or without the tool; prints the transcript
+  compare  two saved reports on the same problems, paired per problem (before vs after)
+  results  every saved report, one line each
 
 Read with: docs/06-posttraining.md -- the chapter this implements; it ends with the order to
 read these files in.
@@ -61,6 +64,55 @@ def cmd_eval(args) -> int:
     return 0
 
 
+def cmd_ask(args) -> int:
+    from ..infer.cli import load_model
+    from ..tokenizer.tokenizer import Tokenizer
+    from .agent import final_number, solve
+    device = "cuda" if torch.cuda.is_available() and not args.cpu else "cpu"
+    model, _ = load_model(args.checkpoint, device)
+    r = solve(model, Tokenizer(args.tokenizer), args.question, use_tool=not args.no_tool,
+              device=device)
+    if args.json:
+        print(json.dumps(r))
+        return 0
+    for m in r["messages"]:
+        print(f"--- {m['role']}\n{m['content']}")
+    print(f"--- {r['calls']} tool call(s); final number: {final_number(r['final'])}")
+    return 0
+
+
+def cmd_compare(args) -> int:
+    from .agent import compare
+    a, b = json.loads(Path(args.a).read_text()), json.loads(Path(args.b).read_text())
+    try:
+        c = compare(a, b)
+    except ValueError as e:
+        raise SystemExit(str(e))
+    print(f"a = {args.a}\nb = {args.b}\n{c['n']} problems, paired\n")
+    print(f"{'kind':>10} {'a tool':>7} {'b tool':>7} {'a direct':>9} {'b direct':>9}")
+    for k, r in c["by_kind"].items():
+        print(f"{k:>10} {r['a_tool']:>4}/{r['n']:<2} {r['b_tool']:>4}/{r['n']:<2} "
+              f"{r['a_direct']:>6}/{r['n']:<2} {r['b_direct']:>6}/{r['n']:<2}")
+    print()
+    for name, r in c["paired"].items():
+        print(f"{name:>30}: b right where a was wrong {r['b_only']}, the reverse {r['a_only']}, "
+              f"sign test p {r['p']:.3g}")
+    return 0
+
+
+def cmd_results(args) -> int:
+    rows = sorted(Path("logs/tools").glob("*.json"), key=lambda p: p.stat().st_mtime)
+    if not rows:
+        print("no reports yet: python -m aksharallm.tools eval <checkpoint>")
+        return 0
+    print(f"{'file':<46} {'n':>4} {'tool':>7} {'direct':>7} {'called':>7}")
+    for p in rows:
+        d = json.loads(p.read_text())
+        print(f"{p.name:<46} {d['n']:>4} {d['tool'] * 100:>6.1f}% {d['direct'] * 100:>6.1f}% "
+              f"{d['called'] * 100:>6.0f}%")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="python -m aksharallm.tools",
                                 description="tool use: teach and score a Python tool call")
@@ -77,6 +129,20 @@ def main(argv=None) -> int:
     s.add_argument("--label", default="tools")
     s.add_argument("--cpu", action="store_true")
     s.set_defaults(fn=cmd_eval)
+    s = sub.add_parser("ask", help="one question, with the tool (or --no-tool), transcript printed")
+    s.add_argument("checkpoint")
+    s.add_argument("question")
+    s.add_argument("--tokenizer", default="data/blend/tokenizer.json")
+    s.add_argument("--no-tool", action="store_true", help="do not run the call it writes")
+    s.add_argument("--json", action="store_true")
+    s.add_argument("--cpu", action="store_true")
+    s.set_defaults(fn=cmd_ask)
+    s = sub.add_parser("compare", help="two reports on the same problems, paired per problem")
+    s.add_argument("a")
+    s.add_argument("b")
+    s.set_defaults(fn=cmd_compare)
+    s = sub.add_parser("results", help="every saved report, one line each")
+    s.set_defaults(fn=cmd_results)
     args = p.parse_args(argv)
     return args.fn(args)
 
