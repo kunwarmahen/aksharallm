@@ -934,7 +934,7 @@ SFT: 148 steps, 8.6 minutes, val 0.705.
   and, told there is no tool, guesses. A model trained to delegate unlearns trying.
 - **Forgetting is small**: Python held-out loss 1.322 → 1.331 on the blend's Python span.
 
-### Set v2: does breadth turn templates into a habit? (built 2026-11-20, queued)
+### Set v2: does breadth turn templates into a habit? (built 2026-11-20, measured 2026-11-21)
 
 The obvious next question, asked as a controlled pair. Set `v2` trains **twenty** kinds
 instead of six: the six from v1 plus subtract, divide, power, square root, mean, maximum,
@@ -974,6 +974,37 @@ The Tools tab's job box has a **Problem set** picker for both jobs, and each rep
 held-out kinds of its own set. Every v2 reference call is run in the sandbox by a test, and
 a test pins that `--set v1` asks exactly the questions it always asked, so old reports still
 mean what they meant.
+
+**Measured 2026-11-21: breadth taught twenty templates, not the habit.** Same 480 problems
+for all three models (paired):
+
+| model | with the tool | without | calls the tool |
+|---|---|---|---|
+| start (`small-code-py-dense-sft`) | 0.6% | 0.6% | never |
+| v1 tools (6 kinds) | 29.4% | 0.4% | always |
+| **v2 tools (20 kinds)** | **81.3%** | 0.6% | always |
+
+v2 against v1, with the tool: right where v1 was wrong on **250** problems, the reverse on
+**1** (p 1e-73). Almost all of that is the fourteen kinds v2 trained on and v1 did not: 19
+of them at 20/20, `mean` at 11/20. The four held-out kinds:
+
+| held out | v1 | v2 | what v2 wrote (examples) |
+|---|---|---|---|
+| remainder | 0/20 | 0/20 | `8508099 / 573` → 14848.34 (divide); a product |
+| gcd | 0/20 | 0/20 | `11410 * 5348` → 61020680; the larger number |
+| digit sum | 0/20 | 0/20 | the number itself, or twice it |
+| day of year | 0/20 | 0/20 | 0 |
+
+Every held-out question got a tool call, and every call was the code for a *neighbouring*
+trained kind ("remainder when divided by" became division). Three times the kinds, at the
+same 30,000 conversations, moved the held-out score from 0 to 0. Forgetting is unchanged:
+never-seen Python 1.330 (v1 1.331, start 1.322).
+
+The reading at 300M: SFT on tool transcripts teaches *when* to call (100% calls) and a
+lookup from phrasing to code, but not how to write new code for a new request, even though
+the base model can write `a % b` on its own. Breadth alone does not fix that. What is left
+to try is reward on the result rather than imitation of the call, which is the next
+paragraph.
 
 **Not built yet:** GRPO on these problems, with the reward computed after the tool has
 run. That needs the sampler to run tool calls in the middle of a completion, which

@@ -508,7 +508,8 @@ The expensive routes. Each one is a real research direction rather than a switch
   between those two commands is in [doc 6](06-posttraining.md) § "Tool use". Measured
   2026-11-20: 120 of 120 on the trained kinds (from 2), 0 of 20 on the held-out kind, where it
   called the tool and wrote a multiplication instead of `%`. Set v2 (twenty trained kinds,
-  four held out) asks whether breadth fixes that:
+  four held out) asked whether breadth fixes that, and it did not (2026-11-21): trained kinds
+  81% (v1 29%, paired 250–1), held-out kinds 0/80, each answered with a neighbour's code:
   `python -m aksharallm.tools data --set v2`, then the same SFT, then
   `python -m aksharallm.tools eval <ckpt> --set v2` on both tool models and `tools compare`.
 

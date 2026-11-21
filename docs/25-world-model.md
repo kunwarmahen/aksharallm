@@ -182,6 +182,51 @@ python -m aksharallm.world play checkpoints/world-keys/ckpt_best.pt
 The World tab draws a keys result as two tables: by move (most likely frame, copy, KL,
 P(most likely) for the world and for the model) and the door split.
 
+### Measured 2026-11-21: `world-keys`
+
+Same model and budget as `world-sokoban` (4,000 steps, 6 minutes on the card), scored over
+600 episodes, 15,000 transitions:
+
+| | most likely frame | copying the last frame | KL nats/frame | mass on impossible frames |
+|---|---|---|---|---|
+| all moves | **99.0%** | 25.6% | **0.021** | 1.19% |
+
+| intended move ended… | n | most likely frame | KL | P(most likely): world | model |
+|---|---|---|---|---|---|
+| moved | 10,158 | 100% | 0.003 | 0.900 | 0.901 |
+| blocked | 2,403 | 100% | 0.003 | 0.922 | 0.920 |
+| stayed | 783 | 100% | 0.001 | 1.000 | 0.999 |
+| took key | 422 | 100% | 0.005 | 0.900 | 0.908 |
+| pushed | 198 | 100% | 0.044 | 0.900 | 0.900 |
+| **locked** | 657 | **86.8%** | **0.247** | 0.924 | 0.750 |
+| **unlocked** | 379 | **83.1%** | **0.290** | 0.900 | 0.709 |
+
+**The slips are learned, almost exactly.** Wherever the frame says everything (moves, walls,
+pushes, pickups), the model puts 0.90 on the intended move and spreads the rest over the
+slips the way the world does; KL is a few thousandths of a nat. Both of the misses are at
+doors, where the answer depends on the hidden key:
+
+| at a door, the agent… | n | belief it opens | truth | right |
+|---|---|---|---|---|
+| holds a key it was seen picking up | 176 | **0.951** | 1 | 98.3% |
+| holds a key picked up before the context | 203 | 0.591 | 1 | 70.4% |
+| holds no key | 657 | 0.187 | 0 | 87.1% |
+
+The top row is memory working: a pickup up to ~30 moves back in the context is used. The
+middle row should be the base rate if the window were the only evidence, and it is well
+above it (about 0.24 of doors without a pickup in view are held ones). The likeliest source
+is the agent, not the frames: `keys.policy` heads for a door 60% of the time when it holds
+a key, so *walking to a door* is itself evidence of a key. That is a real inference from
+behaviour, and a leak in the test. A policy that ignores `held` would remove it; this is a
+hypothesis, not checked.
+
+Rollouts (own frames fed back, scored against the no-slip game): 100, 100, then 96% exact
+from step 3 to step 10, with 0 impossible frames.
+
+So the keys world is not solved the way Sokoban was: the model is calibrated where the
+frame is enough and uncertain exactly where it is not. The next version of the test is the
+same game with a `held`-blind policy, so that only memory can answer the middle row.
+
 ## The code, in reading order
 
 | # | file | what to look for |
