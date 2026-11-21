@@ -1006,9 +1006,64 @@ the base model can write `a % b` on its own. Breadth alone does not fix that. Wh
 to try is reward on the result rather than imitation of the call, which is the next
 paragraph.
 
-**Not built yet:** GRPO on these problems, with the reward computed after the tool has
-run. That needs the sampler to run tool calls in the middle of a completion, which
-`sample_groups_batched` does not do.
+### GRPO with the tool in the loop (built 2026-11-21, queued)
+
+Imitation teaches the call that goes with each phrasing, and nothing makes a wrong call
+cost anything: the transcripts are always right. GRPO can make it cost something, if the
+reward is the *answer the tool's output leads to*. That needs the call to run in the middle
+of a completion, which is what `tools/rollout.py` adds:
+
+```mermaid
+flowchart LR
+    P["prompt<br/>(context)"] --> T1["turn 1, sampled<br/>&lt;tool&gt; code &lt;/tool&gt;"]
+    T1 --> S["sandbox runs it<br/>(thread pool)"]
+    S --> O["tool turn<br/>(context, never trained)"]
+    O --> T2["turn 2, sampled<br/>The answer is N."]
+    T2 --> R["reward: is N right?<br/>1 or 0"]
+```
+
+- **Two sampled turns, one sequence.** All turn-1s of a step are sampled in one batch, the
+  calls run in parallel, all turn-2s in a second batch. The sequence is token for token the
+  conversation SFT trained on (a test renders the same four turns with `render_chat` and
+  compares), so the policy is scored on the format it learned.
+- **The tool's output carries no loss.** `rollouts` returns a `trainable` flag per token and
+  `grpo.build_batch` turns it into the mask, so only the two sampled turns get gradient.
+  Training a model to predict the tool would reward it for not needing the tool. Three
+  mutants were checked red: the tool segment's newline dropped, the tool output marked
+  trainable, and the mask shifted by one.
+- **Reward is the final number, nothing else.** No credit for calling, for code that runs, or
+  for a number of the right size: `CodeReward`'s docstring is the record of what a shaping
+  term becomes once the group normalisation rescales it. The step log adds `called`, the
+  share of rollouts that ran a call, because a policy learning to answer without the tool
+  would show a rising reward and a falling share.
+- **New problems, the same held-out kinds.** Set `rl` is twelve kinds neither tool model
+  trained on (absolute difference, cube, sum of squares, product, range, median, triangle
+  numbers, hypotenuse, circle area, Fahrenheit, minutes, perimeter). None is closer to a
+  held-out kind than v2's own trained kinds: no `%`, no digits, no dates, no gcd. The four
+  held-out kinds stay v2's, so the only question asked is the one v2 left open.
+- **Best is chosen on fresh problems of the practice kinds**, never on the held-out four:
+  choosing on them would make the final number a selected one.
+
+On the v2 tool model, sampled at 0.8, the start looks like v2 on its held-out kinds: every
+problem gets a call, mostly a neighbour's code (`897 * 897` for a cube, `max` for a median
+and for a range). Sometimes one is right, which is what GRPO needs: `--filter 8` keeps the
+problems solved sometimes but not always.
+
+```bash
+STAGE_RUN=small-code-py-tools-v2-grpo INIT=checkpoints/small-code-py-tools-v2/sft_best.pt \
+    TASKS=tools FILTER=8 STEPS=300 scripts/stage.sh grpo small-code-py-tools-v2
+python -m aksharallm.tools eval checkpoints/small-code-py-tools-v2-grpo/grpo_best.pt --set v2 --label setv2
+python -m aksharallm.tools eval checkpoints/small-code-py-tools-v2-grpo/grpo_best.pt --set rl --label setrl
+python -m aksharallm.tools compare logs/tools/small-code-py-tools-v2-setv2.json \
+    logs/tools/small-code-py-tools-v2-grpo-setv2.json
+```
+
+The result to read is the four held-out rows of that comparison. The set-`rl` report says
+whether it learned the practice kinds at all (against the v2 model scored on the same set),
+and the twenty trained kinds of set v2 say whether it broke what it already did.
+
+**Not built:** a second call in one completion (each problem here needs one), and calls in
+the middle of a prose answer rather than as their own turn.
 
 ## The code, in reading order
 
@@ -1044,9 +1099,10 @@ Three stages, three trainers, and they share the pretraining loop's shape — re
 
 | # | file | what to look for |
 |---|---|---|
-| 10 | [`aksharallm/tools/problems.py`](../aksharallm/tools/problems.py) | `make` (seven kinds, each with its reference call and exact answer) and `_make_v2` (seventeen more), `conversation` (the four turns), `HELD_OUT_KIND`, and `SETS` (v1: 6 trained / 1 held out; v2: 20 / 4) with `eval_kinds` |
+| 10 | [`aksharallm/tools/problems.py`](../aksharallm/tools/problems.py) | `make` (seven kinds, each with its reference call and exact answer) and `_make_v2` (seventeen more), `_make_rl` (GRPO's twelve), `conversation` (the four turns), `HELD_OUT_KIND`, and `SETS` (v1: 6 trained / 1 held out; v2: 20 / 4; rl: 12 / v2's 4) with `eval_kinds` |
 | 11 | [`aksharallm/tools/agent.py`](../aksharallm/tools/agent.py) | `solve` (the loop: generate, run, append the `tool` turn, again), then `score` (paired, with and without the tool) |
 | 12 | [`aksharallm/data/prepare_sft.py`](../aksharallm/data/prepare_sft.py) → `is_valid` | the `tool` role, allowed and never trained on (`render_chat` trains on assistant turns alone). `tests/test_tools.py` |
+| 12b | [`aksharallm/tools/rollout.py`](../aksharallm/tools/rollout.py) | `rollouts` (two sampled turns around a real call, with a `trainable` flag per token) and `tool_segment` (built the way `render_chat` builds a message). Then `grpo.py`'s `draw`, the one sampler the step, the probe and the held-out check share, and `build_batch`'s third element. `tests/test_tool_rl.py` |
 | 13 | [`aksharallm/tools/agent.py`](../aksharallm/tools/agent.py) → `compare` · [`portal/tooluse.py`](../aksharallm/portal/tooluse.py) | two reports paired per problem, refusing different problems; the Tools tab (files are `tooluse.*`, a generic word kept out of static filenames). `tests/test_portal_newtabs.py` |
 
 What pins it: `tests/test_pipeline.py::test_sft_mask_alignment_matches_targets` and the

@@ -484,6 +484,20 @@ python -m aksharallm.longctx curve checkpoints/tiny-hybrid/ckpt_best.pt --len 10
 position past 512 rises less. It is built and tested ([doc 4](04-model.md) § "Linear
 attention"); the measured answer goes there.
 
+That is fluency. Whether the memory gives back what it was told is a different question,
+asked by **associative recall**: documents of key–value pairs, then queries, scored by how
+many pairs and how far back, past the trained window too. Three arms one key apart:
+
+```bash
+python -m aksharallm.longctx recall-data           # -> data/recall, ~1 min on the CPU
+scripts/experiment.sh recall-hybrid                # and recall-dense, recall-deltanet
+python -m aksharallm.longctx recall recall-hybrid --device cuda
+```
+
+**How you know it worked:** recall far above 1/64 inside the window for all three, and the
+gap sweep shows which ones still find the pair once it is past position 512
+([doc 19](19-long-context.md) § "A task that is all retrieval").
+
 📖 [chapter 19 — long context](19-long-context.md)
 
 ---
@@ -512,6 +526,18 @@ The expensive routes. Each one is a real research direction rather than a switch
   81% (v1 29%, paired 250–1), held-out kinds 0/80, each answered with a neighbour's code:
   `python -m aksharallm.tools data --set v2`, then the same SFT, then
   `python -m aksharallm.tools eval <ckpt> --set v2` on both tool models and `tools compare`.
+
+  Then reward the answer instead of imitating the call: GRPO with the tool run in the middle
+  of each completion, on twelve new kinds (set `rl`), the same four held out:
+
+  ```bash
+  STAGE_RUN=small-code-py-tools-v2-grpo INIT=checkpoints/small-code-py-tools-v2/sft_best.pt TASKS=tools FILTER=8 STEPS=300 scripts/stage.sh grpo small-code-py-tools-v2
+  python -m aksharallm.tools eval checkpoints/small-code-py-tools-v2-grpo/grpo_best.pt --set v2 --label setv2
+  ```
+
+  **How you know it worked:** `tools compare` of the v2 model against the GRPO one on set v2,
+  the four held-out rows above all ([doc 6](06-posttraining.md) § "GRPO with the tool in the
+  loop").
 
 - **Distillation** — train a small model to copy a big one's *probabilities*, not just its
   answers. Both models must share a tokenizer, so here it is between our own models. Start
@@ -638,13 +664,24 @@ scripts/experiment.sh world-keys                   # same model and budget
 python -m aksharallm.world eval checkpoints/world-keys/ckpt_best.pt --episodes 600
 ```
 
+`world-keys` believed a door would open 0.59 of the time when its key was picked up out of
+view, far above the base rate, probably because its agent walked to doors when it had a key.
+The blind agent never does, so only memory can answer:
+
+```bash
+python -m aksharallm.world prepare --game keys --policy blind     # -> data/world-keys-blind/
+scripts/experiment.sh world-keys-blind
+python -m aksharallm.world eval checkpoints/world-keys-blind/ckpt_best.pt --episodes 1000
+```
+
 In the portal: **☰ Menu → World** (scores beside the copy baseline, and a game drawn beside
 the truth).
 
 **How you know it worked:** next-frame exact accuracy on `moved` and `pushed` (where copying
 the last frame scores 0%), and rollouts that stay exact for several steps without producing
 an impossible frame. For `keys`: KL from the true next-frame distribution near 0, and at a
-door a belief near 1 when the pickup is in view and near 0 when nothing is held.
+door a belief near 1 when the pickup is in view and near 0 when nothing is held; with the
+blind agent, the middle row at the printed base rate.
 📖 [chapter 25 — world model](25-world-model.md)
 
 The point of every one is how little had to change. Audio needed a codec and got TTS and ASR

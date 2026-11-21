@@ -965,18 +965,21 @@ Not built yet, in the order they depend on each other or by value per GPU hour:
   1.8× slower per step, and **no cliff at twice its trained window** where attention's loss
   goes 1.4 → 5.0. Generation carries each DeltaNet block's state (`RecurrentState`) instead
   of re-reading the prefix: 160 vs 30 tok/s at 500 tokens on the CPU, identical tokens.
+  Whether that memory *retrieves* is asked by associative recall (`longctx recall`, dense vs
+  hybrid vs all-DeltaNet, inside and past the window; [doc 19](docs/19-long-context.md)).
 - **Turning a trained autoregressive model into a diffusion one** instead of training from
   scratch, measured in tokens per forward pass.
 - **A small model for agents**: tool-use SFT ✅ built and run 2026-11-20 (120/120 on trained
   kinds, 0/20 on the held-out one; set v2, 20 trained kinds, still 0/80 on four held out,
-  [doc 6](docs/06-posttraining.md)); GRPO with tool calls
-  mid-completion is not built.
+  [doc 6](docs/06-posttraining.md)). GRPO with the tool run mid-completion and the answer
+  rewarded (`--reward tools`, twelve new kinds, the same four held out) is built (2026-11-21).
 - **A toy world model**: ✅ built 2026-11-20 ([doc 25](docs/25-world-model.md)); `world-sokoban`
   solved it: 100% exact next frames and 10-step rollouts. The harder world, `keys` (a key
   never drawn once carried, a floor that slips one move in ten), is built and scored on
   calibration: KL from the true next-frame distribution and the door belief. Measured
   2026-11-21: KL 0.021 nats/frame, slips learned almost exactly; belief a door opens 0.95
-  when the pickup is in view, 0.59 when it is not, 0.19 with no key.
+  when the pickup is in view, 0.59 when it is not, 0.19 with no key. The 0.59 is probably
+  the agent giving the key away by walking to doors; `--policy blind` removes that.
 
 ---
 

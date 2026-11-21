@@ -25,6 +25,9 @@
 #   GROUP=8  STEPS=500  REWARD=code   GRPO group size, budget and reward
 #   TASKS=data/synth/py-v1 HOLDOUT=20 GRPO tasks (default when present; TASKS=builtin = the 10;
 #                                  TASKS=mbpp = MBPP-train, best on MBPP-validation)
+#                                  TASKS=tools = arithmetic with the tool run mid-completion
+#                                  (problem set TOOL_SET=rl, HOLDOUT=60, PROBLEMS=480)
+#   INIT=path/to/ckpt.pt           DPO/GRPO from this checkpoint, not <base>-sft/sft_best.pt
 #   TEMP=0.8 PARTIAL=0             GRPO sampling temperature; reward for runs-but-wrong (0.1 = rounds 1-2)
 #   FILTER=8                       GRPO: probe 8 samples per task first, train only on tasks
 #                                  solved sometimes but not always (default off)
@@ -47,7 +50,9 @@ esac
 # ---- resolve paths -----------------------------------------------------------------------
 BASE_CKPT=checkpoints/$BASE_RUN/ckpt_best.pt
 SFT_RUN=$BASE_RUN-sft
-SFT_CKPT=checkpoints/$SFT_RUN/sft_best.pt
+# INIT starts DPO/GRPO from another checkpoint than <base>-sft/sft_best.pt (a tool SFT, say,
+# whose directory is not named -sft). The dependency gate below checks whichever it is.
+SFT_CKPT=${INIT:-checkpoints/$SFT_RUN/sft_best.pt}
 # STAGE_RUN gives a second attempt its own directory beside the first, so the first stays
 # readable and comparable without being archived. Keep the -<stage> suffix: the portal reads
 # a run's stage from it (e.g. STAGE_RUN=small-code-r2-grpo).
@@ -176,7 +181,15 @@ case "$STAGE" in
         # TASKS=builtin forces the old behaviour; HOLDOUT=N changes the held-out count.
         TASK_ARGS=()
         TASKS=${TASKS:-data/synth/py-v1}
-        if [[ "$TASKS" == mbpp ]]; then
+        if [[ "$TASKS" == tools ]]; then
+            # Tool use with the reward on the answer (tools/rollout.py): the call is run in the
+            # sandbox mid-completion and the turn after it is scored. Start from a tool SFT
+            # (INIT=...); the set's held-out kinds are never trained on or selected on.
+            REWARD=tools
+            TASK_ARGS=(--tool-set "${TOOL_SET:-rl}" --holdout "${HOLDOUT:-60}"
+                       --tool-problems "${PROBLEMS:-480}")
+            echo "tasks:    tool problems, set ${TOOL_SET:-rl} (holdout ${HOLDOUT:-60})"
+        elif [[ "$TASKS" == mbpp ]]; then
             # MBPP-train to learn on, MBPP-validation (90) to choose the best on; HOLDOUT=N
             # takes the first N of those. MBPP-test is never trained on.
             TASK_ARGS=(--tasks mbpp --holdout "${HOLDOUT:-0}")

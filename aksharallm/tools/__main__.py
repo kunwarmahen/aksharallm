@@ -21,6 +21,8 @@ from pathlib import Path
 
 import torch
 
+from .problems import SETS
+
 EVAL_SEED = 99
 
 
@@ -128,7 +130,7 @@ def main(argv=None) -> int:
                                 description="tool use: teach and score a Python tool call")
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("data", help="teaching conversations -> JSONL for prepare_sft")
-    s.add_argument("--set", choices=("v1", "v2"), default="v1",
+    s.add_argument("--set", choices=tuple(SETS), default="v1",
                    help="v1: 6 kinds trained, 1 held out; v2: 20 trained, 4 held out")
     s.add_argument("--out", default=None, help="default data/tools/sft.jsonl (v1), sft-<set>.jsonl")
     s.add_argument("--n", type=int, default=30_000)
@@ -138,7 +140,7 @@ def main(argv=None) -> int:
     s.add_argument("checkpoint")
     s.add_argument("--tokenizer", default="data/blend/tokenizer.json")
     s.add_argument("--per-kind", type=int, default=20)
-    s.add_argument("--set", choices=("v1", "v2"), default="v1",
+    s.add_argument("--set", choices=tuple(SETS), default="v1",
                    help="which kinds to ask: every kind of the set, trained and held out")
     s.add_argument("--label", default="tools")
     s.add_argument("--cpu", action="store_true")

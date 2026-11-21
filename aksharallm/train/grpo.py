@@ -288,18 +288,28 @@ def build_batch(groups, pad_id, device):
 
     Returns (seq, mask) padded to the longest sequence. mask is aligned to the *targets*
     (seq[:,1:]): 1 exactly on the completion tokens, 0 on prompt and padding.
+
+    An item may carry a third element, `trainable` (one 0/1 per token of `full`), and then
+    the mask is that instead of "everything after the prompt". A tool rollout needs it: its
+    completion has the tool's output in the middle (`tools/rollout.py`), which is context
+    the model must never be trained to predict.
     """
-    flat = [(full, len(full) - len(gen)) for grp in groups for (full, gen) in grp]
+    flat = []
+    for grp in groups:
+        for item in grp:
+            full, gen = item[0], item[1]
+            plen = len(full) - len(gen)
+            flat.append((full, item[2] if len(item) > 2 else [0] * plen + [1] * len(gen)))
     maxlen = max(len(full) for full, _ in flat)
     B = len(flat)
     seq = torch.full((B, maxlen), pad_id, dtype=torch.long)
     mask = torch.zeros((B, maxlen - 1), dtype=torch.float32)
-    for i, (full, plen) in enumerate(flat):
+    for i, (full, trainable) in enumerate(flat):
+        if len(trainable) != len(full):
+            raise ValueError(f"trainable has {len(trainable)} flags for {len(full)} tokens")
         seq[i, : len(full)] = torch.tensor(full, dtype=torch.long)
-        # target position t corresponds to seq[t+1]; completion targets are t+1 >= plen.
-        for t in range(maxlen - 1):
-            if plen <= t + 1 < len(full):
-                mask[i, t] = 1.0
+        # target position t predicts seq[t+1], so it is trained iff token t+1 was sampled.
+        mask[i, : len(full) - 1] = torch.tensor(trainable[1:], dtype=torch.float32)
     return seq.to(device), mask.to(device)
 
 
@@ -342,7 +352,7 @@ def probe_passes(prompts, k: int, sample, decode) -> list[int]:
     samplers produce. The probe uses the trainer's own sampler, temperature and reward, so
     "learnable" below means exactly what the update will see.
     """
-    return [sum(rfn(text, decode(gen)) >= 1.0 for _, gen in grp)
+    return [sum(rfn(text, decode(item[1])) >= 1.0 for item in grp)
             for (_, text, rfn), grp in zip(prompts, sample([p for p, _, _ in prompts]))]
 
 
@@ -395,8 +405,11 @@ def filter_prompts(prompts, args, sample, decode, out_dir: Path):
 
 def task_set_of(args) -> dict:
     """Everything that decides which prompts a run trains and is judged on."""
-    return {"reward": args.reward, "tasks": args.tasks, "holdout": args.holdout,
-            "filter": args.filter, "chat": args.chat}
+    out = {"reward": args.reward, "tasks": args.tasks, "holdout": args.holdout,
+           "filter": args.filter, "chat": args.chat}
+    if args.reward == "tools":
+        out |= {"tool_set": args.tool_set, "tool_problems": args.tool_problems}
+    return out
 
 
 def check_task_set(saved: dict | None, now: dict, path) -> None:
@@ -419,25 +432,15 @@ def split_holdout(tasks, n):
 
 
 @torch.no_grad()
-def evaluate_held_out(policy, held_out, sampler, tok, args) -> dict:
+def evaluate_held_out(policy, held_out, draw, tok, args) -> dict:
     """Greedy, one completion per held-out task: the number the best checkpoint is chosen
     on. Greedy because a sampled score at temperature 1.0 is noise of the same size as the
-    thing it is trying to measure."""
+    thing it is trying to measure. `draw` is the trainer's own sampler (batched or serial,
+    with the tool in the loop for --reward tools)."""
     was = policy.training
     policy.eval()
-    gens = []
-    if sampler is not None:
-        cap = args.prompts_per_step * args.group_size
-        for i in range(0, len(held_out), cap):
-            chunk = held_out[i:i + cap]
-            groups = sample_groups_batched(sampler, [p for p, _, _ in chunk], 1,
-                                           args.max_new_tokens, 0.0, None, None, tok.eos_id)
-            gens += [g[0][1] for g in groups]
-    else:
-        for pids, _, _ in held_out:
-            full = generate(policy, pids, max_new_tokens=args.max_new_tokens, temperature=0.0,
-                            top_k=None, top_p=None, eos_id=tok.eos_id, device=args.device)
-            gens.append(full[len(pids):])
+    groups = draw([p for p, _, _ in held_out], 1, 0.0, None, None)
+    gens = [g[0][1] for g in groups]
     rewards = [rfn(text, tok.decode(gen)) for (_, text, rfn), gen in zip(held_out, gens)]
     policy.train(was)
     return {"val_reward": sum(rewards) / len(rewards),
@@ -452,7 +455,15 @@ def main():
     ap.add_argument("--init", required=True, help="checkpoint to start from (base or SFT)")
     ap.add_argument("--tokenizer", required=True)
     ap.add_argument("--out-dir", required=True)
-    ap.add_argument("--reward", choices=["code", "substring"], default="code")
+    ap.add_argument("--reward", choices=["code", "substring", "tools"], default="code",
+                    help="tools: arithmetic problems answered with the tool in the loop, the "
+                         "call run mid-completion and the final answer scored "
+                         "(tools/rollout.py); start from a tool-SFT checkpoint")
+    ap.add_argument("--tool-set", default="rl", metavar="SET",
+                    help="--reward tools: the problem set whose TRAIN kinds GRPO practises "
+                         "(tools/problems.py SETS); its held-out kinds are never trained on")
+    ap.add_argument("--tool-problems", type=int, default=480, metavar="N",
+                    help="--reward tools: training problems (before --filter)")
     ap.add_argument("--needle", default=" dragon", help="substring reward target (toy)")
     ap.add_argument("--chat", action="store_true", help="prompt code tasks in chat form")
     ap.add_argument("--tasks", default=None, metavar="PATH|mbpp",
@@ -574,6 +585,29 @@ def main():
 
         prompts = [as_prompt(t) for t in train_tasks]
         held_out = [as_prompt(t) for t in held_tasks]
+    elif args.reward == "tools":
+        # Problems of the set's TRAIN kinds only; the held-out check uses fresh problems of
+        # the same kinds (another seed), so "best" is chosen on practice kinds and the set's
+        # held-out kinds stay untouched for `tools eval` afterwards. Choosing the checkpoint on
+        # them would make the final number a selected one.
+        from ..tools.problems import SETS, problems as tool_problems
+        from ..tools.rollout import ToolReward
+        if args.tool_set not in SETS:
+            raise SystemExit(f"unknown --tool-set {args.tool_set!r} (one of {', '.join(SETS)})")
+        kinds = SETS[args.tool_set]["train"]
+        if args.holdout is None:
+            args.holdout = 60
+
+        def tool_prompt(p):
+            ids, _ = tok.render_chat([{"role": "user", "content": p.question}],
+                                     add_generation_prompt=True)
+            return ids, p.question, ToolReward(p.answer)
+
+        prompts = [tool_prompt(p) for p in tool_problems(args.tool_problems, 7, kinds)]
+        held_out = [tool_prompt(p) for p in tool_problems(args.holdout, 8, kinds)]
+        print(f"tasks      {len(prompts)} problems of set {args.tool_set} ({len(kinds)} kinds), "
+              f"{len(held_out)} more held out; never: "
+              + ", ".join(SETS[args.tool_set]["held_out"]))
     else:
         rf = SubstringReward(args.needle)
         for seed in ["Once upon a time", "One day", "The little", "In the forest"]:
@@ -606,6 +640,9 @@ def main():
     print("=" * 78)
     print(f"init       {args.init} ({human(policy.num_params())} params, policy + frozen ref)")
     print(f"reward     {args.reward}" + (f" (needle={args.needle!r})" if args.reward == "substring"
+                                         else f" ({len(prompts)} problems, the tool run "
+                                              f"mid-completion, {len(held_out)} held out)"
+                                         if args.reward == "tools"
                                          else f" ({len(prompts)} code tasks to train on, {len(held_out)} held out, "
                f"chat={args.chat})"))
     print(f"best       " + (f"held-out solve rate, every {args.eval_every} steps"
@@ -696,23 +733,36 @@ def main():
                                 max_new=args.max_new_tokens)
     print(f"sampler    {'batched (one pass per step)' if sampler else 'serial (one sequence at a time)'}")
 
-    if args.filter and args.reward == "code" and start_step < args.steps:
-        cap = args.prompts_per_step * args.group_size
+    # A chat turn ends at <|im_end|>; a raw code completion at end-of-text.
+    eos = tok.im_end_id if args.reward == "tools" else tok.eos_id
+    cap = args.prompts_per_step * args.group_size
+
+    def sample_plain(pids_list, k, temperature, top_k, top_p):
+        """`k` completions per prompt, in batches the engine's pool was sized for."""
+        if sampler is None:
+            return [sample_group(policy, pids, k, args.max_new_tokens, temperature, top_k,
+                                 top_p, eos, args.device) for pids in pids_list]
+        out, per = [], max(1, cap // k)
+        for i in range(0, len(pids_list), per):
+            out += sample_groups_batched(sampler, pids_list[i:i + per], k, args.max_new_tokens,
+                                         temperature, top_k, top_p, eos)
+        return out
+
+    def draw(pids_list, k, temperature, top_k=args.top_k, top_p=args.top_p):
+        """The ONE sampler every part of the run uses (the step, the probe, the held-out
+        check). For --reward tools each completion is a tool rollout (tools/rollout.py)."""
+        if args.reward == "tools":
+            from ..tools.rollout import rollouts
+            return rollouts(lambda pl, kk: sample_plain(pl, kk, temperature, top_k, top_p),
+                            tok, pids_list, k)
+        return sample_plain(pids_list, k, temperature, top_k, top_p)
+
+    if args.filter and args.reward in ("code", "tools") and start_step < args.steps:
 
         def probe_sample(pids_list):
             policy.eval()
-            out = []
             with torch.no_grad():
-                if sampler is not None:
-                    per = max(1, cap // args.filter)
-                    for i in range(0, len(pids_list), per):
-                        out += sample_groups_batched(
-                            sampler, pids_list[i:i + per], args.filter, args.max_new_tokens,
-                            args.temperature, args.top_k, args.top_p, tok.eos_id)
-                else:
-                    out = [sample_group(policy, pids, args.filter, args.max_new_tokens,
-                                        args.temperature, args.top_k, args.top_p, tok.eos_id,
-                                        args.device) for pids in pids_list]
+                out = draw(pids_list, args.filter, args.temperature)
             policy.train()
             return out
 
@@ -729,20 +779,13 @@ def main():
         groups, rewards_per_group = [], []
         policy.eval()
         with torch.no_grad():
-            if sampler is not None:
-                # Every completion of the step in one batch. This is ~90% of a GRPO step's
-                # wall-clock, and generating one sequence at a time leaves the card idle.
-                groups = sample_groups_batched(
-                    sampler, [pids for pids, _, _ in chosen], args.group_size,
-                    args.max_new_tokens, args.temperature, args.top_k, args.top_p, tok.eos_id)
-            else:
-                groups = [sample_group(policy, pids, args.group_size, args.max_new_tokens,
-                                       args.temperature, args.top_k, args.top_p, tok.eos_id,
-                                       args.device)
-                          for pids, _, _ in chosen]
-            # 3. reward each completion (decode the generated part only)
+            # Every completion of the step in one batch when the engine is there. This is
+            # ~90% of a GRPO step's wall-clock, and one sequence at a time leaves the card idle.
+            groups = draw([pids for pids, _, _ in chosen], args.group_size, args.temperature)
+            # 3. reward each completion (decode the generated part only; for a tool rollout
+            # that is the final turn)
             for (_, ptext, rfn), grp in zip(chosen, groups):
-                rewards_per_group.append([rfn(ptext, tok.decode(gen)) for _, gen in grp])
+                rewards_per_group.append([rfn(ptext, tok.decode(item[1])) for item in grp])
         policy.train()
 
         rewards = torch.tensor(rewards_per_group, dtype=torch.float32)  # (P, G)
@@ -785,6 +828,13 @@ def main():
 
         mean_r = rewards.mean().item()
         solve = (rewards >= 1.0).float().mean().item()  # fraction that fully passed
+        # A tool rollout's flags go 0 (prompt), 1 (turn 1), 0 (the tool), 1 (turn 2): a 0
+        # after the first 1 means a call ran. Logged because a policy that learns to answer
+        # without the tool would show a rising reward and a falling share here.
+        extra = {}
+        if args.reward == "tools":
+            items = [it for grp in groups for it in grp]
+            extra["called"] = sum(0 in it[2][it[2].index(1):] for it in items if 1 in it[2]) / len(items)
 
         # Decided before the log line, so the step you stop on always gets logged.
         request = None if stop["now"] else stopfile.read(stop_file)
@@ -805,7 +855,8 @@ def main():
             prev_log_step = step
             up = time.time() - run_t0
             eta = (args.steps - step) * s_per_step
-            print(f"step {step:>5}/{args.steps} | reward {mean_r:.3f} | solved {solve*100:4.0f}% | "
+            called = f"called {extra['called']*100:3.0f}% | " if extra else ""
+            print(f"step {step:>5}/{args.steps} | reward {mean_r:.3f} | solved {solve*100:4.0f}% | {called}"
                   f"loss {loss.item():+.4f} | kl {m['kl']:.4f} | gnorm {gnorm:.2f} | "
                   f"{s_per_step:.1f}s/step | up {fmt_dur(up)} | eta {fmt_dur(eta)}")
             # Same rule as dpo.py: the browser only reads this file, so anything the line
@@ -821,7 +872,7 @@ def main():
                                    "loss": loss.item(), "grad_norm": float(gnorm),
                                    "lr": args.lr, "time": time.time(),
                                    "s_per_step": s_per_step,
-                                   "elapsed": up, "eta_s": eta, **m}) + "\n")
+                                   "elapsed": up, "eta_s": eta, **m, **extra}) + "\n")
             logf.flush()
 
         # "Best" used to be the single highest batch reward — four prompts, so mostly luck:
@@ -830,7 +881,7 @@ def main():
         recent.append(mean_r)
         score = None
         if held_out and (step % args.eval_every == 0 or why or step == args.steps - 1):
-            v = evaluate_held_out(policy, held_out, sampler, tok, args)
+            v = evaluate_held_out(policy, held_out, draw, tok, args)
             score = v["val_solved"] + 1e-3 * v["val_reward"]   # reward breaks ties
             logf.write(json.dumps({"step": step, **v, "time": time.time()}) + "\n")
             logf.flush()

@@ -27,7 +27,11 @@ called the tool on every held-out question and wrote the wrong operation every t
 trains twenty kinds and holds out four (remainder again, gcd, digit sum, day of the year),
 at the same 30,000 conversations, to ask whether breadth is what turns templates into a
 habit. Each held-out kind sits near a trained one (lcm, days, letters), so a model that
-learned the idea has something to stand on, and one that learned templates does not.
+learned the idea has something to stand on, and one that learned templates does not. It did
+not: v2 went 0/80 on the held-out kinds, each answered with a neighbouring kind's code.
+`rl` is twelve more kinds for GRPO with the tool in the loop (train/grpo.py --reward tools),
+which rewards the answer the tool's output leads to rather than imitation of a call, and
+keeps v2's four held out.
 
 Read with: docs/06-posttraining.md -- the chapter this implements; it ends with the order to
 read these files in.
@@ -204,6 +208,81 @@ def _make_v2(kind: str, rng, r, pick) -> Problem:
                   f"{d.isoformat()} is which day of its year, counting January 1 as day 1?"])
         code = f"import datetime as dt\nprint(dt.date.fromisoformat('{d}').timetuple().tm_yday)"
         return Problem(kind, q, code, str(d.timetuple().tm_yday))
+    return _make_rl(kind, rng, r, pick)
+
+
+def _make_rl(kind: str, rng, r, pick) -> Problem:
+    """The kinds set `rl` trains GRPO on: twelve no tool model has seen in SFT. Some sit next
+    to a trained kind (cube by power, range by maximum/minimum, minutes by seconds), most do
+    not (median, hypotenuse, triangle numbers, a circle's area, Fahrenheit). None is closer to
+    a held-out kind than v2's own trained kinds are: no `%`, no digits, no dates, no gcd."""
+    import math
+    import statistics
+    if kind == "absdiff":
+        a, b = r(-99_999, 99_999), r(-99_999, 99_999)
+        q = pick([f"What is the absolute difference between {a} and {b}?",
+                  f"How far apart are {a} and {b} on the number line?"])
+        return Problem(kind, q, f"print(abs({a} - ({b})))", str(abs(a - b)))
+    if kind == "cube":
+        n = r(11, 999)
+        q = pick([f"What is the cube of {n}?", f"What is {n} cubed?"])
+        return Problem(kind, q, f"print({n} ** 3)", str(n ** 3))
+    if kind == "sumsquares":
+        xs = [r(1, 300) for _ in range(r(4, 9))]
+        lst = ", ".join(map(str, xs))
+        q = pick([f"What is the sum of the squares of {lst}?",
+                  f"Square each of {lst} and add them up."])
+        return Problem(kind, q, f"print(sum(x * x for x in [{lst}]))", str(sum(x * x for x in xs)))
+    if kind == "product":
+        xs = [r(2, 60) for _ in range(r(4, 8))]
+        lst = ", ".join(map(str, xs))
+        q = pick([f"What is the product of {lst}?", f"Multiply together {lst}."])
+        return Problem(kind, q, f"import math\nprint(math.prod([{lst}]))", str(math.prod(xs)))
+    if kind == "range":
+        xs = [r(-9999, 99_999) for _ in range(r(8, 15))]
+        lst = ", ".join(map(str, xs))
+        q = pick([f"What is the range (largest minus smallest) of {lst}?",
+                  f"How far is the largest of {lst} from the smallest?"])
+        return Problem(kind, q, f"xs = [{lst}]\nprint(max(xs) - min(xs))", str(max(xs) - min(xs)))
+    if kind == "median":
+        xs = [r(1, 9999) for _ in range(2 * r(3, 7) + 1)]
+        lst = ", ".join(map(str, xs))
+        q = pick([f"What is the median of {lst}?", f"Find the middle value of {lst}."])
+        return Problem(kind, q, f"import statistics\nprint(statistics.median([{lst}]))",
+                       str(statistics.median(xs)))
+    if kind == "triangle":
+        n = r(10, 9999)
+        q = pick([f"What is the {n}th triangular number?",
+                  f"What is the sum of the whole numbers from 1 to {n}?"])
+        return Problem(kind, q, f"print({n} * ({n} + 1) // 2)", str(n * (n + 1) // 2))
+    if kind == "hypot":
+        a, b = r(3, 999), r(3, 999)
+        q = pick([f"A right triangle has legs {a} and {b}. How long is the hypotenuse, to three "
+                  "decimal places?", f"Hypotenuse of a right triangle with sides {a} and {b}, "
+                  "rounded to 3 decimals?"])
+        return Problem(kind, q, f"import math\nprint(round(math.hypot({a}, {b}), 3))",
+                       str(round(math.hypot(a, b), 3)))
+    if kind == "circle":
+        rad = r(1, 500)
+        q = pick([f"What is the area of a circle of radius {rad}, to two decimal places?",
+                  f"Area of a circle with radius {rad}, rounded to 2 decimals?"])
+        return Problem(kind, q, f"import math\nprint(round(math.pi * {rad} ** 2, 2))",
+                       str(round(math.pi * rad ** 2, 2)))
+    if kind == "fahrenheit":
+        c = r(-80, 400)
+        q = pick([f"What is {c} degrees Celsius in Fahrenheit?",
+                  f"Convert {c} C to Fahrenheit."])
+        return Problem(kind, q, f"print({c} * 9 / 5 + 32)", str(c * 9 / 5 + 32))
+    if kind == "minutes":
+        d, h = r(1, 365), r(0, 23)
+        q = pick([f"How many minutes are in {d} days and {h} hours?",
+                  f"Convert {d} days {h} hours to minutes."])
+        return Problem(kind, q, f"print(({d} * 24 + {h}) * 60)", str((d * 24 + h) * 60))
+    if kind == "perimeter":
+        a, b = r(1, 99_999), r(1, 99_999)
+        q = pick([f"What is the perimeter of a {a} by {b} rectangle?",
+                  f"A rectangle is {a} long and {b} wide. What is its perimeter?"])
+        return Problem(kind, q, f"print(2 * ({a} + {b}))", str(2 * (a + b)))
     raise ValueError(kind)
 
 
@@ -214,10 +293,16 @@ MORE_KINDS = ("subtract", "divide", "power", "sqrt", "mean", "maximum", "minimum
 
 #: Which kinds a set trains on and which it holds out. The evaluation asks every kind of the
 #: set, trained and held out, so two models compared on one set answer the same problems.
+RL_KINDS = ("absdiff", "cube", "sumsquares", "product", "range", "median", "triangle",
+            "hypot", "circle", "fahrenheit", "minutes", "perimeter")
+V2_HELD_OUT = ("remainder", "gcd", "digitsum", "dayofyear")
 SETS = {
     "v1": {"train": TRAIN_KINDS, "held_out": (HELD_OUT_KIND,)},
-    "v2": {"train": TRAIN_KINDS + MORE_KINDS,
-           "held_out": ("remainder", "gcd", "digitsum", "dayofyear")},
+    "v2": {"train": TRAIN_KINDS + MORE_KINDS, "held_out": V2_HELD_OUT},
+    # GRPO's problems (train/grpo.py --reward tools), never SFT data. The held-out kinds are
+    # v2's, so the one question that matters is asked of the same four kinds: does rewarding
+    # the RESULT on twelve new kinds teach writing new code, where imitating twenty did not?
+    "rl": {"train": RL_KINDS, "held_out": V2_HELD_OUT},
 }
 
 

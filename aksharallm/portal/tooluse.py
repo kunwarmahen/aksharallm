@@ -139,8 +139,11 @@ class ToolUse:
         kind = spec.get("kind")
         cpu = ["--cpu"] if training(self.root) else []
         pset = spec.get("set") or "v1"
-        if pset not in ("v1", "v2"):
+        from ..tools.problems import SETS
+        if pset not in SETS:
             raise JobError(f"unknown problem set {pset!r}")
+        if kind == "data" and pset == "rl":
+            raise JobError("set rl is GRPO's problems, never SFT data: there is nothing to write")
         if kind == "data":
             return self.jobs.start(["data", "--set", pset],
                                    f"write 30,000 teaching conversations (set {pset})")
