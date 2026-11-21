@@ -88,6 +88,12 @@ LAUNCHERS: dict[str, dict] = {
     "world-sokoban": {"script": "scripts/experiment.sh", "args": ["world-sokoban"]},
     "world-keys": {"script": "scripts/experiment.sh", "args": ["world-keys"]},
     "world-keys-blind": {"script": "scripts/experiment.sh", "args": ["world-keys-blind"]},
+    "recall-dense-easy": {"script": "scripts/experiment.sh", "args": ["recall-dense-easy"]},
+    "recall-dense": {"script": "scripts/experiment.sh", "args": ["recall-dense"]},
+    "recall-hybrid-easy": {"script": "scripts/experiment.sh", "args": ["recall-hybrid-easy"]},
+    "recall-hybrid": {"script": "scripts/experiment.sh", "args": ["recall-hybrid"]},
+    "recall-deltanet-easy": {"script": "scripts/experiment.sh", "args": ["recall-deltanet-easy"]},
+    "recall-deltanet": {"script": "scripts/experiment.sh", "args": ["recall-deltanet"]},
     "small-distil": {"script": "scripts/experiment.sh", "args": ["small-distil"]},
     "small-student-long": {"script": "scripts/experiment.sh", "args": ["small-student-long"]},
     # Audio and vision: a different launcher, the same pid/meta/log contract. docs/21, 22.

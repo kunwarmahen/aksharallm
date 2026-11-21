@@ -68,7 +68,11 @@ def test_the_sweeps_reach_past_the_trained_window_and_fit_the_rope_table():
 
 
 def test_the_training_data_stays_in_its_vocabulary(tmp_path):
-    meta = prepare(tmp_path, train_tokens=20_000, val_tokens=2_000, progress=None)
+    meta = prepare(tmp_path, train_tokens=20_000, val_tokens=2_000, easy_tokens=5_000,
+                   progress=None)
+    easy = np.fromfile(tmp_path / "easy.bin", dtype=np.uint16)
+    assert easy.size == 5_000 and easy.max() < len(VOCAB)
+    assert not ((easy >= recall.FILLER0) & (easy < len(VOCAB))).any()   # no gap in easy docs
     arr = np.fromfile(tmp_path / "train.bin", dtype=np.uint16)
     assert arr.size == 20_000 and arr.max() < len(VOCAB) and meta["documents"]["train"] > 50
     assert (arr == QUERY).sum() == meta["documents"]["train"] or (arr == QUERY).sum() + 1 == meta["documents"]["train"]

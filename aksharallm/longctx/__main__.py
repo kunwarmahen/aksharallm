@@ -268,9 +268,9 @@ def _write(args, kind: str, payload: dict) -> Path:
 def cmd_recall_data(args) -> int:
     from .recall import prepare
     meta = prepare(args.out, train_tokens=args.train_tokens, val_tokens=args.val_tokens,
-                   seed=args.seed)
+                   easy_tokens=args.easy_tokens, seed=args.seed)
     print(json.dumps({k: meta[k] for k in ("tokens", "documents", "train")}, indent=1))
-    print(f"wrote {args.out}/train.bin, val.bin, tokenizer.json, meta.json")
+    print(f"wrote {args.out}/train.bin, easy.bin, val.bin, tokenizer.json, meta.json")
     return 0
 
 
@@ -380,6 +380,8 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--out", default="data/recall")
     r.add_argument("--train-tokens", type=int, default=240_000_000)
     r.add_argument("--val-tokens", type=int, default=2_000_000)
+    r.add_argument("--easy-tokens", type=int, default=60_000_000,
+                   help="easy.bin: 2-8 pairs and no gap, the foothold the configs mix in")
     r.add_argument("--seed", type=int, default=0)
     r.set_defaults(fn=cmd_recall_data)
 

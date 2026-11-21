@@ -57,8 +57,14 @@ FILLER0 = VALUE0 + N_VALUES
 #: queries as they can and spend little on filler: the signal per token is what decides
 #: whether it forms at all inside the budget. Every pair is queried (`queries` >= the most
 #: pairs), which puts ~18% of tokens behind a lookup; at 16 queries it was 11%, and a 4-layer
-#: model on the CPU was still at chance after 12M tokens.
-TRAIN = {"pairs": (4, 48), "gap": (0, 200), "short_gap": 32, "p_long_gap": 0.3, "queries": 48}
+#: model on the CPU was still at chance after 12M tokens. Easy documents (2-8 pairs, no
+#: gap) go to their own `easy.bin`: on those alone a 2-layer model formed the lookup in
+#: ~1,500 steps (52% at 4 pairs), where on the full range it had not formed by 4,500. Mixed
+#: in as 30% of DOCUMENTS they were only ~4.5% of tokens (they are short) and nothing formed,
+#: so the configs mix them by TOKENS with `data.train_sources`, the loader's exact per-batch
+#: share. The easy documents are the foothold; the rest teach it to reach.
+TRAIN = {"pairs": (4, 48), "gap": (0, 200), "short_gap": 32, "p_long_gap": 0.3, "queries": 48,
+         "easy_pairs": (2, 8)}
 #: What the scorer sweeps. Gaps past ~460 put the pairs beyond the trained window.
 BY_PAIRS = (8, 16, 32, 48)
 BY_GAP = (0, 128, 384, 768, 1536)
@@ -93,8 +99,10 @@ def write_tokenizer(path: Path) -> None:
 
 
 def prepare(out: str | Path, *, train_tokens: int = 240_000_000, val_tokens: int = 2_000_000,
-            seed: int = 0, progress=print) -> dict:
-    """`train.bin`, `val.bin`, `tokenizer.json`, `meta.json` for the pretraining loop."""
+            easy_tokens: int = 60_000_000, seed: int = 0, progress=print) -> dict:
+    """`train.bin` (the full range), `easy.bin` (2-8 pairs, no gap: the foothold), `val.bin`
+    (full range), `tokenizer.json`, `meta.json`. A config mixes the two training files by
+    token share with `data.train_sources`."""
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     write_tokenizer(out / "tokenizer.json")
@@ -102,14 +110,19 @@ def prepare(out: str | Path, *, train_tokens: int = 240_000_000, val_tokens: int
             "tokens": {}, "documents": {}}
     lo_p, hi_p = TRAIN["pairs"]
     lo_g, hi_g = TRAIN["gap"]
-    for split, n, s in (("train", train_tokens, seed), ("val", val_tokens, seed + 10_000)):
+    lo_e, hi_e = TRAIN["easy_pairs"]
+    for split, n, s in (("train", train_tokens, seed), ("easy", easy_tokens, seed + 5_000),
+                        ("val", val_tokens, seed + 10_000)):
         rng = np.random.default_rng(s)
         arr = np.empty(n, dtype=np.uint16)
         i = docs = 0
         while i < n:
-            hi = hi_g if rng.random() < TRAIN["p_long_gap"] else TRAIN["short_gap"]
-            toks, _ = document(rng, int(rng.integers(lo_p, hi_p + 1)),
-                               int(rng.integers(lo_g, hi + 1)), TRAIN["queries"])
+            if split == "easy":
+                toks, _ = document(rng, int(rng.integers(lo_e, hi_e + 1)), 0, TRAIN["queries"])
+            else:
+                hi = hi_g if rng.random() < TRAIN["p_long_gap"] else TRAIN["short_gap"]
+                toks, _ = document(rng, int(rng.integers(lo_p, hi_p + 1)),
+                                   int(rng.integers(lo_g, hi + 1)), TRAIN["queries"])
             k = min(len(toks), n - i)
             arr[i:i + k] = toks[:k]
             i += k

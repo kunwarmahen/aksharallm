@@ -489,8 +489,9 @@ asked by **associative recall**: documents of key–value pairs, then queries, s
 many pairs and how far back, past the trained window too. Three arms one key apart:
 
 ```bash
-python -m aksharallm.longctx recall-data           # -> data/recall, ~1 min on the CPU
-scripts/experiment.sh recall-hybrid                # and recall-dense, recall-deltanet
+python -m aksharallm.longctx recall-data           # -> data/recall (+ easy.bin), ~3 min on the CPU
+scripts/experiment.sh recall-hybrid-easy           # a curriculum: easy documents first
+scripts/experiment.sh recall-hybrid                # then the full range; same for -dense, -deltanet
 python -m aksharallm.longctx recall recall-hybrid --device cuda
 ```
 

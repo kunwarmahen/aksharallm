@@ -1,0 +1,63 @@
+# Stage 1 of the recall curriculum: see configs/recall-deltanet.yaml for the experiment.
+# Associative recall, the all-DeltaNet (no attention, no positions) arm (docs/04 § "Does the memory remember?"). Three configs,
+# one model key apart (recall-dense / recall-hybrid / recall-deltanet), trained on documents
+# that are all retrieval: pairs (key value), a gap of filler, then queries whose values can
+# only be found by looking the key up (aksharallm/longctx/recall.py). Scored by
+# `longctx recall`, past the 512-token training window as well as inside it.
+#
+# Two stages, a curriculum: recall-deltanet-easy learns the lookup on easy documents (2-8 pairs, no
+# gap), then this config starts from its weights (train.init) and trains on the full range
+# with 20% easy documents kept in by tokens. On the CPU, the full range alone stayed at chance
+# through 18M tokens, and mixing easy documents in from step 0 (even 50%) formed nothing; the
+# easy-only run formed the lookup in ~1,500 steps, and continuing it on the full range reached
+# 25% at 8 pairs / gap 32 where guessing among the document's values gives 12.5%.
+#
+#   python -m aksharallm.longctx recall-data          # ~2 min, CPU -> data/recall
+#   scripts/experiment.sh recall-deltanet-easy             # stage 1, 2,000 steps
+#   scripts/experiment.sh recall-deltanet
+#   python -m aksharallm.longctx recall recall-deltanet --device cuda
+
+name: recall-deltanet-easy
+
+model:
+  vocab_size: 148         # 3 specials + '?' + 64 keys + 64 values + 16 filler (longctx/recall.py)
+  d_model: 384
+  n_layers: 6
+  n_heads: 6
+  n_kv_heads: 6           # == n_heads, i.e. plain MHA. GQA isn't worth it at this size.
+  max_seq_len: 512
+  tie_embeddings: true
+  dropout: 0.0
+  full_attn_every: 7       # > n_layers: no block is attention, all six are DeltaNet
+
+data:
+  train_bin: data/recall/easy.bin       # 2-8 pairs, no gap: where the lookup forms
+  val_bin: data/recall/val.bin
+  tokenizer: data/recall/tokenizer.json
+
+optim:
+  lr: 1.0e-3              # small models tolerate (and want) a high LR
+  min_lr_ratio: 0.1
+  warmup_steps: 200
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+  name: adamw
+
+train:
+  out_dir: checkpoints/recall-deltanet-easy
+  batch_size: 48
+  grad_accum: 2           # 48 * 2 * 512 = 49,152 tokens/step
+  seq_len: 512
+  max_steps: 2000         # stage 1 of 2; recall-deltanet continues from ckpt_last.pt
+  eval_every: 500
+  eval_batches: 40
+  sample_every: 0         # a text prompt means nothing here; `longctx recall` is the sample
+  ckpt_every: 1000
+  log_every: 20
+  compile: true
+  seed: 1337
+  wandb_project: null
+  resume: auto

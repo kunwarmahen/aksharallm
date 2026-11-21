@@ -360,15 +360,27 @@ is a fixed 64 × 64 matrix per head, so the number of pairs should; the hybrid i
 scorer is held to an oracle that looks keys up (100%) and a copier (0%), which pins the
 off-by-one that matters: the value at position `p` is read from the logits at `p − 1`.
 
-Retrieval is learned suddenly, when an induction circuit forms, and often late. The training
-documents therefore query every pair and spend little on filler, so ~18% of tokens sit behind
-a lookup (at 16 queries per document it was 11%, and a 4-layer model on the CPU was still at
-chance after 12M tokens). The loss falls by about 0.74 nats when it happens: the query values
-go from a guess over 64 to a lookup.
+Retrieval is learned suddenly, when an induction circuit forms, and often late, and getting
+it to form at all took four tries on the CPU (a 2-layer d128 model, so the GPU runs are not
+spent finding out). Every pair is queried, so ~18% of tokens sit behind a lookup; the loss
+falls by about 0.74 nats when it forms, from the no-lookup floor of ~3.71 to ~2.69.
+
+| tried on the CPU | what happened |
+|---|---|
+| the full range only (4–48 pairs, gaps to 200), 4-layer d192, 18M tokens | at chance, loss on the no-lookup floor |
+| easy documents only (2–8 pairs, no gap), 2-layer, 1,500 steps | **formed**: loss 3.88 → 2.96, 52% at 4 pairs, 34% at 8 |
+| easy mixed in from step 0, even 50% of tokens | nothing formed by 4,000 steps |
+| **easy first, then the full range from those weights** | recall on the full task: 25% at 8 pairs / gap 32 (guessing among the document's values: 12.5%), 8–10% at gaps of 128–384 with 16 pairs |
+
+So each arm is a **curriculum of two runs**: `recall-<arm>-easy` (2,000 steps on `easy.bin`),
+then `recall-<arm>` (6,000 steps from its weights via `train.init`, with 20% easy documents
+kept in by tokens, because the CPU model forgot the easy case without them). 8,000 steps in
+all, the same for every arm.
 
 ```bash
-python -m aksharallm.longctx recall-data                    # data/recall, ~1 min on the CPU
-scripts/experiment.sh recall-dense                          # and recall-hybrid, recall-deltanet
+python -m aksharallm.longctx recall-data                    # data/recall (+ easy.bin), ~3 min on the CPU
+scripts/experiment.sh recall-hybrid-easy                    # stage 1: where the lookup forms
+scripts/experiment.sh recall-hybrid                         # stage 2: from its weights; same for -dense, -deltanet
 python -m aksharallm.longctx recall recall-hybrid --device cuda
 ```
 
