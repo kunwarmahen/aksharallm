@@ -893,7 +893,20 @@ python -m aksharallm.train.sft --base checkpoints/small-code-py-dense-sft/sft_be
     --data-dir data/sft-tools --tokenizer data/blend/tokenizer.json \
     --out-dir checkpoints/small-code-py-tools --epochs 2 --batch-size 8 --grad-accum 8
 python -m aksharallm.tools eval checkpoints/small-code-py-tools/sft_best.pt --label after
+python -m aksharallm.tools compare logs/tools/small-code-py-dense-sft-before.json \
+    logs/tools/small-code-py-tools-after.json          # paired per problem
+python -m aksharallm.tools ask checkpoints/small-code-py-tools/sft_best.pt "What is 9481233 mod 97?"
+python -m aksharallm.tools results                     # every report, one line each
 ```
+
+**In the portal: the Tools tab** (☰ Menu → Measure it → Tools). It shows a report by kind,
+with and without the tool, the held-out kind marked; pick a second report and it adds the
+paired counts (`tools compare`). **Ask it** sends one question to any chat checkpoint and
+shows the whole transcript: the call it wrote, what the sandbox printed (styled apart,
+because it is the one turn the model did not write), and the answer. Untick the tool to see
+what it says alone. **Run it from here** starts `tools eval` and `tools data` in the
+background. Every report is on the same 140 problems (seed 99), so any two can be paired;
+`compare` refuses two that are not.
 
 **Measured 2026-11-20.** 140 problems (20 of each kind, seed 99, never in training), greedy.
 SFT: 148 steps, 8.6 minutes, val 0.705.
@@ -962,6 +975,7 @@ Three stages, three trainers, and they share the pretraining loop's shape — re
 | 10 | [`aksharallm/tools/problems.py`](../aksharallm/tools/problems.py) | `make` (seven kinds, each with its reference call and exact answer), `conversation` (the four turns), `HELD_OUT_KIND` |
 | 11 | [`aksharallm/tools/agent.py`](../aksharallm/tools/agent.py) | `solve` (the loop: generate, run, append the `tool` turn, again), then `score` (paired, with and without the tool) |
 | 12 | [`aksharallm/data/prepare_sft.py`](../aksharallm/data/prepare_sft.py) → `is_valid` | the `tool` role, allowed and never trained on (`render_chat` trains on assistant turns alone). `tests/test_tools.py` |
+| 13 | [`aksharallm/tools/agent.py`](../aksharallm/tools/agent.py) → `compare` · [`portal/tooluse.py`](../aksharallm/portal/tooluse.py) | two reports paired per problem, refusing different problems; the Tools tab (files are `tooluse.*`, a generic word kept out of static filenames). `tests/test_portal_newtabs.py` |
 
 What pins it: `tests/test_pipeline.py::test_sft_mask_alignment_matches_targets` and the
 `test_dpo_*` group (`test_dpo_loss_is_ln2_when_policy_equals_reference` is the one to read

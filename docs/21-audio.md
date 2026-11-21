@@ -938,6 +938,24 @@ reference.
   Seen, own length: WER 57.3 → **41.3%** (31 better, 8 worse, p 0.0003), voice closer 37 → 38;
   unseen with the embedding: 64.6 → 45.1% (27 / 8, p 0.002).
 
+**Reading and comparing reports.** `audio tts-reports` lists every saved report on one line;
+`audio tts-compare A B` pairs two of them per sentence (words and voice) and refuses two on
+different sentences:
+
+```bash
+python -m aksharallm.audio tts-reports
+python -m aksharallm.audio tts-compare \
+    logs/audio/tts-audiolm-many-long-step59000-own-many-unseen-codes-promptitems.json \
+    logs/audio/tts-audiolm-many-long-step59000-own-many-unseen-codes-prompt.json
+```
+
+**In the portal: the Audio tab's TTS panel.** Every report as a row (speakers, how the voice
+was given, original / codec / TTS WER, voice cosine against its ceilings), a sentence-by-
+sentence comparison of any two (a cloned report opens against its own control), each
+sentence's original, codec and TTS clips to play, and **Speak**: type text and pick a voice
+(LJ, or *clone* any sentence of the selected report, whose recording and words become the
+prompt). Speak and a new TTS report run in the background as the printed `audio` command.
+
 **Does codebook 0 carry the words? No more than before.** The content codebook's open
 question, tested by `codec-transfer --judged 1,4,8`: the recogniser transcribes audio decoded
 from codebook 0 *alone*, for both codecs, on the same clips.
@@ -1030,6 +1048,7 @@ are that chapter's model, unchanged, over different integers.
 | 12 | [`audio/transfer.py`](../aksharallm/audio/transfer.py) | `measure_corpus`, then `paired`: every clip is read against its own original, so "the codec hurts these voices" is never confused with "these sentences are harder". Then `voice_columns`, the identity score and its two references |
 | 12b | [`audio/speaker.py`](../aksharallm/audio/speaker.py) · [`audio/train_speaker.py`](../aksharallm/audio/train_speaker.py) | `SpeakerEncoder.forward` (mean + std pooling), `AMSoftmax`'s margin, `SpeakerCorpus`'s per-speaker hold-out, then `eer`. The trainer chooses its best checkpoint on *unseen* speakers. Break `eer` on purpose in [lesson 24](lessons/24-speaker.md) |
 | 13 | [`aksharallm/audio/__main__.py`](../aksharallm/audio/__main__.py) · [`portal/audio.py`](../aksharallm/portal/audio.py) | the two front ends, over one set of functions |
+| 14 | [`audio/ttsreports.py`](../aksharallm/audio/ttsreports.py) · [`portal/tts.py`](../aksharallm/portal/tts.py) | `compare`: two TTS reports paired per sentence (fewer word errors, closer voice), refusing different sentences; `finite`, because a one-speaker report's NaN emptied the browser panel. Then the Audio tab's TTS panel and its Speak / report jobs |
 
 What pins it: [`tests/test_audio.py`](../tests/test_audio.py) and
 [`tests/test_codec.py`](../tests/test_codec.py) — including the three regressions above

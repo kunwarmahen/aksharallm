@@ -58,6 +58,10 @@ from .audio import Audio, AudioError
 from .dictate import MAX_BODY as DICTATE_MAX_BODY
 from .dictate import Dictation, DictationError
 from .vision import Vision, VisionError
+from .jobs import JobError
+from .tooluse import ToolUse, ToolsError
+from .tts import Tts, TtsError
+from .world import World, WorldError
 from .diffusion import Diffusion
 from .interp import Interp
 from .longctx import LongContext
@@ -97,6 +101,7 @@ class Handler(BaseHTTPRequestHandler):
                  evals: EvalJobs, synth: SynthJobs, learn: Learn, interp: Interp,
                  longctx: LongContext, diffusion: Diffusion, serving: ServeJobs,
                  audio: Audio, vision: Vision, dictation: Dictation,
+                 world: World, tooluse: ToolUse, tts: Tts,
                  cost: CostConfig, quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
@@ -117,6 +122,9 @@ class Handler(BaseHTTPRequestHandler):
         self.audio = audio
         self.vision = vision
         self.dictation = dictation
+        self.world = world
+        self.tooluse = tooluse
+        self.tts = tts
         self.cost = cost
         self.quiet = quiet
         super().__init__(*args, **kw)
@@ -406,6 +414,14 @@ class Handler(BaseHTTPRequestHandler):
                     # A message, not a stack trace: every one of these is something the
                     # reader can act on (wrong checkpoint family, mismatched sample rate).
                     return self._json({"error": str(e)}, code=400)
+            # world / tooluse / tts: the 2026-11-20 builds. Inline reads and short model calls,
+            # plus one detached CLI job per tab (portal/jobs.py) whose command is printed.
+            if len(parts) == 3 and parts[:2] in (["api", "world"], ["api", "tooluse"],
+                                                 ["api", "tts"]):
+                try:
+                    return self._json(self._new_post(parts[1], parts[2], data))
+                except (WorldError, ToolsError, TtsError, JobError, ValueError) as e:
+                    return self._json({"error": str(e)}, code=400)
             # vision: /api/vision/<caption|samples>. Inline like audio and interp — a
             # caption is a handful of forward passes over a 14M model.
             if len(parts) == 3 and parts[:2] == ["api", "vision"]:
@@ -499,6 +515,27 @@ class Handler(BaseHTTPRequestHandler):
             self.log_message("error: %s", exc)
             return self._error(500, f"{type(exc).__name__}: {exc}")
         self._error(404, f"no such path: {url.path}")
+
+    def _new_post(self, tab: str, action: str, data: dict) -> dict:
+        """POST /api/<world|tooluse|tts>/<action>. One table, so each tab's verbs are legible."""
+        if action == "job":
+            return getattr(self, tab).start(data)
+        if action == "stop":
+            return getattr(self, tab).jobs.stop()
+        if tab == "world" and action == "play":
+            return self.world.play(str(data.get("checkpoint") or ""),
+                                   int(data.get("horizon") or 6), int(data.get("seed") or 0))
+        if tab == "tooluse" and action == "ask":
+            return self.tooluse.ask(str(data.get("checkpoint") or ""),
+                                    str(data.get("question") or ""),
+                                    bool(data.get("use_tool", True)))
+        if tab in ("tooluse", "tts") and action == "compare":
+            return getattr(self, tab).compare(str(data.get("a") or ""), str(data.get("b") or ""))
+        if tab == "tts" and action == "clip":
+            return self.tts.clip(str(data.get("name") or ""), int(data.get("index") or 0))
+        if tab == "tts" and action == "spoken":
+            return self.tts.spoken_clip(str(data.get("name") or ""))
+        raise ValueError(f"no such action: {tab}/{action}")
 
     def _api_get(self, parts: list[str], query: dict):
         if parts == ["runs"]:
@@ -605,6 +642,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.dictation.personal())
         if parts == ["dictate", "desktop"]:
             return self._json(self.dictation.desktop())
+        # world / tooluse / tts: overviews (results, checkpoints, the current job).
+        if parts == ["world"]:
+            return self._json(self.world.overview())
+        if parts == ["tooluse"]:
+            return self._json(self.tooluse.overview())
+        if parts == ["tts"]:
+            return self._json(self.tts.overview())
+        if parts in (["tooluse", "report"], ["tts", "report"]):
+            name = str((query.get("name") or [""])[0])
+            try:
+                return self._json((self.tooluse if parts[0] == "tooluse" else self.tts).report(name))
+            except (ToolsError, TtsError) as e:
+                return self._json({"error": str(e)}, code=400)
         # vision: which towers and corpora exist.
         if parts == ["vision"]:
             return self._json(self.vision.overview())
@@ -1049,6 +1099,10 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
                   device_for=lambda: (lambda p: (p.device, p.reason))(playground.engine.plan()))
     dictation = Dictation(store.root,
                           device_for=lambda: (lambda p: (p.device, p.reason))(playground.engine.plan()))
+    plan = lambda: (lambda p: (p.device, p.reason))(playground.engine.plan())  # noqa: E731
+    world = World(store.root, device_for=plan)
+    tooluse = ToolUse(store.root, device_for=plan)
+    tts = Tts(store.root)
     serving = ServeJobs(store.root)
     handler = partial(Handler, store=store, scheduler=scheduler, sampler=sampler,
                       source=source, explain=explain, playground=playground,
@@ -1056,6 +1110,7 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
                       synth=synth, learn=learn, interp=interp, longctx=longctx,
                       diffusion=diffusion, serving=serving, audio=audio,
                       vision=vision, dictation=dictation,
+                      world=world, tooluse=tooluse, tts=tts,
                       cost=cost,
                       quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True

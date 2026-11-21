@@ -330,7 +330,8 @@ the good one.
 ## Doing it
 
 ```bash
-# 1. where does this model actually stop working?
+# 1. where does this model actually stop working? (saved to logs/longctx/ like the others,
+#    since 2026-11-20; it used to only print, so the Context tab never saw a curve)
 python -m aksharallm.longctx curve small-code --len 2048 --device cpu
 
 # 2. which fix is best for it? (same windows, one variable)

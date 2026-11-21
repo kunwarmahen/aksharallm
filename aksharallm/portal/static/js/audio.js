@@ -10,6 +10,7 @@
  */
 import { $, api, escHtml, flash, fmt, post } from './core.js';
 import { registerTab } from './router.js';
+import { leaveTts, openTts } from './tts.js';
 
 const au = { loaded: false, ckpt: null, corpus: null, busy: false };
 
@@ -235,10 +236,11 @@ registerTab('audio', {
     await loadOverview();
     await loadRuns();
     await loadTransfer().catch((e) => flash(`other-voices report: ${e.message}`, 'error'));
+    await openTts().catch((e) => flash(`TTS panel: ${e.message}`, 'error'));
     au.loaded = true;
   },
   /* Nothing polls here, so there is nothing to tear down — but the hook stays declared so
    * that adding a poll later cannot forget it. That omission is how a tab keeps working
    * behind whatever the reader opened next. */
-  leave() {},
+  leave() { leaveTts(); },
 });

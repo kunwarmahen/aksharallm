@@ -1,0 +1,64 @@
+/* The World tab. Frames are 8x8 grids of single characters drawn as cells; `.wd-steps`
+ * items get `min-width: 0` (gotcha #8) so a row of frames scrolls rather than widening the
+ * page on a phone. */
+
+.wd-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(250px, 100%), 1fr));
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+.wd-step {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.5rem;
+}
+.wd-step.wd-bad { border-color: var(--warn, #c86); }
+.wd-step h4 { margin: 0 0 0.35rem; font-size: 0.85rem; font-weight: 600; }
+.wd-pair { display: flex; gap: 0.5rem; }
+.wd-pair > div { min-width: 0; }
+.wd-pair small { display: block; color: var(--dim); font-size: 0.7rem; margin-bottom: 0.15rem; }
+.wd-frame {
+  display: grid;
+  grid-template-columns: repeat(8, 1fr);
+  width: 112px;
+  gap: 1px;
+}
+.wd-cell {
+  aspect-ratio: 1;
+  font: 600 0.62rem/1 ui-monospace, monospace;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+  background: var(--panel-2, rgba(127, 127, 127, 0.08));
+  color: var(--dim);
+}
+.wd-cell.c-wall { background: var(--line); color: transparent; }
+.wd-cell.c-agent { color: var(--accent); font-size: 0.75rem; }
+.wd-cell.c-box { color: var(--fg); }
+.wd-cell.c-goal { color: var(--ok, #4a8); }
+.wd-cell.c-done { color: var(--ok, #4a8); background: rgba(68, 170, 136, 0.18); }
+.wd-cell.wd-wrong { outline: 2px solid var(--warn, #c86); outline-offset: -1px; }
+
+.wd-rollout { display: flex; gap: 0.25rem; align-items: flex-end; margin-top: 0.75rem; flex-wrap: wrap; }
+.wd-bar { width: 28px; display: flex; flex-direction: column; align-items: center; font-size: 0.7rem; color: var(--dim); }
+.wd-bar span { display: block; width: 100%; background: var(--accent); border-radius: 3px 3px 0 0; }
+.wd-bar span.wd-imp { background: var(--warn, #c86); }
+
+/* The CLI job box (shared with the Tools tab and the TTS panel: js/clijob.js). */
+.cj-box { margin-top: 0.6rem; }
+.cj-box .row { gap: 0.5rem; align-items: center; }
+.cj-log {
+  max-height: 14rem;
+  overflow: auto;
+  font-size: 0.75rem;
+  background: var(--panel-2, rgba(127, 127, 127, 0.08));
+  padding: 0.5rem;
+  border-radius: 6px;
+  white-space: pre-wrap;
+}
+.cj-running { color: var(--accent); }
+.cj-done { color: var(--ok, #4a8); }
+.cj-failed, .cj-lost { color: var(--warn, #c86); }

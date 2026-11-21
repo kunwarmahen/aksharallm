@@ -741,6 +741,10 @@ class Engine:
             # this model would have produced on its own, so nothing below here changes: the
             # decoder, the stop handling and the timings are shared, and `spec` is reported
             # beside them so the acceptance rate is visible rather than assumed.
+            # A hybrid model (docs/04) has no KV cache for its DeltaNet blocks, and drafting
+            # works by rewinding one, so the draft control is ignored for it, not crashed on.
+            if sp.ngram and getattr(loaded.model.cfg, "full_attn_every", 0):
+                sp.ngram = 0
             spec = SpecStats() if sp.ngram else None
             common = dict(max_new_tokens=sp.max_new_tokens, temperature=sp.temperature,
                           top_k=sp.top_k or None, top_p=sp.top_p,

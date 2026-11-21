@@ -174,9 +174,21 @@ def _arch_str(mcfg: dict | None) -> str | None:
         # Said first, because it changes what every other number in this string means: this
         # is not a decoder-only model and cannot be sampled like one. See docs/20.
         ctx += " bidirectional"
-    return (f"d={mcfg.get('d_model')} L={mcfg.get('n_layers')} "
-            f"H={mcfg.get('n_heads')} KV={mcfg.get('n_kv_heads')} "
-            f"ctx={ctx}")
+    out = (f"d={mcfg.get('d_model')} L={mcfg.get('n_layers')} "
+           f"H={mcfg.get('n_heads')} KV={mcfg.get('n_kv_heads')} "
+           f"ctx={ctx}")
+    return out + _hybrid_str(mcfg)
+
+
+def _hybrid_str(mcfg: dict) -> str:
+    """" hybrid: DeltaNet in 4/6" for a `full_attn_every` model (docs/04), else "". It
+    decides whether the model has a KV cache, so a checkpoint must say so wherever it is
+    listed."""
+    n, every = mcfg.get("n_layers") or 0, mcfg.get("full_attn_every") or 0
+    if not every:
+        return ""
+    linear = sum(1 for i in range(n) if (i + 1) % every != 0)
+    return f" hybrid: DeltaNet in {linear}/{n}"
 
 
 def stage_for(name: str) -> str:

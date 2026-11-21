@@ -954,6 +954,7 @@ class RunStore:
             if kind != "model":
                 return self._other_config_summary(path, kind)
             from ..config import load_config
+            from ..infer.checkpoints import _hybrid_str
             cfg = load_config(str(path))
         except Exception as exc:  # a half-edited YAML must not blank the whole dashboard
             return {"error": f"{type(exc).__name__}: {exc}"}
@@ -969,7 +970,7 @@ class RunStore:
             "teacher": teacher,
             "path": str(path.relative_to(self.root)),
             "arch": f"d={m.d_model} L={m.n_layers} H={m.n_heads} KV={m.n_kv_heads} "
-                    f"ff={m.d_ff} ctx={m.max_seq_len}",
+                    f"ff={m.d_ff} ctx={m.max_seq_len}" + _hybrid_str(vars(m)),
             "vocab_size": m.vocab_size,
             "batch": f"{t.batch_size} x {t.grad_accum} accum x {t.seq_len} ctx",
             "tokens_per_step": t.batch_size * t.grad_accum * t.seq_len,

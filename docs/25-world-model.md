@@ -79,7 +79,16 @@ python -m aksharallm.world prepare                 # ~1 min on the CPU, 242 MB
 scripts/experiment.sh world-sokoban                # ~10 min on a 3090
 python -m aksharallm.world eval checkpoints/world-sokoban/ckpt_best.pt
 python -m aksharallm.world play checkpoints/world-sokoban/ckpt_best.pt   # one rollout, side by side
+python -m aksharallm.world results                 # every saved evaluation, one line each
 ```
+
+**In the portal: the World tab** (☰ Menu → Reach further → World). It leads with the score
+table by outcome, each row beside its copy-the-last-frame column, and the rollout as bars
+(exact frames, impossible frames). **Watch it play** runs one game open loop (the same
+`play` function the CLI prints, `--json` gives its frames) and draws the true frame beside
+the model's, with every wrong cell outlined. **Run it from here** starts `world prepare` and
+`world eval` in the background and prints each command; training is the dashboard's Start
+on `world-sokoban`.
 
 ## Measured
 
@@ -116,8 +125,11 @@ calibration.
 | 4 | [`configs/world-sokoban.yaml`](../configs/world-sokoban.yaml) | tiny's shape with `vocab_size: 15`; nothing else about the trainer changes |
 | 5 | [`world/evaluate.py`](../aksharallm/world/evaluate.py) → `next_frame` | why teacher-forced argmax equals greedy for an exact frame, and the copy baseline per outcome |
 | 6 | same file → `rollout` | the model's own frames fed back, and `parse` counting impossible ones |
-| 7 | [`world/__main__.py`](../aksharallm/world/__main__.py) | `prepare`, `eval` (writes `logs/world/<run>-step<N>.json`), `play` |
+| 7 | [`world/__main__.py`](../aksharallm/world/__main__.py) | `prepare`, `eval` (writes `logs/world/<run>-step<N>.json`), `play`, `results` |
+| 8 | [`portal/world.py`](../aksharallm/portal/world.py) · [`static/js/world.js`](../aksharallm/portal/static/js/world.js) | the World tab: results, `play` inline, the two jobs through `portal/jobs.py`. World models are found by their 15-word vocabulary, not by name |
 
 Tests: `tests/test_world.py`. They cover the push and block rules, the render/parse round
 trip, the token layout and tokenizer, and the scorer against the copying model. Four
 mutants were checked red, including a one-token slice error and a box pushed through a box.
+`tests/test_portal_newtabs.py` pins the playout's wrong-cell count against the copying
+model.

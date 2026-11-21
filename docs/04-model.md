@@ -351,7 +351,9 @@ residuals, the FFN, the trainer) is unchanged; the layer takes `Attention`'s arg
 - **Generation.** No KV cache for the recurrent blocks, so `infer/generate.py` re-reads the
   whole prefix for every token: quadratic and slow, but correct, which is what a training
   sample and the Playground need. A recurrent decode (carry `S` and the conv tail) is the
-  obvious next step. The serving engine refuses a hybrid model.
+  obvious next step. The serving engine refuses a hybrid model, and the Playground ignores
+  its draft control for one (drafting rewinds a KV cache). Everywhere a checkpoint is listed,
+  its architecture string ends `hybrid: DeltaNet in 4/6`, so it never passes for a plain one.
 
 The experiment is `configs/tiny-hybrid.yaml`: `tiny-adamw` plus `full_attn_every: 3` (four
 DeltaNet blocks, two attention blocks; 14.39M parameters against 13.77M). It asks two

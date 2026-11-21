@@ -1,0 +1,22 @@
+/* The Tools tab. The transcript is a column of turns; a `tool` turn (what the sandbox
+ * printed) is styled apart, because it is the one turn the model never wrote. */
+
+.tu-q { flex: 1 1 18rem; min-width: 0; }
+.tu-q input { width: 100%; min-width: 0; }
+.tu-check { flex-direction: row; align-items: center; gap: 0.35rem; }
+.tu-chat { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.5rem; }
+.tu-turn {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+}
+.tu-turn b { display: block; font-size: 0.7rem; color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; }
+.tu-turn.r-assistant { border-color: var(--accent); }
+.tu-turn.r-tool { font-family: ui-monospace, monospace; background: var(--panel-2, rgba(127, 127, 127, 0.08)); }
+.tu-held { color: var(--warn, #c86); font-weight: 600; }
+.tu-ok { color: var(--ok, #4a8); }
+.tu-no { color: var(--warn, #c86); }
+.tu-rows summary { cursor: pointer; margin-top: 0.5rem; }

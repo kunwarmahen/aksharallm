@@ -114,6 +114,69 @@ scripts/audio.sh codec-synth</pre>
       <p id="au-transfer-note" class="panel-note dim"></p>
     </div>
 
+    <!-- 6. text to speech -->
+    <div class="panel" id="tts-panel">
+      <h3>Text to speech — in whose voice, and can you still understand it?</h3>
+      <p class="panel-note">
+        The audio language model reads a sentence and writes codec codes, which the codec turns
+        back into sound. Each report has the recogniser transcribe the <strong>original</strong>
+        recording, the <strong>codec</strong>'s copy of it, and the <strong>TTS</strong> output
+        of the same sentence: one judge, three rows. <em>Voice</em> is the speaker model's
+        cosine between the TTS and that speaker's own recording, read against the codec's copy
+        (the ceiling) and two real recordings of one speaker. <em>Cloned</em> means a few
+        seconds of the speaker's recording were given as a prompt; <em>embedding</em> means only
+        their voice fingerprint. <a href="#docs?doc=21-audio.md">Read chapter 21</a>.
+      </p>
+      <div class="scroll-x"><table id="tts-reports" class="grid"></table></div>
+
+      <h4>Compare two reports, sentence by sentence</h4>
+      <p class="panel-note">
+        20–40 sentences make totals noisy, so the comparison counts sentences: on how many did b
+        come out with fewer word errors, and on how many closer to the speaker's voice. A cloned
+        report is offered against its control (same sentences, same reference, no prompt).
+      </p>
+      <div class="row">
+        <label class="field">a <select id="tts-a"></select></label>
+        <label class="field">b <select id="tts-b"></select></label>
+        <button id="tts-compare" type="button">Compare</button>
+      </div>
+      <p id="tts-paired" class="panel-note"></p>
+      <pre id="tts-cmp-cmd" class="au-cmd" hidden></pre>
+
+      <h4>Listen</h4>
+      <div class="row">
+        <label class="field">Report <select id="tts-report"></select></label>
+      </div>
+      <div class="scroll-x"><table id="tts-sentences" class="grid"></table></div>
+
+      <h4>Say something</h4>
+      <p class="panel-note">
+        Runs <code>audio speak</code> in the background (seconds on the card, under a minute on
+        the CPU). A multi-speaker model can speak as a training speaker, or clone the voice of
+        any sentence in a report: its original recording and its words become the prompt.
+      </p>
+      <div class="row">
+        <label class="field">Model <select id="tts-ckpt"></select></label>
+        <label class="field tts-text">Text <input id="tts-text" type="text" maxlength="300"
+          value="The quick brown fox jumps over the lazy dog, and nobody is surprised."></label>
+        <label class="field">Voice <select id="tts-voice"></select></label>
+        <button id="tts-speak" class="primary" type="button">Speak</button>
+      </div>
+      <div id="tts-spoken" class="tts-spoken"></div>
+
+      <h4>Score a model</h4>
+      <div class="row">
+        <label class="field">Speakers <select id="tts-codes"></select></label>
+        <label class="field">Voice given as <select id="tts-voicing">
+          <option value="">embedding</option>
+          <option value="prompt-items">embedding (control for cloning)</option>
+          <option value="prompt">cloned from a prompt</option></select></label>
+        <label class="field">Sentences <input id="tts-n" type="number" min="1" max="100" value="40"></label>
+        <button id="tts-run-report" type="button">Run a TTS report</button>
+      </div>
+      <div id="tts-job"></div>
+    </div>
+
     <!-- 5. runs -->
     <div class="panel">
       <h3>Audio runs</h3>

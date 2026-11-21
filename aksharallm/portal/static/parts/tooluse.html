@@ -1,0 +1,82 @@
+<!-- The Tools tab: does the chat model reach for a Python call, and is the answer right?
+     (docs/06 § "Tool use"). Every score is paired: the same problems with and without. -->
+<section class="view" id="view-tooluse" hidden>
+  <div class="page">
+
+    <div class="panel">
+      <h2>Tools — a 300M model that knows when to call Python</h2>
+      <p class="panel-note">
+        A small model cannot multiply five-digit numbers in its head, count the letters in a word,
+        or work out the days between two dates. It can learn to <strong>write the line of
+        Python</strong> that does, read what it printed, and answer. The tool's output is never
+        trained on, only the call and the answer, so the model learns to use the tool rather than
+        to guess what the tool will say. <a href="#docs?doc=06-posttraining.md">Read chapter 6,
+        "Tool use"</a>.
+      </p>
+      <div class="au-flow" aria-hidden="true">
+        <span class="au-step">question</span>
+        <span class="au-arrow">→</span>
+        <span class="au-step au-step-key">the model writes<small>&lt;tool&gt;print(…)&lt;/tool&gt;</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">sandbox runs it<small>infer/sandbox.py</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">the model answers</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Is it right?</h3>
+      <p class="panel-note">
+        140 problems the model never saw, 20 of each kind, with the tool and without. The
+        <strong>held-out kind</strong> was never in training: it is the column that says whether
+        the model learned "use a tool for arithmetic" or only six templates.
+      </p>
+      <div class="row">
+        <label class="field">Report <select id="tu-a"></select></label>
+        <label class="field">Compare with <select id="tu-b"><option value="">(nothing)</option></select></label>
+      </div>
+      <div class="scroll-x"><table id="tu-kinds" class="grid"></table></div>
+      <div id="tu-paired" class="panel-note"></div>
+      <pre id="tu-cmp-cmd" class="au-cmd" hidden></pre>
+      <details class="tu-rows"><summary>Every problem in this report</summary>
+        <div class="scroll-x"><table id="tu-rows" class="grid"></table></div>
+      </details>
+    </div>
+
+    <div class="panel">
+      <h3>Ask it</h3>
+      <p class="panel-note">
+        Anything — the transcript shows the call it wrote and what the sandbox printed. Try a
+        kind it trained on ("What is 48213 times 9071?"), the held-out kind ("What is 9481233
+        mod 97?"), or something else entirely. Untick the tool to see what it says on its own.
+      </p>
+      <div class="row">
+        <label class="field">Chat model <select id="tu-ckpt"></select></label>
+        <label class="field tu-q">Question <input id="tu-question" type="text" maxlength="400"
+          value="What is 48213 times 9071?"></label>
+        <label class="field tu-check"><input id="tu-use" type="checkbox" checked> run its tool calls</label>
+        <button id="tu-ask" class="primary" type="button">Ask</button>
+      </div>
+      <p id="tu-status" class="panel-note"></p>
+      <pre id="tu-ask-cmd" class="au-cmd" hidden></pre>
+      <div id="tu-chat" class="tu-chat"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Run it from here</h3>
+      <p class="panel-note">
+        Each button runs the command printed under it, in the background. A report scores the
+        selected chat model on the same 140 problems every time (seed 99), so any two reports can
+        be compared problem by problem. The SFT itself is <code>train.sft</code> on
+        <code>data/sft-tools</code> (chapter 6 has the four commands).
+      </p>
+      <div class="row">
+        <label class="field">Label <input id="tu-label" type="text" value="tools" maxlength="40"></label>
+        <button id="tu-eval" type="button">Score the selected chat model</button>
+        <button id="tu-data" type="button">Write the teaching conversations</button>
+      </div>
+      <div id="tu-job"></div>
+    </div>
+
+  </div>
+</section>

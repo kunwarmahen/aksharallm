@@ -498,7 +498,10 @@ The expensive routes. Each one is a real research direction rather than a switch
   ```bash
   python -m aksharallm.tools data                    # 30k teaching conversations
   python -m aksharallm.tools eval checkpoints/small-code-py-tools/sft_best.pt --label after
+  python -m aksharallm.tools ask checkpoints/small-code-py-tools/sft_best.pt "What is 48213 times 9071?"
   ```
+
+  In the portal: **☰ Menu → Tools** (the scores paired, and a box to ask it anything).
 
   **How you know it worked:** on the same held-out problems, accuracy with the tool beats
   accuracy without it, paired per problem, including the kind it never trained on. The SFT
@@ -618,7 +621,11 @@ python -m aksharallm.world prepare                 # 60,000 random games -> data
 scripts/experiment.sh world-sokoban                # ~6 min on a 3090; 100% exact frames (solved)
 python -m aksharallm.world eval checkpoints/world-sokoban/ckpt_best.pt
 python -m aksharallm.world play checkpoints/world-sokoban/ckpt_best.pt
+python -m aksharallm.world results                 # every saved evaluation
 ```
+
+In the portal: **☰ Menu → World** (scores beside the copy baseline, and a game drawn beside
+the truth).
 
 **How you know it worked:** next-frame exact accuracy on `moved` and `pushed` (where copying
 the last frame scores 0%), and rollouts that stay exact for several steps without producing
@@ -668,6 +675,8 @@ python -m aksharallm.audio speak checkpoints/audiolm-many/ckpt_best.pt "Any sent
 python -m aksharallm.audio encode-many checkpoints/codec-many/ckpt_best.pt --corpus data/asr/test-clean --out data/audio/many-unseen-codes --speaker checkpoints/speaker-libri/ckpt_best.pt
 python -m aksharallm.audio tts-report checkpoints/audiolm-many/ckpt_best.pt --codes data/audio/many-unseen-codes --val-clips 200 --prompt   # speakers it never heard, cloned
 scripts/audio.sh audiolm-many-long  # audiolm-many continued to 60k steps (WER 57 -> 41%)
+python -m aksharallm.audio tts-reports             # every TTS report; the Audio tab's TTS panel shows the same
+python -m aksharallm.audio tts-compare logs/audio/tts-audiolm-many-step29000-own-promptitems.json logs/audio/tts-audiolm-many-step29000-own-prompt.json   # paired per sentence
 python -m aksharallm.audio speaker-eval checkpoints/speaker-libri/ckpt_best.pt   # its EER on unseen speakers (0.42%)
 python -m aksharallm.vision caption vision-shapes  # caption held-out images and score them
 scripts/audio.sh asr-synth                         # a recogniser, no download, minutes

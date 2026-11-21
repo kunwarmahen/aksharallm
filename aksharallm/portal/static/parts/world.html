@@ -1,0 +1,77 @@
+<!-- The World tab: a transformer predicting what a game does next (docs/25). The copy-the-
+     last-frame column sits beside every score, because most cells never change. -->
+<section class="view" id="view-world" hidden>
+  <div class="page">
+
+    <div class="panel">
+      <h2>World model — the transformer predicting what a game does next</h2>
+      <p class="panel-note">
+        A language model predicts the next word. A <strong>world model</strong> predicts the next
+        state of a world, given what just happened and what someone did. This one learns a
+        box-pushing game we wrote, so every prediction can be checked exactly. Each 8×8 frame is
+        64 tokens; the action is one more. The trainer is the ordinary pretraining loop.
+        <a href="#docs?doc=25-world-model.md">Read chapter 25</a>.
+      </p>
+      <div class="au-flow" aria-hidden="true">
+        <span class="au-step">frame<small>64 cells</small></span>
+        <span class="au-arrow">+</span>
+        <span class="au-step">action<small>up · down · left · right · stay</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step au-step-key">transformer<small>13.8M, unchanged</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">next frame<small>64 cells</small></span>
+      </div>
+      <p id="wd-data" class="panel-note dim"></p>
+    </div>
+
+    <div class="panel">
+      <h3>How good is it?</h3>
+      <p class="panel-note">
+        <strong>Exact</strong> means all 64 cells of the next frame right. Read every number
+        against <strong>copy</strong>: a model that just repeats the last frame is perfect when
+        the agent bumps a wall and useless when anything moves, and averages to about a third.
+        The rollout feeds the model its <em>own</em> frames back; an <em>impossible</em> frame
+        (two agents, a hole in the wall) is the world-model version of a hallucination.
+      </p>
+      <div class="row">
+        <label class="field">Evaluation <select id="wd-result"></select></label>
+      </div>
+      <div class="scroll-x"><table id="wd-outcomes" class="grid"></table></div>
+      <div id="wd-rollout" class="wd-rollout"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Watch it play</h3>
+      <p class="panel-note">
+        One random level, never seen in training. The true game on the left, the model's
+        prediction on the right, its own frames fed back each step. A cell it got wrong is
+        outlined.
+      </p>
+      <div class="row">
+        <label class="field">Model <select id="wd-ckpt"></select></label>
+        <label class="field">Steps <input id="wd-horizon" type="number" min="1" max="12" value="6"></label>
+        <label class="field">Level <input id="wd-seed" type="number" min="0" value="0"></label>
+        <button id="wd-play" class="primary" type="button">Play</button>
+      </div>
+      <p id="wd-status" class="panel-note"></p>
+      <pre id="wd-cmd" class="au-cmd" hidden></pre>
+      <div id="wd-steps" class="wd-steps"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Run it from here</h3>
+      <p class="panel-note">
+        Each button runs the command printed under it, in the background (closing this page does
+        not stop it). Training is the dashboard's Start on <code>world-sokoban</code>
+        (<code>scripts/experiment.sh world-sokoban</code>, about 6 minutes on the card).
+      </p>
+      <div class="row">
+        <label class="field">Episodes <input id="wd-episodes" type="number" min="100" max="200000" value="60000"></label>
+        <button id="wd-prepare" type="button">Make the data</button>
+        <button id="wd-eval" type="button">Evaluate the selected model</button>
+      </div>
+      <div id="wd-job"></div>
+    </div>
+
+  </div>
+</section>

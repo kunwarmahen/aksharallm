@@ -37,11 +37,24 @@ def wav_dir(path: Path, blob: dict) -> Path:
     return path.parent / re.sub(r"-step\d+", "", path.stem, count=1)
 
 
+def finite(x):
+    """NaN/inf -> None, recursively. A one-speaker report has no "different speaker" to
+    compare with, so `tts_other` is NaN, and a browser's JSON.parse rejects a whole response
+    with one NaN in it (Python's json writes it happily). A gap is shown as a gap."""
+    if isinstance(x, float):
+        return x if x == x and abs(x) != float("inf") else None
+    if isinstance(x, dict):
+        return {k: finite(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [finite(v) for v in x]
+    return x
+
+
 def summary(path: Path, blob: dict) -> dict:
     rows = blob.get("rows") or {}
     v = blob.get("voice") or {}
     pr = blob.get("prompt")
-    return {
+    return finite({
         "name": path.name, "checkpoint": blob.get("checkpoint"), "step": blob.get("step"),
         "n": blob.get("n"), "duration": blob.get("duration"),
         "speakers": Path(blob["codes"]).name if blob.get("codes") else "seen",
@@ -53,7 +66,7 @@ def summary(path: Path, blob: dict) -> dict:
         "length_median": (blob.get("length_ratio") or {}).get("median"),
         "voice": {k: v.get(k) for k in ("tts_own", "tts_other", "codec_own", "same_speaker",
                                         "own_closer", "pairs", "p")} if v else None,
-    }
+    })
 
 
 def load_all(root: Path) -> list[dict]:
@@ -95,4 +108,4 @@ def compare(a: dict, b: dict) -> dict:
         out["voice"] = {"a": va["tts_own"], "b": vb["tts_own"], "b_closer": closer,
                         "b_further": further, "p": sign_test(closer, further),
                         "ceiling": va.get("codec_own"), "same_speaker": va.get("same_speaker")}
-    return out
+    return finite(out)
