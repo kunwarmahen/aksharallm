@@ -76,7 +76,8 @@ def episode_tokens(frames, actions, vocab: tuple[str, ...] = VOCAB) -> list[int]
 
 
 def prepare(out: str | Path, *, episodes: int = 60_000, val_episodes: int = 2_000,
-            steps: int = 30, seed: int = 0, game: str = "sokoban", progress=print) -> dict:
+            steps: int = 30, seed: int = 0, game: str = "sokoban", policy: str | None = None,
+            progress=print) -> dict:
     """Write `train.bin`, `val.bin`, `tokenizer.json` and `meta.json`; returns the meta.
 
     The val episodes come from a separate seed stream, and the evaluation draws its own
@@ -85,14 +86,17 @@ def prepare(out: str | Path, *, episodes: int = 60_000, val_episodes: int = 2_00
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     vocab, g = vocab_of(game), GAMES[game]
+    if policy is not None and game != "keys":
+        raise ValueError(f"--policy is a keys option; {game} has one policy")
+    kw = {"policy_kind": policy} if policy else {}
     write_tokenizer(out / "tokenizer.json", vocab)
-    meta = {"game": game, "vocab": list(vocab), "frame_tokens": FRAME, "steps": steps, "seed": seed,
+    meta = {"game": game, "vocab": list(vocab), "policy": policy or ("aware" if game == "keys" else None), "frame_tokens": FRAME, "steps": steps, "seed": seed,
             "episodes": {}, "tokens": {}, "outcomes": {}}
     for split, n, s in (("train", episodes, seed), ("val", val_episodes, seed + 10_000)):
         rng = np.random.default_rng(s)
         buf, counts = [], {}
         for e in range(n):
-            frames, actions, outcomes = g.episode(rng, steps)
+            frames, actions, outcomes = g.episode(rng, steps, **kw)
             buf.extend(episode_tokens(frames, actions, vocab))
             for o in outcomes:
                 counts[o] = counts.get(o, 0) + 1

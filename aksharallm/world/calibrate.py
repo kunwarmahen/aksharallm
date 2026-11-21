@@ -22,6 +22,11 @@ Three measurements, per transition, grouped by what the intended move does:
                    held, picked up BEFORE the context   unknowable from the window
                    not held                              should be ~0
                A model that reads only the last frame scores the same in all three.
+               `base_rate` is the share of held keys among doors with no pickup in view:
+               the best a context-only model can believe on the middle row.
+
+Episodes come from the aware policy (the one `world-keys` trained on) or the blind one
+(`keys.policy_blind`), which never looks at what the agent carries; `policy` picks.
 
 Read with: docs/25-world-model.md -- the chapter this implements; it ends with the order to
 read these files in.
@@ -49,7 +54,7 @@ def _last_pickup(outcomes: list[str], t: int) -> int | None:
 
 
 def transitions(n_episodes: int, steps: int, history: int, seed: int,
-                slip: float = keys.SLIP) -> list[dict]:
+                slip: float = keys.SLIP, policy: str = "aware") -> list[dict]:
     """One record per transition t >= history: its context tokens, the merged true
     distribution over next frames, the bucket, and for a door move the two counterfactual
     frames (opens / stays shut)."""
@@ -57,7 +62,7 @@ def transitions(n_episodes: int, steps: int, history: int, seed: int,
     out = []
     step_len = FRAME + 1
     for _ in range(n_episodes):
-        e = keys.episode_full(rng, steps, slip)
+        e = keys.episode_full(rng, steps, slip, policy)
         toks = episode_tokens(e["frames"], e["actions"], VOCAB)[1:]
         for t in range(history, steps):
             s, a = e["states"][t], e["actions"][t]
@@ -79,6 +84,7 @@ def transitions(n_episodes: int, steps: int, history: int, seed: int,
                          "held, seen in context" if j is not None and j >= t - history else
                          "held, before the context")
                 rec["door"] = {"held": s.held > 0, "where": where,
+                               "seen": j is not None and j >= t - history,
                                "open": keys.render(keys.apply(opened, a)[0]),
                                "shut": keys.render(keys.apply(shut, a)[0])}
             out.append(rec)
@@ -101,8 +107,9 @@ def _frame_logprobs(model, ctxs: list[list[int]], frames: list[list[str]], devic
 
 
 def score(model, *, episodes: int = 200, steps: int = 30, history: int = 5,
-          seed: int = EVAL_SEED, slip: float = keys.SLIP, device: str = "cpu") -> dict:
-    recs = transitions(episodes, steps, history, seed, slip)
+          seed: int = EVAL_SEED, slip: float = keys.SLIP, device: str = "cpu",
+          policy: str = "aware") -> dict:
+    recs = transitions(episodes, steps, history, seed, slip, policy)
     ctxs, frames, owner = [], [], []
     for i, r in enumerate(recs):
         for f in r["frames"]:
@@ -131,10 +138,11 @@ def score(model, *, episodes: int = 200, steps: int = 30, history: int = 5,
         if r["door"]:
             po, ps = exp(d["open"]), exp(d["shut"])
             row["door"] = {"where": r["door"]["where"], "held": r["door"]["held"],
+                           "seen": r["door"]["seen"],
                            "belief": po / (po + ps) if po + ps > 0 else 0.5}
         rows.append(row)
     return summarise(rows) | {"episodes": episodes, "history": history, "seed": seed,
-                              "slip": slip}
+                              "slip": slip, "policy": policy}
 
 
 def _mean(xs):
@@ -160,10 +168,16 @@ def summarise(rows: list[dict]) -> dict:
         doors[where] = {"n": len(g), "belief": _mean(x["belief"] for x in g),
                         "truth": 1.0 if where.startswith("held") else 0.0,
                         "right": _mean((x["belief"] > 0.5) == x["held"] for x in g)}
+    # What the window allows: of the doors with no pickup in view, the share where a key is
+    # held anyway. A model that reads only the context can do no better than this on the
+    # "before the context" row; beating it means it found evidence outside the frames.
+    unseen = [r["door"] for r in rows if r.get("door") and not r["door"].get("seen", False)]
+    base = _mean(x["held"] for x in unseen)
     n = len(rows)
     p = _mean(r["mode_exact"] for r in rows)
     return {"next_frame": {"n": n, "exact": p, "stderr": (p * (1 - p) / n) ** 0.5 if n else None,
                            "cells": None, "copy_baseline": _mean(r["copy"] for r in rows),
                            "by_outcome": by, "target": "most likely frame"},
             "calibration": {"kl": _mean(r["kl"] for r in rows),
-                            "off": _mean(r["off"] for r in rows), "doors": doors}}
+                            "off": _mean(r["off"] for r in rows), "doors": doors,
+                            "base_rate": base}}

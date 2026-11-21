@@ -227,6 +227,46 @@ So the keys world is not solved the way Sokoban was: the model is calibrated whe
 frame is enough and uncertain exactly where it is not. The next version of the test is the
 same game with a `held`-blind policy, so that only memory can answer the middle row.
 
+### The leak, and the run without it (built 2026-11-21, queued)
+
+`keys.policy_blind` is the same coverage policy choosing only from what the frame shows: it
+heads for a door 35% of the time, a visible key 25%, a box 12%, whatever the agent carries.
+A test holds it to that: for 400 random states, the same random draws with and without a key
+in hand must give the same move (and the aware policy must not, or the test proves nothing).
+
+```mermaid
+flowchart LR
+    A["aware agent<br/>holds a key -> walks to a door"] --> L["a walk to a door<br/>is evidence of a key"]
+    L --> M1["middle row 0.59<br/>(base rate ~0.24)"]
+    B["blind agent<br/>same odds either way"] --> N["only a pickup in view<br/>is evidence of a key"]
+    N --> M2["middle row should fall<br/>to the base rate"]
+```
+
+The scorer now prints the **base rate** beside the door table: of the doors with no pickup
+in view, the share where a key is held anyway. A model that reads only its window can believe
+no more than that on the middle row. Two runs answer the question:
+
+| run | trained on | scored on | what it says |
+|---|---|---|---|
+| `world-keys` again, `--policy blind` | the aware agent | the blind agent | whether its 0.59 was read from the agent's walk: if so, it falls when the walk stops meaning anything |
+| `world-keys-blind` | the blind agent | the blind agent | memory alone: the top row should stay high, the middle row should sit at the base rate |
+
+The blind agent opens fewer doors (1.3% of moves against 2.2%) and finds more locked ones
+(10.6% against 4.0%), because it walks into doors without a key. Score it on 1,000 episodes
+rather than 600 so the "seen in context" row is not thin.
+
+```bash
+python -m aksharallm.world prepare --game keys --policy blind     # data/world-keys-blind
+scripts/experiment.sh world-keys-blind                            # same model and budget
+python -m aksharallm.world eval checkpoints/world-keys-blind/ckpt_best.pt --episodes 1000
+python -m aksharallm.world eval checkpoints/world-keys/ckpt_best.pt --episodes 1000 --policy blind
+```
+
+A checkpoint is scored on the agent it trained on unless `--policy` says otherwise (read from
+its data's `meta.json`), and a cross-scored file is named `<run>-step<N>-on-<policy>.json` so
+it never overwrites the run's own. The World tab has the blind agent in its Game picker and a
+"score on" choice beside Evaluate.
+
 ## The code, in reading order
 
 | # | file | what to look for |
@@ -239,7 +279,8 @@ same game with a `held`-blind policy, so that only memory can answer the middle 
 | 6 | same file → `rollout` | the model's own frames fed back, and `parse` counting impossible ones |
 | 7 | [`world/__main__.py`](../aksharallm/world/__main__.py) | `prepare`, `eval` (writes `logs/world/<run>-step<N>.json`), `play`, `results` |
 | 7b | [`world/keys.py`](../aksharallm/world/keys.py) → `apply`, `transition` | the harder world: keys, doors, the hidden `held`, and the exact distribution with slips |
-| 7c | [`world/calibrate.py`](../aksharallm/world/calibrate.py) → `transitions`, `score` | merged candidate frames, KL from the world, and the door belief split by where the pickup was |
+| 7b′ | same file → `policy`, `policy_blind` | the leak: the aware agent's walk gives the key away; the blind one chooses from the frame alone |
+| 7c | [`world/calibrate.py`](../aksharallm/world/calibrate.py) → `transitions`, `score` | merged candidate frames, KL from the world, the door belief split by where the pickup was, and `base_rate`: what a belief from the window alone can reach |
 | 8 | [`portal/world.py`](../aksharallm/portal/world.py) · [`static/js/world.js`](../aksharallm/portal/static/js/world.js) | the World tab: results, `play` inline, the two jobs through `portal/jobs.py`. World models are found by their vocabulary (15 words sokoban, 17 keys), not by name |
 
 Tests: `tests/test_world.py`. They cover the push and block rules, the render/parse round

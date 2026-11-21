@@ -1,7 +1,8 @@
 """`python -m aksharallm.world prepare|eval|play` (docs/25).
 
   prepare   write data/world/{train,val}.bin + tokenizer.json from random games
-            (--game keys: data/world-keys, the harder world)
+            (--game keys: data/world-keys, the harder world; --policy blind:
+            data/world-keys-blind, an agent whose moves never reveal the key)
   eval      next-frame accuracy by outcome, and open-loop rollouts, to logs/world/<run>-*.json;
             a keys model is scored on calibration (world/calibrate.py)
   play      one rollout printed beside the true game, to see where it goes wrong
@@ -38,12 +39,25 @@ def _load(path, device):
     return model, ckpt, game
 
 
+def trained_policy(ckpt) -> str:
+    """The policy a keys checkpoint's training episodes came from, read from its data's
+    meta.json. 'aware' when the meta predates the field (world-keys was made before it)."""
+    try:
+        train_bin = Path(ckpt["config"]["data"]["train_bin"])
+        return json.loads((train_bin.parent / "meta.json").read_text()).get("policy") or "aware"
+    except (KeyError, TypeError, OSError, ValueError):
+        return "aware"
+
+
 def cmd_prepare(args) -> int:
     from .data import prepare
-    out = args.out or ("data/world" if args.game == "sokoban" else f"data/world-{args.game}")
+    if args.policy and args.game != "keys":
+        raise SystemExit("--policy only applies to --game keys")
+    name = args.game + ("-blind" if args.policy == "blind" else "")
+    out = args.out or ("data/world" if args.game == "sokoban" else f"data/world-{name}")
     args.out = out
     meta = prepare(out, episodes=args.episodes, val_episodes=args.val_episodes,
-                   steps=args.steps, seed=args.seed, game=args.game)
+                   steps=args.steps, seed=args.seed, game=args.game, policy=args.policy)
     print(json.dumps({k: meta[k] for k in ("tokens", "outcomes")}, indent=1))
     print(f"wrote {args.out}/train.bin, val.bin, tokenizer.json, meta.json")
     return 0
@@ -54,11 +68,18 @@ def cmd_eval(args) -> int:
     device = _device(args)
     model, ckpt, game = _load(args.checkpoint, device)
     t = time.time()
-    extra = {}
+    extra, suffix = {}, ""
     if game == "keys":
         from .calibrate import score
-        sc = score(model, episodes=args.episodes, history=args.history, device=device)
-        nf, extra = sc["next_frame"], {"calibration": sc["calibration"], "slip": sc["slip"]}
+        trained = trained_policy(ckpt)
+        policy = args.policy or trained
+        if policy != trained:
+            suffix = f"-on-{policy}"
+        sc = score(model, episodes=args.episodes, history=args.history, device=device,
+                   policy=policy)
+        nf, extra = sc["next_frame"], {"calibration": sc["calibration"], "slip": sc["slip"],
+                                       "policy": policy, "trained_policy": trained}
+        print(f"episodes from the {policy} policy (trained on {trained})")
         print(f"most likely frame  {nf['exact'] * 100:.1f}% (n={nf['n']}), copying the last "
               f"frame would score {nf['copy_baseline'] * 100:.1f}%;  "
               f"KL(true || model) {sc['calibration']['kl']:.3f} nats/frame, "
@@ -71,6 +92,8 @@ def cmd_eval(args) -> int:
         for where, r in sc["calibration"]["doors"].items():
             print(f"  {where:<26} n {r['n']:>5}   belief {r['belief']:.3f}   truth "
                   f"{r['truth']:.0f}   right {r['right'] * 100:.1f}%")
+        print(f"  base rate: {sc['calibration']['base_rate']:.3f} of doors with no pickup in "
+              "view are held (the best a context-only belief on the middle row)")
     else:
         nf = next_frame(model, episodes=args.episodes, history=args.history, device=device)
         print(f"next frame   {nf['exact'] * 100:.1f}% exact (± {nf['stderr'] * 100:.1f}, n={nf['n']}), "
@@ -86,7 +109,7 @@ def cmd_eval(args) -> int:
     print("             impossible frames by step:                      "
           + " ".join(f"{x * 100:.0f}" for x in ro["impossible_by_step"]))
     run = Path(args.checkpoint).parent.name
-    out = Path("logs/world") / f"{run}-step{ckpt.get('step')}.json"
+    out = Path("logs/world") / f"{run}-step{ckpt.get('step')}{suffix}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"checkpoint": str(args.checkpoint), "step": ckpt.get("step"),
                                "game": game, "next_frame": nf, "rollout": ro, **extra,
@@ -136,6 +159,9 @@ def main(argv=None) -> int:
     s = sub.add_parser("prepare", help="random games -> train.bin / val.bin / tokenizer.json")
     s.add_argument("--game", choices=("sokoban", "keys"), default="sokoban",
                    help="keys: hidden keys, doors and a slippery floor (docs/25)")
+    s.add_argument("--policy", choices=("aware", "blind"), default=None,
+                   help="keys only. blind: the agent never heads for a door because it holds "
+                        "a key, so only a pickup in view says it does (data/world-keys-blind)")
     s.add_argument("--out", default=None, help="default data/world (sokoban), data/world-<game>")
     s.add_argument("--episodes", type=int, default=60_000)
     s.add_argument("--val-episodes", type=int, default=2_000)
@@ -146,6 +172,9 @@ def main(argv=None) -> int:
     s.add_argument("checkpoint")
     s.add_argument("--episodes", type=int, default=200, help="episodes for next-frame accuracy")
     s.add_argument("--history", type=int, default=5, help="steps of context before the action")
+    s.add_argument("--policy", choices=("aware", "blind"), default=None,
+                   help="keys only: whose episodes to score on (default: the policy the "
+                        "checkpoint trained on; another writes <run>-step<N>-on-<policy>.json)")
     s.add_argument("--rollouts", type=int, default=50)
     s.add_argument("--horizon", type=int, default=10)
     s.add_argument("--cpu", action="store_true")

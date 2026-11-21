@@ -11,6 +11,7 @@ import json
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import torch
 
 from aksharallm.world import game
@@ -222,3 +223,49 @@ def test_seen_in_context_means_the_context_shows_a_key_vanishing():
         counts = [f.count(K) for f in frames]
         vanished = any(b < a for a, b in zip(counts, counts[1:]))
         assert vanished == (r["door"]["where"] == "held, seen in context"), r["door"]["where"]
+
+
+# ---- the blind agent: moves that never give the key away (keys.policy_blind) ----
+
+def test_the_blind_agent_never_looks_at_what_it_carries():
+    """Same random draws, same frame, different `held`: the blind policy must choose the same
+    move, every time. (The aware policy must not, or this test proves nothing.)"""
+    rng = np.random.default_rng(11)
+    aware_differs = False
+    for _ in range(400):
+        s = keys.random_level(rng)
+        with_key = s.copy()
+        with_key.held = 1
+        seed = int(rng.integers(1 << 30))
+        a = keys.policy(np.random.default_rng(seed), s, "blind")
+        b = keys.policy(np.random.default_rng(seed), with_key, "blind")
+        assert a == b
+        aware_differs |= (keys.policy(np.random.default_rng(seed), s)
+                          != keys.policy(np.random.default_rng(seed), with_key))
+    assert aware_differs
+
+
+def test_the_base_rate_is_the_held_share_of_doors_with_no_pickup_in_view():
+    recs = transitions(150, 30, 5, seed=9, policy="blind")
+    doors = [r["door"] for r in recs if r["door"] and not r["door"]["seen"]]
+    want = sum(d["held"] for d in doors) / len(doors)
+    got = score(_CopyKeys(), episodes=150, steps=30, history=5, seed=9, policy="blind")
+    assert got["policy"] == "blind"
+    assert abs(got["calibration"]["base_rate"] - want) < 1e-12
+    assert 0.0 < want < 0.5          # held keys exist without a pickup in view, but are rarer
+
+
+def test_a_blind_dataset_says_so_and_policy_is_a_keys_option(tmp_path):
+    meta = prepare(tmp_path, episodes=2, val_episodes=1, steps=4, game="keys", policy="blind",
+                   progress=None)
+    assert meta["policy"] == "blind"
+    with pytest.raises(ValueError):
+        prepare(tmp_path / "s", episodes=1, val_episodes=1, steps=2, game="sokoban",
+                policy="blind", progress=None)
+
+
+def test_eval_defaults_to_the_policy_the_checkpoint_trained_on(tmp_path):
+    from aksharallm.world.__main__ import trained_policy
+    (tmp_path / "meta.json").write_text(json.dumps({"policy": "blind"}))
+    assert trained_policy({"config": {"data": {"train_bin": str(tmp_path / "train.bin")}}}) == "blind"
+    assert trained_policy({"config": {"data": {"train_bin": "/nowhere/train.bin"}}}) == "aware"

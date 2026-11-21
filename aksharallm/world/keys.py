@@ -169,11 +169,16 @@ def _towards(rng, s: State, targets: np.ndarray) -> str | None:
     return opts[int(rng.integers(len(opts)))] if opts else None
 
 
-def policy(rng: np.random.Generator, s: State) -> str:
+POLICIES = ("aware", "blind")
+
+
+def policy(rng: np.random.Generator, s: State, kind: str = "aware") -> str:
     """Coverage again, not winning. The agent knows what it carries (the model does not):
     holding a key it heads for a door, so `unlocked` is common; with none it heads for a key
     while one is left; and now and then it tries a door empty-handed, so `locked` happens
     too, in levels that look the same. Pushes where a box can move; random moves otherwise."""
+    if kind == "blind":
+        return policy_blind(rng, s)
     if rng.random() < 0.05:
         return "stay"
     u = rng.random()
@@ -191,6 +196,30 @@ def policy(rng: np.random.Generator, s: State) -> str:
     return a or DIRECTIONS[int(rng.integers(4))]
 
 
+def policy_blind(rng: np.random.Generator, s: State) -> str:
+    """The same coverage, choosing only from what the FRAME shows: never `s.held`.
+
+    The aware policy above heads for a door 60% of the time when it carries a key, so an
+    agent walking to a door is itself evidence of a key, and `world-keys` used it: its belief
+    at a door whose key was picked up before the context was 0.59, well above what the window
+    alone allows. Here the agent heads for a door, a visible key or a box with fixed odds
+    whatever it carries, so at a door the only evidence of a key is a pickup in the context.
+    A test holds this to `policy(s) == policy(s with held changed)` for every state."""
+    if rng.random() < 0.05:
+        return "stay"
+    u = rng.random()
+    if u < 0.35:
+        target = s.doors
+    elif u < 0.6 and s.keys.any():
+        target = s.keys
+    elif u < 0.72:
+        target = s.boxes
+    else:
+        target = None
+    a = _towards(rng, s, target) if target is not None else None
+    return a or DIRECTIONS[int(rng.integers(4))]
+
+
 def sample(rng: np.random.Generator, s: State, action: str,
            slip: float = SLIP) -> tuple[State, str, bool]:
     branches = transition(s, action, slip)
@@ -198,13 +227,14 @@ def sample(rng: np.random.Generator, s: State, action: str,
     return branches[i][1], branches[i][2], branches[i][3]
 
 
-def episode_full(rng: np.random.Generator, n_steps: int, slip: float = SLIP) -> dict:
+def episode_full(rng: np.random.Generator, n_steps: int, slip: float = SLIP,
+                 policy_kind: str = "aware") -> dict:
     """Everything the scorer needs: the states (with the hidden `held`), frames, actions, what
     actually happened, whether it slipped, and the step at which each held key was taken."""
     s = random_level(rng)
     states, actions, outcomes, slipped = [s], [], [], []
     for _ in range(n_steps):
-        a = policy(rng, s)
+        a = policy(rng, s, policy_kind)
         s, why, sl = sample(rng, s, a, slip)
         states.append(s)
         actions.append(a)
@@ -214,8 +244,9 @@ def episode_full(rng: np.random.Generator, n_steps: int, slip: float = SLIP) -> 
             "outcomes": outcomes, "slipped": slipped}
 
 
-def episode(rng: np.random.Generator, n_steps: int, slip: float = SLIP):
+def episode(rng: np.random.Generator, n_steps: int, slip: float = SLIP,
+            policy_kind: str = "aware"):
     """`(frames, actions, outcomes)`, the shape `game.episode` has, so `data.prepare` writes
     either game."""
-    e = episode_full(rng, n_steps, slip)
+    e = episode_full(rng, n_steps, slip, policy_kind)
     return e["frames"], e["actions"], e["outcomes"]

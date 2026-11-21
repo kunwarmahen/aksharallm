@@ -94,7 +94,8 @@ class World:
                             "step": d.get("step"), "seconds": d.get("seconds"),
                             "game": d.get("game", "sokoban"),
                             "next_frame": d["next_frame"], "rollout": d["rollout"],
-                            "calibration": d.get("calibration")})
+                            "calibration": d.get("calibration"),
+                            "policy": d.get("policy"), "trained_policy": d.get("trained_policy")})
             except (OSError, ValueError, KeyError):
                 continue
         return out
@@ -143,13 +144,22 @@ class World:
             if not 100 <= eps <= 200_000:
                 raise JobError("episodes must be between 100 and 200,000")
             game = spec.get("game") or "sokoban"
-            if game not in ("sokoban", "keys"):
+            # keys-blind is the keys game with the agent that never looks at its key
+            # (keys.policy_blind): one more choice in the picker, one more CLI flag.
+            argv = {"sokoban": ["--game", "sokoban"], "keys": ["--game", "keys"],
+                    "keys-blind": ["--game", "keys", "--policy", "blind"]}.get(game)
+            if argv is None:
                 raise JobError(f"unknown game {game!r}")
-            return self.jobs.start(["prepare", "--game", game, "--episodes", str(eps)],
+            return self.jobs.start(["prepare", *argv, "--episodes", str(eps)],
                                    f"prepare {eps:,} {game} episodes")
         if kind == "eval":
             rel = str(spec.get("checkpoint") or "")
             if rel not in {c["rel"] for c in self.checkpoints()}:
                 raise JobError(f"not a world-model checkpoint: {rel!r}")
-            return self.jobs.start(["eval", rel, *cpu], f"evaluate {rel}")
+            policy = spec.get("policy") or ""
+            if policy not in ("", "aware", "blind"):
+                raise JobError(f"unknown agent {policy!r}")
+            extra = ["--policy", policy] if policy else []
+            return self.jobs.start(["eval", rel, *extra, *cpu],
+                                   f"evaluate {rel}" + (f" on the {policy} agent" if policy else ""))
         raise JobError(f"unknown job {kind!r}")

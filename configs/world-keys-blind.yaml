@@ -1,0 +1,53 @@
+# world-keys with a blind agent (docs/25 § The leak, and the run without it). world-keys'
+# agent headed for a door 60% of the time when it carried a key, so a walk to a door gave the
+# key away, and the model believed 0.59 at doors whose pickup it had not seen (base rate
+# ~0.24). Here the agent's moves never depend on what it carries (keys.policy_blind): same
+# game, same model, same budget, so any belief above the base rate has to come from memory.
+#
+#   python -m aksharallm.world prepare --game keys --policy blind   # -> data/world-keys-blind
+#   scripts/experiment.sh world-keys-blind                          # ~6 min on a 3090
+#   python -m aksharallm.world eval checkpoints/world-keys-blind/ckpt_best.pt --episodes 600
+#   python -m aksharallm.world eval checkpoints/world-keys/ckpt_best.pt --episodes 600 --policy blind
+
+name: world-keys-blind
+
+model:
+  vocab_size: 17          # 3 specials + 9 cells + 5 actions (world/data.py vocab_of("keys"))
+  d_model: 384
+  n_layers: 6
+  n_heads: 6
+  n_kv_heads: 6           # == n_heads, i.e. plain MHA. GQA isn't worth it at this size.
+  max_seq_len: 512
+  tie_embeddings: true
+  dropout: 0.0
+
+data:
+  train_bin: data/world-keys-blind/train.bin
+  val_bin: data/world-keys-blind/val.bin
+  tokenizer: data/world-keys-blind/tokenizer.json
+
+optim:
+  lr: 1.0e-3              # small models tolerate (and want) a high LR
+  min_lr_ratio: 0.1
+  warmup_steps: 200
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/world-keys-blind
+  batch_size: 48
+  grad_accum: 2           # 48 * 2 * 512 = 49,152 tokens/step
+  seq_len: 512
+  max_steps: 4000
+  eval_every: 500
+  eval_batches: 40
+  sample_every: 0         # a text prompt means nothing here; `world play` is the sample
+  ckpt_every: 1000
+  log_every: 20
+  compile: true
+  seed: 1337
+  wandb_project: null
+  resume: auto

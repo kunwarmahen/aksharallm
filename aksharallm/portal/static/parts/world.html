@@ -40,7 +40,9 @@
         vanishes when picked up and is never drawn again, so whether the next door opens
         depends on something the picture does not show. The door table asks how sure the model
         is that the door opens, split by whether the pickup happened inside what it can read,
-        before that, or never.
+        before that, or never. The <strong>blind agent</strong> moves the same whatever it
+        carries; the first agent walked to doors more when it held a key, which gave the key
+        away, so only the blind one tests memory alone.
       </p>
       <div class="row">
         <label class="field">Evaluation <select id="wd-result"></select></label>
@@ -73,13 +75,14 @@
       <p class="panel-note">
         Each button runs the command printed under it, in the background (closing this page does
         not stop it). Training is the dashboard's Start on <code>world-sokoban</code> or
-        <code>world-keys</code> (<code>scripts/experiment.sh world-keys</code>, about 6 minutes
+        <code>world-keys</code> / <code>world-keys-blind</code> (<code>scripts/experiment.sh world-keys</code>, about 6 minutes
         on the card).
       </p>
       <div class="row">
-        <label class="field">Game <select id="wd-game"><option value="sokoban">sokoban</option><option value="keys">keys (hidden key, slippery floor)</option></select></label>
+        <label class="field">Game <select id="wd-game"><option value="sokoban">sokoban</option><option value="keys">keys (hidden key, slippery floor)</option><option value="keys-blind">keys, blind agent (its moves never give the key away)</option></select></label>
         <label class="field">Episodes <input id="wd-episodes" type="number" min="100" max="200000" value="60000"></label>
         <button id="wd-prepare" type="button">Make the data</button>
+        <label class="field">Keys: score on <select id="wd-on"><option value="">the agent it trained on</option><option value="blind">the blind agent</option><option value="aware">the aware agent</option></select></label>
         <button id="wd-eval" type="button">Evaluate the selected model</button>
       </div>
       <div id="wd-job"></div>

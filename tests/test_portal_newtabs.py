@@ -188,3 +188,21 @@ def test_the_tools_jobs_take_a_problem_set_and_refuse_an_unknown_one(tmp_path, m
     assert started[1][:4] == ["eval", "c.pt", "--set", "v2"]
     with pytest.raises(JobError, match="problem set"):
         t.start({"kind": "data", "set": "v3; rm -rf ~"})
+
+
+def test_the_world_jobs_offer_the_blind_agent_and_refuse_anything_else(tmp_path, monkeypatch):
+    from aksharallm.portal.world import World
+    w = World(tmp_path, device_for=lambda: ("cpu", "test"))
+    monkeypatch.setattr(w, "checkpoints", lambda: [{"rel": "c.pt", "game": "keys"}])
+    started = []
+    monkeypatch.setattr(w.jobs, "start", lambda argv, label: started.append(argv) or {})
+    w.start({"kind": "prepare", "game": "keys-blind", "episodes": 1000})
+    w.start({"kind": "eval", "checkpoint": "c.pt", "policy": "blind"})
+    w.start({"kind": "eval", "checkpoint": "c.pt"})
+    assert started[0] == ["prepare", "--game", "keys", "--policy", "blind", "--episodes", "1000"]
+    assert started[1][:4] == ["eval", "c.pt", "--policy", "blind"]
+    assert "--policy" not in started[2]
+    with pytest.raises(JobError):
+        w.start({"kind": "eval", "checkpoint": "c.pt", "policy": "blind; rm -rf ~"})
+    with pytest.raises(JobError):
+        w.start({"kind": "prepare", "game": "keys-x"})

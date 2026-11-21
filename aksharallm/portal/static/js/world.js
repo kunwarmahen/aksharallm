@@ -57,6 +57,11 @@ function showKeys(r) {
     + '<th>truth</th><th>right</th></tr></thead><tbody>'
     + Object.entries(doors).map(([w, d]) => `<tr><td>${escHtml(w)}</td><td>${fmt.int(d.n)}</td>`
       + `<td><b>${fmt.num(d.belief, 3)}</b></td><td>${d.truth}</td><td>${fmt.pct(d.right)}</td></tr>`).join('')
+    + (cal.base_rate == null ? '' : `<tr><td colspan="5" class="panel-note">base rate: ${fmt.num(cal.base_rate, 3)} of doors `
+      + 'with no pickup in view are held, the best a belief from the window alone can do on the middle row. '
+      + `Episodes from the <b>${escHtml(r.policy || 'aware')}</b> agent`
+      + (r.trained_policy && r.trained_policy !== r.policy ? ` (the model trained on the ${escHtml(r.trained_policy)} one)` : '')
+      + '.</td></tr>')
     + '</tbody>';
   showRollout(r.rollout);
 }
@@ -129,7 +134,7 @@ registerTab('world', {
     $('#wd-prepare').onclick = () => wd.job.start({
       kind: 'prepare', game: $('#wd-game').value, episodes: Number($('#wd-episodes').value) || 60000,
     });
-    $('#wd-eval').onclick = () => wd.job.start({ kind: 'eval', checkpoint: wd.ckpt });
+    $('#wd-eval').onclick = () => wd.job.start({ kind: 'eval', checkpoint: wd.ckpt, policy: $('#wd-on').value });
     await load().catch((e) => flash(`world: ${e.message}`, 'error'));
   },
   leave() { if (wd.job) wd.job.stop(); },
