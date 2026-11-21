@@ -86,6 +86,7 @@ LAUNCHERS: dict[str, dict] = {
     "small-student-long-muon": {"script": "scripts/experiment.sh", "args": ["small-student-long-muon"]},
     "tiny-hybrid": {"script": "scripts/experiment.sh", "args": ["tiny-hybrid"]},
     "world-sokoban": {"script": "scripts/experiment.sh", "args": ["world-sokoban"]},
+    "world-keys": {"script": "scripts/experiment.sh", "args": ["world-keys"]},
     "small-distil": {"script": "scripts/experiment.sh", "args": ["small-distil"]},
     "small-student-long": {"script": "scripts/experiment.sh", "args": ["small-student-long"]},
     # Audio and vision: a different launcher, the same pid/meta/log contract. docs/21, 22.

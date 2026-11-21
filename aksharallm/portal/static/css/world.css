@@ -39,6 +39,8 @@
 .wd-cell.c-agent { color: var(--accent); font-size: 0.75rem; }
 .wd-cell.c-box { color: var(--fg); }
 .wd-cell.c-goal { color: var(--ok, #4a8); }
+.wd-cell.c-key { color: #c90; font-weight: 600; }
+.wd-cell.c-door { background: rgba(160, 100, 40, 0.35); color: var(--fg); }
 .wd-cell.c-done { color: var(--ok, #4a8); background: rgba(68, 170, 136, 0.18); }
 .wd-cell.wd-wrong { outline: 2px solid var(--warn, #c86); outline-offset: -1px; }
 

@@ -971,7 +971,9 @@ Not built yet, in the order they depend on each other or by value per GPU hour:
   kinds, 0/20 on the held-out one, [doc 6](docs/06-posttraining.md)); GRPO with tool calls
   mid-completion is not built.
 - **A toy world model**: ✅ built 2026-11-20 ([doc 25](docs/25-world-model.md)); `world-sokoban`
-  solved it: 100% exact next frames and 10-step rollouts. A harder world is next.
+  solved it: 100% exact next frames and 10-step rollouts. The harder world, `keys` (a key
+  never drawn once carried, a floor that slips one move in ten), is built and scored on
+  calibration: KL from the true next-frame distribution and the door belief.
 
 ---
 

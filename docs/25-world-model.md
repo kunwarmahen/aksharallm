@@ -109,11 +109,78 @@ model can predict either.
 
 So the 13.8M shape learned Sokoban's rules exactly, pushes included, on levels it had never
 seen. That is a result about how easy this world is, not about how good the model is: an 8×8
-grid with deterministic rules is a function a small transformer can represent outright. To
-make it a test again, the next steps are a world it cannot solve completely: a bigger grid,
-hidden state (a door opened by a key picked up earlier), or randomness (a box that slips
-some of the time), where exact frames stop being possible and the score has to become
-calibration.
+grid with deterministic rules is a function a small transformer can represent outright. So
+the next world is one it cannot solve completely.
+
+## The harder world: a key you cannot see, a floor that slips
+
+`world/keys.py` keeps everything above and adds two things, each chosen so the right answer
+is still known exactly:
+
+| new | rule | what it tests |
+|---|---|---|
+| key `k` | walk onto it: it vanishes, and the agent carries it. **Carrying is never drawn.** | memory |
+| door `D` | walk into it with a key: it opens and the key is spent (`unlocked`). Without one: nothing (`locked`) | memory |
+| slip | one move in ten goes in one of the other three directions. The action token is what was *meant* | uncertainty |
+
+Levels have 0–2 keys (none in a fifth of them) and 1–2 doors, so a frame with no key in it
+does not say whether one is being carried. **Whether the next door opens depends on
+something the frame does not show**; the only way to know is to have seen the pickup, which
+has to be in the context the model can read. And with slips, the same frame and action can
+be followed by up to four different frames, so "exact" stops being the right question.
+
+```mermaid
+flowchart LR
+    S["state<br/>(with the hidden 'held')"] --> T["keys.transition<br/>the exact distribution:<br/>0.9 meant, 0.033 x 3 slipped"]
+    T --> M["merge branches<br/>that draw the same frame"]
+    M --> C["calibrate.score:<br/>P(frame) = product of 64<br/>teacher-forced cell probabilities"]
+    C --> K["KL(true || model)"]
+    C --> D["at a door: P(opens)<br/>vs P(stays shut)"]
+```
+
+`keys.transition` returns the world's distribution over next states exactly, and the model
+gives one too: the probability of a frame is the product of its 64 teacher-forced cell
+probabilities, so every candidate frame is scored in one forward pass. `world/calibrate.py`
+reports, per intended move:
+
+- **Most likely frame.** Is the model's greedy frame the world's most likely one? Same
+  teacher-forcing argument as before, beside the copy column.
+- **KL(true ‖ model)**, in nats per frame. 0 means the model's probabilities are the
+  world's. The probability the model puts on frames the game cannot produce is part of it,
+  and is also shown on its own.
+- **Belief at a door.** At every move into a door, two counterfactual frames are scored
+  whatever actually happened: the door opening and the door staying shut.
+  `P(open) / (P(open) + P(shut))` is the model's belief that the agent holds a key. The
+  truth is 1 or 0, split three ways, and the split is the whole test:
+
+  | at a door, the agent… | what a model can know |
+  |---|---|
+  | holds a key it was **seen** picking up, inside the context | everything: should be ~1 |
+  | holds a key picked up **before** the context | nothing from the window: the base rate is the best possible |
+  | holds no key | should be ~0, unless a key vanished in view and was not spent |
+
+  A model that reads only the last frame scores the same in all three rows.
+
+Rollouts are scored against the game with **no slips**, the single most likely game for those
+actions, so "exact by step" still means something.
+
+The scorer is tested against models whose answers are known. A uniform model gives every
+frame 17⁻⁶⁴, so its KL must be `64 log 17 − H(true)` for each transition exactly. A model
+certain that nothing changes must believe every door stays shut: right on every
+"not held" door, wrong on every held one, and its most-likely-frame score equal to the copy
+column. A property test checks that "seen in context" means exactly "the context shows a key
+vanishing" (only a pickup removes one). Five mutants were checked red: the context
+boundary, the KL sign, the door belief inverted, the wrong mode, and merged branches losing mass.
+
+```bash
+python -m aksharallm.world prepare --game keys     # data/world-keys, ~1 min on the CPU
+scripts/experiment.sh world-keys                   # world-sokoban's model and budget
+python -m aksharallm.world eval checkpoints/world-keys/ckpt_best.pt --episodes 600
+python -m aksharallm.world play checkpoints/world-keys/ckpt_best.pt
+```
+
+The World tab draws a keys result as two tables: by move (most likely frame, copy, KL,
+P(most likely) for the world and for the model) and the door split.
 
 ## The code, in reading order
 
@@ -126,7 +193,9 @@ calibration.
 | 5 | [`world/evaluate.py`](../aksharallm/world/evaluate.py) → `next_frame` | why teacher-forced argmax equals greedy for an exact frame, and the copy baseline per outcome |
 | 6 | same file → `rollout` | the model's own frames fed back, and `parse` counting impossible ones |
 | 7 | [`world/__main__.py`](../aksharallm/world/__main__.py) | `prepare`, `eval` (writes `logs/world/<run>-step<N>.json`), `play`, `results` |
-| 8 | [`portal/world.py`](../aksharallm/portal/world.py) · [`static/js/world.js`](../aksharallm/portal/static/js/world.js) | the World tab: results, `play` inline, the two jobs through `portal/jobs.py`. World models are found by their 15-word vocabulary, not by name |
+| 7b | [`world/keys.py`](../aksharallm/world/keys.py) → `apply`, `transition` | the harder world: keys, doors, the hidden `held`, and the exact distribution with slips |
+| 7c | [`world/calibrate.py`](../aksharallm/world/calibrate.py) → `transitions`, `score` | merged candidate frames, KL from the world, and the door belief split by where the pickup was |
+| 8 | [`portal/world.py`](../aksharallm/portal/world.py) · [`static/js/world.js`](../aksharallm/portal/static/js/world.js) | the World tab: results, `play` inline, the two jobs through `portal/jobs.py`. World models are found by their vocabulary (15 words sokoban, 17 keys), not by name |
 
 Tests: `tests/test_world.py`. They cover the push and block rules, the render/parse round
 trip, the token layout and tokenizer, and the scorer against the copying model. Four

@@ -1,0 +1,54 @@
+# The harder world (docs/25): world-sokoban's model and budget on a game it cannot solve
+# exactly. Keys vanish when picked up and are never drawn again (hidden state: whether a door
+# opens depends on a pickup the frame does not show), and one move in ten slips sideways
+# (randomness: the right answer is a distribution). Scored on calibration, not exact frames:
+# KL from the true next-frame distribution, and the model's belief that a door opens, split
+# by whether it saw the key picked up. The vocabulary is 17 words (two more cells: k, D).
+#
+#   python -m aksharallm.world prepare --game keys      # ~1 min, CPU -> data/world-keys
+#   scripts/experiment.sh world-keys                    # ~6-10 min on a 3090
+#   python -m aksharallm.world eval checkpoints/world-keys/ckpt_best.pt --episodes 600
+#   python -m aksharallm.world play checkpoints/world-keys/ckpt_best.pt
+
+name: world-keys
+
+model:
+  vocab_size: 17          # 3 specials + 9 cells + 5 actions (world/data.py vocab_of("keys"))
+  d_model: 384
+  n_layers: 6
+  n_heads: 6
+  n_kv_heads: 6           # == n_heads, i.e. plain MHA. GQA isn't worth it at this size.
+  max_seq_len: 512
+  tie_embeddings: true
+  dropout: 0.0
+
+data:
+  train_bin: data/world-keys/train.bin
+  val_bin: data/world-keys/val.bin
+  tokenizer: data/world-keys/tokenizer.json
+
+optim:
+  lr: 1.0e-3              # small models tolerate (and want) a high LR
+  min_lr_ratio: 0.1
+  warmup_steps: 200
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/world-keys
+  batch_size: 48
+  grad_accum: 2           # 48 * 2 * 512 = 49,152 tokens/step
+  seq_len: 512
+  max_steps: 4000
+  eval_every: 500
+  eval_batches: 40
+  sample_every: 0         # a text prompt means nothing here; `world play` is the sample
+  ckpt_every: 1000
+  log_every: 20
+  compile: true
+  seed: 1337
+  wandb_project: null
+  resume: auto

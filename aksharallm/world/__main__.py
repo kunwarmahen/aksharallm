@@ -1,7 +1,9 @@
 """`python -m aksharallm.world prepare|eval|play` (docs/25).
 
   prepare   write data/world/{train,val}.bin + tokenizer.json from random games
-  eval      next-frame accuracy by outcome, and open-loop rollouts, to logs/world/<run>-*.json
+            (--game keys: data/world-keys, the harder world)
+  eval      next-frame accuracy by outcome, and open-loop rollouts, to logs/world/<run>-*.json;
+            a keys model is scored on calibration (world/calibrate.py)
   play      one rollout printed beside the true game, to see where it goes wrong
   results   every saved evaluation, one line each
 
@@ -24,19 +26,24 @@ def _device(args) -> str:
 
 
 def _load(path, device):
+    """`(model, ckpt, game)`: which game a checkpoint plays is read from its vocabulary."""
     from ..infer.cli import load_model
-    from .data import VOCAB
+    from .data import GAMES, game_for_vocab, vocab_of
     model, ckpt = load_model(path, device)
-    if model.cfg.vocab_size != len(VOCAB):
-        raise SystemExit(f"{path} has a {model.cfg.vocab_size}-token vocabulary, not this "
-                         f"game's {len(VOCAB)}: it is not a world model")
-    return model, ckpt
+    game = game_for_vocab(model.cfg.vocab_size)
+    if game is None:
+        sizes = ", ".join(f"{n} {len(vocab_of(n))}" for n in GAMES)
+        raise SystemExit(f"{path} has a {model.cfg.vocab_size}-token vocabulary, not a game's "
+                         f"({sizes}): it is not a world model")
+    return model, ckpt, game
 
 
 def cmd_prepare(args) -> int:
     from .data import prepare
-    meta = prepare(args.out, episodes=args.episodes, val_episodes=args.val_episodes,
-                   steps=args.steps, seed=args.seed)
+    out = args.out or ("data/world" if args.game == "sokoban" else f"data/world-{args.game}")
+    args.out = out
+    meta = prepare(out, episodes=args.episodes, val_episodes=args.val_episodes,
+                   steps=args.steps, seed=args.seed, game=args.game)
     print(json.dumps({k: meta[k] for k in ("tokens", "outcomes")}, indent=1))
     print(f"wrote {args.out}/train.bin, val.bin, tokenizer.json, meta.json")
     return 0
@@ -45,17 +52,35 @@ def cmd_prepare(args) -> int:
 def cmd_eval(args) -> int:
     from .evaluate import next_frame, rollout
     device = _device(args)
-    model, ckpt = _load(args.checkpoint, device)
+    model, ckpt, game = _load(args.checkpoint, device)
     t = time.time()
-    nf = next_frame(model, episodes=args.episodes, history=args.history, device=device)
-    print(f"next frame   {nf['exact'] * 100:.1f}% exact (± {nf['stderr'] * 100:.1f}, n={nf['n']}), "
-          f"cells {nf['cells'] * 100:.2f}%, copying the last frame would score "
-          f"{nf['copy_baseline'] * 100:.1f}%")
-    print(f"{'outcome':>10} {'n':>6} {'exact':>8} {'cells':>8} {'copy':>7}")
-    for w, r in nf["by_outcome"].items():
-        print(f"{w:>10} {r['n']:>6} {r['exact'] * 100:>7.1f}% {r['cells'] * 100:>7.2f}% "
-              f"{r['copy_baseline'] * 100:>6.0f}%")
-    ro = rollout(model, episodes=args.rollouts, horizon=args.horizon, device=device)
+    extra = {}
+    if game == "keys":
+        from .calibrate import score
+        sc = score(model, episodes=args.episodes, history=args.history, device=device)
+        nf, extra = sc["next_frame"], {"calibration": sc["calibration"], "slip": sc["slip"]}
+        print(f"most likely frame  {nf['exact'] * 100:.1f}% (n={nf['n']}), copying the last "
+              f"frame would score {nf['copy_baseline'] * 100:.1f}%;  "
+              f"KL(true || model) {sc['calibration']['kl']:.3f} nats/frame, "
+              f"{sc['calibration']['off'] * 100:.2f}% of its mass on impossible frames")
+        print(f"{'outcome':>10} {'n':>6} {'mode':>7} {'copy':>6} {'KL':>7} {'P(mode) true':>13} {'model':>7}")
+        for w, r in nf["by_outcome"].items():
+            print(f"{w:>10} {r['n']:>6} {r['exact'] * 100:>6.1f}% {r['copy_baseline'] * 100:>5.0f}% "
+                  f"{r['kl']:>7.3f} {r['p_mode_true']:>13.3f} {r['p_mode_model']:>7.3f}")
+        print("door: P(it opens), the model's belief that the agent holds a key")
+        for where, r in sc["calibration"]["doors"].items():
+            print(f"  {where:<26} n {r['n']:>5}   belief {r['belief']:.3f}   truth "
+                  f"{r['truth']:.0f}   right {r['right'] * 100:.1f}%")
+    else:
+        nf = next_frame(model, episodes=args.episodes, history=args.history, device=device)
+        print(f"next frame   {nf['exact'] * 100:.1f}% exact (± {nf['stderr'] * 100:.1f}, n={nf['n']}), "
+              f"cells {nf['cells'] * 100:.2f}%, copying the last frame would score "
+              f"{nf['copy_baseline'] * 100:.1f}%")
+        print(f"{'outcome':>10} {'n':>6} {'exact':>8} {'cells':>8} {'copy':>7}")
+        for w, r in nf["by_outcome"].items():
+            print(f"{w:>10} {r['n']:>6} {r['exact'] * 100:>7.1f}% {r['cells'] * 100:>7.2f}% "
+                  f"{r['copy_baseline'] * 100:>6.0f}%")
+    ro = rollout(model, episodes=args.rollouts, horizon=args.horizon, device=device, game=game)
     print("rollout      exact frame by step (own predictions fed back): "
           + " ".join(f"{x * 100:.0f}" for x in ro["exact_by_step"]))
     print("             impossible frames by step:                      "
@@ -64,7 +89,7 @@ def cmd_eval(args) -> int:
     out = Path("logs/world") / f"{run}-step{ckpt.get('step')}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"checkpoint": str(args.checkpoint), "step": ckpt.get("step"),
-                               "next_frame": nf, "rollout": ro,
+                               "game": game, "next_frame": nf, "rollout": ro, **extra,
                                "seconds": round(time.time() - t, 1)}, indent=1))
     print(f"wrote {out}")
     return 0
@@ -74,8 +99,8 @@ def cmd_play(args) -> int:
     from .evaluate import play
     from .game import SIZE
     device = _device(args)
-    model, _ = _load(args.checkpoint, device)
-    steps = play(model, horizon=args.horizon, seed=args.seed, device=device)
+    model, _, game = _load(args.checkpoint, device)
+    steps = play(model, horizon=args.horizon, seed=args.seed, device=device, game=game)
     if args.json:
         print(json.dumps(steps))
         return 0
@@ -109,7 +134,9 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="python -m aksharallm.world", description=__doc__.split("\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("prepare", help="random games -> train.bin / val.bin / tokenizer.json")
-    s.add_argument("--out", default="data/world")
+    s.add_argument("--game", choices=("sokoban", "keys"), default="sokoban",
+                   help="keys: hidden keys, doors and a slippery floor (docs/25)")
+    s.add_argument("--out", default=None, help="default data/world (sokoban), data/world-<game>")
     s.add_argument("--episodes", type=int, default=60_000)
     s.add_argument("--val-episodes", type=int, default=2_000)
     s.add_argument("--steps", type=int, default=30)

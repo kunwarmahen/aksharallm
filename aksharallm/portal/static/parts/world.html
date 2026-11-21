@@ -33,10 +33,20 @@
         The rollout feeds the model its <em>own</em> frames back; an <em>impossible</em> frame
         (two agents, a hole in the wall) is the world-model version of a hallucination.
       </p>
+      <p class="panel-note">
+        <strong>The keys world</strong> is harder on purpose. A move slips sideways one time in
+        ten, so there is no single right next frame, only the right <em>probabilities</em>:
+        <strong>KL</strong> is how far the model's are from the game's (0 is perfect). And a key
+        vanishes when picked up and is never drawn again, so whether the next door opens
+        depends on something the picture does not show. The door table asks how sure the model
+        is that the door opens, split by whether the pickup happened inside what it can read,
+        before that, or never.
+      </p>
       <div class="row">
         <label class="field">Evaluation <select id="wd-result"></select></label>
       </div>
       <div class="scroll-x"><table id="wd-outcomes" class="grid"></table></div>
+      <div class="scroll-x"><table id="wd-doors" class="grid"></table></div>
       <div id="wd-rollout" class="wd-rollout"></div>
     </div>
 
@@ -62,10 +72,12 @@
       <h3>Run it from here</h3>
       <p class="panel-note">
         Each button runs the command printed under it, in the background (closing this page does
-        not stop it). Training is the dashboard's Start on <code>world-sokoban</code>
-        (<code>scripts/experiment.sh world-sokoban</code>, about 6 minutes on the card).
+        not stop it). Training is the dashboard's Start on <code>world-sokoban</code> or
+        <code>world-keys</code> (<code>scripts/experiment.sh world-keys</code>, about 6 minutes
+        on the card).
       </p>
       <div class="row">
+        <label class="field">Game <select id="wd-game"><option value="sokoban">sokoban</option><option value="keys">keys (hidden key, slippery floor)</option></select></label>
         <label class="field">Episodes <input id="wd-episodes" type="number" min="100" max="200000" value="60000"></label>
         <button id="wd-prepare" type="button">Make the data</button>
         <button id="wd-eval" type="button">Evaluate the selected model</button>

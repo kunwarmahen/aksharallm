@@ -30,8 +30,8 @@ from math import sqrt
 import numpy as np
 import torch
 
-from .data import FRAME, VOCAB, episode_tokens, ids_of
-from .game import episode, parse
+from .data import FRAME, GAMES, VOCAB, episode_tokens, ids_of, vocab_of
+from .game import episode
 
 EVAL_SEED = 20_000
 
@@ -82,24 +82,33 @@ def next_frame(model, *, episodes: int = 200, steps: int = 30, history: int = 5,
             "history": history, "episodes": episodes, "seed": seed}
 
 
+def most_likely_episode(game: str, rng, n_steps: int):
+    """`(frames, actions, outcomes)` with no randomness in the world: what a rollout is
+    scored against. Sokoban has none to remove; in `keys` every move goes where it was meant
+    to, which is the single most likely game for those actions."""
+    g = GAMES[game]
+    return g.episode(rng, n_steps, slip=0.0) if game == "keys" else g.episode(rng, n_steps)
+
+
 @torch.no_grad()
 def rollout(model, *, episodes: int = 50, horizon: int = 10,
-            seed: int = EVAL_SEED + 1, device: str = "cpu") -> dict:
+            seed: int = EVAL_SEED + 1, device: str = "cpu", game: str = "sokoban") -> dict:
     """Open loop from one real frame, greedy, the model's own frames fed back."""
     rng = np.random.default_rng(seed)
+    vocab, parse = vocab_of(game), GAMES[game].parse
     exact = np.zeros(horizon)
     impossible = np.zeros(horizon)
     for _ in range(episodes):
-        frames, actions, _ = episode(rng, horizon)
-        seq = ids_of(frames[0])
+        frames, actions, _ = most_likely_episode(game, rng, horizon)
+        seq = ids_of(frames[0], vocab)
         for k in range(horizon):
-            seq = seq + ids_of([actions[k]])
+            seq = seq + ids_of([actions[k]], vocab)
             out = []
             for _ in range(FRAME):                           # greedy, one cell at a time
                 x = torch.tensor([(seq + out)[-model.cfg.max_seq_len:]], device=device)
                 logits, _ = model(x, full_logits=True)
                 out.append(int(logits[0, -1].argmax()))
-            words = [VOCAB[i] for i in out]
+            words = [vocab[i] for i in out]
             exact[k] += words == frames[k + 1]
             impossible[k] += parse(words) is None
             seq = seq + out
@@ -109,24 +118,26 @@ def rollout(model, *, episodes: int = 50, horizon: int = 10,
             "impossible_by_step": (impossible / episodes).tolist(), "seed": seed}
 
 
-def play(model, *, horizon: int = 5, seed: int = 0, device: str = "cpu") -> list[dict]:
+def play(model, *, horizon: int = 5, seed: int = 0, device: str = "cpu",
+         game: str = "sokoban") -> list[dict]:
     """One game, open loop: the model's frames fed back, each step beside the true frame.
 
     The same loop as `rollout`, for one episode, keeping the frames so a person can see where
     it goes wrong (`world play`, and the portal's World tab draw this)."""
-    frames, actions, outcomes = episode(np.random.default_rng(seed), horizon)
-    seq = ids_of(frames[0])
+    vocab, parse = vocab_of(game), GAMES[game].parse
+    frames, actions, outcomes = most_likely_episode(game, np.random.default_rng(seed), horizon)
+    seq = ids_of(frames[0], vocab)
     steps = [{"step": 0, "action": None, "outcome": None, "true": frames[0],
               "model": frames[0], "wrong": 0, "impossible": False}]
     with torch.no_grad():
         for k in range(horizon):
-            seq = seq + ids_of([actions[k]])
+            seq = seq + ids_of([actions[k]], vocab)
             out = []
             for _ in range(FRAME):
                 x = torch.tensor([(seq + out)[-model.cfg.max_seq_len:]], device=device)
                 logits, _ = model(x, full_logits=True)
                 out.append(int(logits[0, -1].argmax()))
-            words = [VOCAB[i] for i in out]
+            words = [vocab[i] for i in out]
             steps.append({"step": k + 1, "action": actions[k], "outcome": outcomes[k],
                           "true": frames[k + 1], "model": words,
                           "wrong": sum(a != b for a, b in zip(words, frames[k + 1])),

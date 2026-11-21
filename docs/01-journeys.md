@@ -624,12 +624,24 @@ python -m aksharallm.world play checkpoints/world-sokoban/ckpt_best.pt
 python -m aksharallm.world results                 # every saved evaluation
 ```
 
+Sokoban is solved, so the next world is one that can't be: **keys** adds a key that is never
+drawn once picked up (whether a door opens depends on memory) and a floor that slips one move
+in ten (the right answer is a distribution). It is scored on calibration, not exact frames:
+
+```bash
+python -m aksharallm.world prepare --game keys     # -> data/world-keys/
+scripts/experiment.sh world-keys                   # same model and budget
+python -m aksharallm.world eval checkpoints/world-keys/ckpt_best.pt --episodes 600
+```
+
 In the portal: **☰ Menu → World** (scores beside the copy baseline, and a game drawn beside
 the truth).
 
 **How you know it worked:** next-frame exact accuracy on `moved` and `pushed` (where copying
 the last frame scores 0%), and rollouts that stay exact for several steps without producing
-an impossible frame. 📖 [chapter 25 — world model](25-world-model.md)
+an impossible frame. For `keys`: KL from the true next-frame distribution near 0, and at a
+door a belief near 1 when the pickup is in view and near 0 when nothing is held.
+📖 [chapter 25 — world model](25-world-model.md)
 
 The point of every one is how little had to change. Audio needed a codec and got TTS and ASR
 as *one model in two orders*. Vision needed no codec at all — patches replace one — and

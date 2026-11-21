@@ -148,3 +148,29 @@ def test_a_hybrid_checkpoint_says_so_wherever_it_is_listed():
     base = {"d_model": 384, "n_layers": 6, "n_heads": 6, "n_kv_heads": 6, "max_seq_len": 512}
     assert "hybrid" not in _arch_str(base)
     assert _arch_str({**base, "full_attn_every": 3}).endswith("hybrid: DeltaNet in 4/6")
+
+
+def test_the_world_tab_reads_a_keys_result_and_both_datasets(tmp_path):
+    """A keys evaluation carries `calibration` and `cells: None`; the overview must pass it
+    through as strict JSON, and list every prepared world, not only data/world."""
+    from aksharallm.portal.world import World
+    (tmp_path / "logs/world").mkdir(parents=True)
+    nf = {"n": 1, "exact": 0.5, "stderr": 0.1, "cells": None, "copy_baseline": 0.3,
+          "by_outcome": {"moved": {"n": 1, "exact": 0.5, "cells": None, "copy_baseline": 0.0,
+                                   "kl": 0.2, "off": 0.0, "p_mode_true": 0.9,
+                                   "p_mode_model": float("nan")}}}
+    (tmp_path / "logs/world/world-keys-step9.json").write_text(json.dumps(
+        {"game": "keys", "next_frame": nf, "rollout": {"exact_by_step": [1.0]},
+         "calibration": {"kl": 0.2, "off": 0.0, "doors": {}}}))
+    for d, game in (("world", None), ("world-keys", "keys")):
+        (tmp_path / "data" / d).mkdir(parents=True)
+        meta = {"tokens": {"train": 1}, "episodes": {"train": 1}, "steps": 2, "outcomes": {}}
+        if game:
+            meta["game"] = game
+        (tmp_path / "data" / d / "meta.json").write_text(json.dumps(meta))
+    ov = World(tmp_path, device_for=lambda: ("cpu", "test")).overview()
+    json.dumps(ov, allow_nan=False)
+    assert [r["game"] for r in ov["results"]] == ["keys"]
+    assert ov["results"][0]["calibration"]["kl"] == 0.2
+    assert {(x["dir"], x["game"]) for x in ov["data"]} == {("data/world", "sokoban"),
+                                                         ("data/world-keys", "keys")}
