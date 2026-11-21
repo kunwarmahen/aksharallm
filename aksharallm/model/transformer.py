@@ -26,7 +26,7 @@ import torch.nn.functional as F
 
 from ..config import ModelConfig
 from . import flash, rope
-from .deltanet import GatedDeltaNet
+from .deltanet import GatedDeltaNet, RecurrentState
 from .moe import MoEFeedForward, moe_stats
 from .rope import RopeScaling
 
@@ -604,8 +604,11 @@ class Transformer(nn.Module):
         return (flops_per_token * tokens_per_sec) / peak_flops
 
     def init_caches(self, batch_size, max_seq_len=None, dtype=torch.bfloat16, device="cuda"):
+        """One cache per block: a `KVCache` for softmax attention, a `RecurrentState` for a
+        Gated DeltaNet block of a hybrid model (fixed size, allocated on first use)."""
         max_seq_len = max_seq_len or self.cfg.max_seq_len
         return [
+            RecurrentState() if self.cfg.linear_layer(i) else
             KVCache(batch_size, self.cfg.n_kv_heads, max_seq_len, self.cfg.head_dim, dtype, device)
-            for _ in range(self.cfg.n_layers)
+            for i in range(self.cfg.n_layers)
         ]

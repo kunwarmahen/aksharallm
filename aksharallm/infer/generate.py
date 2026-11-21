@@ -105,12 +105,10 @@ def stream_generate(
     max_len = model.cfg.max_seq_len
 
     dtype = torch.bfloat16 if device.startswith("cuda") else torch.float32
-    # A hybrid linear-attention model (docs/04 § "Linear attention") has a recurrent state in
-    # most of its blocks and no KV cache for them, so it re-reads the whole prefix for every
-    # token: quadratic, slow, and correct, which is what a sample during training needs.
-    cached = not getattr(model.cfg, "full_attn_every", 0)
-    caches = (model.init_caches(idx.size(0), max_len, dtype=dtype, device=device)
-              if cached else None)
+    # A hybrid linear-attention model (docs/04 § "Linear attention") gets a RecurrentState in
+    # its Gated DeltaNet blocks and a KV cache in the rest; `init_caches` decides, and the loop
+    # below does not need to know which it has.
+    caches = model.init_caches(idx.size(0), max_len, dtype=dtype, device=device)
     ctx = (torch.autocast("cuda", dtype=torch.bfloat16)
            if device.startswith("cuda") else torch.autocast("cpu", enabled=False))
 
@@ -157,11 +155,7 @@ def stream_generate(
                 break  # context full; a sliding window would go here
 
             # --- decode: one token, reusing the cache ---
-            if cached:
-                logits, _ = model(next_id, caches=caches)
-            else:
-                idx = torch.cat([idx, next_id], dim=1)
-                logits, _ = model(idx)
+            logits, _ = model(next_id, caches=caches)
 
 
 def generate(

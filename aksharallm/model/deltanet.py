@@ -31,8 +31,12 @@ k, `b = sigmoid(.)`, `log a = -exp(A) * softplus(. + dt_bias)`, and an output ga
 `RMSNorm(o) * silu(W_g x)`. It takes the same arguments as `Attention`, so a block can hold
 either (`model.full_attn_every`, docs/04 § "Linear attention").
 
-It ignores RoPE: a recurrence already knows the order of what it has read. It refuses a KV
-cache rather than pretending to have one; generation from a hybrid model is not built.
+It ignores RoPE: a recurrence already knows the order of what it has read. It has no KV cache;
+its decode-time memory is a `RecurrentState` (the matrix S per head plus the last few inputs
+the convolution needs), a fixed size whatever the length, so generation costs the same per
+token at position 10 and at position 10,000. `Transformer.init_caches` hands each block the
+kind it needs. A recurrent state cannot be rewound (S has already absorbed the token), so
+speculative decoding stays off for hybrids.
 
 Read with: docs/04-model.md -- the chapter this implements; it ends with the order to read these
 files in. See also docs/19-long-context.md.
@@ -49,11 +53,12 @@ import torch.nn.functional as F
 from ..config import ModelConfig
 
 
-def recurrent_gated_delta_rule(q, k, v, g, beta):
+def recurrent_gated_delta_rule(q, k, v, g, beta, initial_state=None, output_state=False):
     """Token by token. q, k: (B, H, T, Dk); v: (B, H, T, Dv); g (log decay <= 0), beta:
-    (B, H, T). Returns (B, H, T, Dv). The reference the chunked form must equal."""
+    (B, H, T). Returns (B, H, T, Dv), and the final state S (B, H, Dk, Dv) when
+    `output_state`. The reference the chunked form must equal, and the decode step."""
     B, H, T, Dk = k.shape
-    S = q.new_zeros(B, H, Dk, v.shape[-1])
+    S = q.new_zeros(B, H, Dk, v.shape[-1]) if initial_state is None else initial_state
     out = []
     for t in range(T):
         S = S * g[:, :, t].exp()[..., None, None]                     # forget
@@ -61,10 +66,12 @@ def recurrent_gated_delta_rule(q, k, v, g, beta):
         delta = (v[:, :, t] - read) * beta[:, :, t, None]             # the correction
         S = S + k[:, :, t, :, None] * delta[:, :, None, :]            # write it at k
         out.append((S * q[:, :, t, :, None]).sum(-2))                 # q^T S
-    return torch.stack(out, dim=2)
+    out = torch.stack(out, dim=2)
+    return (out, S) if output_state else out
 
 
-def chunk_gated_delta_rule(q, k, v, g, beta, chunk: int = 64):
+def chunk_gated_delta_rule(q, k, v, g, beta, chunk: int = 64, initial_state=None,
+                           output_state=False):
     """The same function as `recurrent_gated_delta_rule`, in T/chunk sequential steps.
 
     Inside a chunk, with cumulative log decay G_i = g_1 + ... + g_i and Gamma_ij = exp(G_i - G_j):
@@ -79,6 +86,10 @@ def chunk_gated_delta_rule(q, k, v, g, beta, chunk: int = 64):
       v_new = U - W S
       o     = (q * exp(G)) S  +  causal(q k^T * Gamma) v_new
       S     = exp(G_C) S  +  (k * exp(G_C - G))^T v_new
+
+    `initial_state` starts S somewhere other than zero (a prompt already read), and
+    `output_state` returns the S left after the last real token: the padded tail writes
+    nothing and forgets nothing, so the state after it is the state after token T.
     """
     B, H, T, Dk = k.shape
     Dv = v.shape[-1]
@@ -107,7 +118,7 @@ def chunk_gated_delta_rule(q, k, v, g, beta, chunk: int = 64):
     U = Tinv @ v_beta
     W = Tinv @ (k_beta * g.exp()[..., None])
     within = (q @ k.transpose(-1, -2)) * gamma                         # already causal: gamma
-    S = q.new_zeros(B, H, Dk, Dv)
+    S = q.new_zeros(B, H, Dk, Dv) if initial_state is None else initial_state
     out = []
     for c in range(n):
         v_new = U[:, :, c] - W[:, :, c] @ S
@@ -116,11 +127,47 @@ def chunk_gated_delta_rule(q, k, v, g, beta, chunk: int = 64):
         S = (S * last.exp()[..., None, None]
              + (k[:, :, c] * (last[..., None] - g[:, :, c]).exp()[..., None]).transpose(-1, -2)
              @ v_new)
-    return torch.stack(out, dim=2).reshape(B, H, n * chunk, Dv)[:, :, :T]
+    out = torch.stack(out, dim=2).reshape(B, H, n * chunk, Dv)[:, :, :T]
+    return (out, S) if output_state else out
+
+
+class RecurrentState:
+    """What a KV cache is to attention, for one Gated DeltaNet layer: everything the layer
+    needs to carry on from where the last call stopped.
+
+        S     (B, H, Dk, Dv)   the memory, float32 (a running sum; gotcha 14's family)
+        conv  (B, 3*inner, K-1) the last K-1 inputs to the causal convolution, which reaches
+                                back K-1 tokens and would otherwise see zeros at every step
+
+    Both are allocated by the layer on first use, because it knows the shapes. `pos` counts
+    tokens read, so `Transformer.forward` can take its position from any block's cache.
+    Fixed size: it does not grow with the sequence, which is the point of the layer.
+    """
+
+    def __init__(self):
+        self.S = None
+        self.conv = None
+        self.pos = 0
+
+    def reset(self):
+        self.S, self.conv, self.pos = None, None, 0
+
+    def rewind(self, to: int) -> None:
+        """A KV cache forgets by moving an integer. S has already folded the token in, and
+        there is no undoing a decay, so anything but a no-op is refused."""
+        if int(to) != self.pos:
+            raise ValueError("a recurrent state cannot be rewound: speculative decoding "
+                             "needs a KV cache (docs/04 § Linear attention)")
+
+
+# Up to this many new tokens, the decode path steps the recurrence directly: the chunked form
+# pads to a whole chunk, so one token through it costs a 64-token chunk.
+STEP_BELOW = 16
 
 
 class GatedDeltaNet(nn.Module):
-    """A drop-in for `Attention` in one block: same input, same output, no KV cache."""
+    """A drop-in for `Attention` in one block: same input, same output; its cache is a
+    `RecurrentState` rather than a `KVCache`."""
 
     def __init__(self, cfg: ModelConfig, chunk: int = 64, conv: int = 4):
         super().__init__()
@@ -148,23 +195,49 @@ class GatedDeltaNet(nn.Module):
         self.dropout = nn.Dropout(cfg.dropout)
 
     def forward(self, x, cos=None, sin=None, cache=None, attn_mask=None):
-        if cache is not None or attn_mask is not None:
-            raise ValueError("a Gated DeltaNet layer has a recurrent state, not a KV cache, and "
-                             "generation from a hybrid model is not built: score whole "
-                             "sequences (docs/04 § Linear attention)")
+        if cache is not None and not isinstance(cache, RecurrentState):
+            raise ValueError("a Gated DeltaNet layer has a recurrent state, not a KV cache: "
+                             "build caches with Transformer.init_caches (docs/04 § Linear "
+                             "attention)")
+        if attn_mask is not None and cache is None:
+            # The only mask this layer can honour is causality, which a recurrence has by
+            # construction (the warm-cache mask `Transformer.forward` builds is exactly that).
+            # A padding mask for a ragged batch is the serving path, and it is not built.
+            raise ValueError("a Gated DeltaNet layer cannot take an attention mask: batched "
+                             "serving of a hybrid model is not built")
         B, T, _ = x.shape
         H, D = self.n_heads, self.head_dim
-        qkv = F.silu(self.conv(self.qkv(x).transpose(1, 2))[..., :T]).transpose(1, 2)
-        q, k, v = (t.reshape(B, T, H, D).transpose(1, 2).float() for t in qkv.chunk(3, dim=-1))
+        u = self.qkv(x).transpose(1, 2)                                     # (B, 3*inner, T)
+        if cache is None:
+            mixed = self.conv(u)[..., :T]          # left padding of K-1 zeros, by cutting
+        else:
+            # Same convolution, with the zeros replaced by the inputs it saw last call.
+            K = self.conv.kernel_size[0]
+            tail = cache.conv if cache.conv is not None else u.new_zeros(B, u.shape[1], K - 1)
+            u = torch.cat([tail.to(u.dtype), u], dim=-1)
+            mixed = F.conv1d(u, self.conv.weight.to(u.dtype), groups=self.conv.groups)
+            cache.conv = u[..., -(K - 1):]
+        qkv = F.silu(mixed).transpose(1, 2)
+        # At least float32 (a float64 model stays float64, which is what lets the tests hold
+        # the stepped and chunked paths to each other at 1e-9).
+        f = torch.float64 if x.dtype == torch.float64 else torch.float32
+        q, k, v = (t.reshape(B, T, H, D).transpose(1, 2).to(f) for t in qkv.chunk(3, dim=-1))
         q = F.normalize(q, dim=-1) * D ** -0.5
         k = F.normalize(k, dim=-1)
-        beta = torch.sigmoid(self.b_proj(x).float()).transpose(1, 2)            # (B, H, T)
-        g = (-self.A_log.float().exp()
-             * F.softplus(self.a_proj(x).float() + self.dt_bias.float())).transpose(1, 2)
+        beta = torch.sigmoid(self.b_proj(x).to(f)).transpose(1, 2)              # (B, H, T)
+        g = (-self.A_log.to(f).exp()
+             * F.softplus(self.a_proj(x).to(f) + self.dt_bias.to(f))).transpose(1, 2)
         # fp32 throughout the recurrence: the state is a running sum over the whole sequence,
         # and bf16's 8-bit mantissa would lose the small corrections (gotcha 14's family).
         with torch.autocast(device_type=x.device.type, enabled=False):
-            o = chunk_gated_delta_rule(q, k, v, g, beta, self.chunk)            # (B, H, T, D)
+            if cache is None:
+                o = chunk_gated_delta_rule(q, k, v, g, beta, self.chunk)        # (B, H, T, D)
+            else:
+                rule = recurrent_gated_delta_rule if T < STEP_BELOW else chunk_gated_delta_rule
+                extra = {} if T < STEP_BELOW else {"chunk": self.chunk}
+                o, cache.S = rule(q, k, v, g, beta, initial_state=cache.S, output_state=True,
+                                  **extra)
+                cache.pos += T
         o = o.transpose(1, 2)                                                   # (B, T, H, D)
         o = o * torch.rsqrt(o.pow(2).mean(-1, keepdim=True) + self.eps) * self.o_norm_weight
         o = o.to(x.dtype) * F.silu(self.g_proj(x)).reshape(B, T, H, D)

@@ -89,7 +89,7 @@ def test_the_hybrid_puts_full_attention_in_one_block_of_n():
     assert all(type(b.attn).__name__ == "Attention" for b in plain.blocks)
 
 
-def test_a_hybrid_model_trains_and_refuses_a_kv_cache():
+def test_a_hybrid_model_trains_and_refuses_a_kv_cache_in_a_recurrent_block():
     torch.manual_seed(0)
     m = Transformer(_layer_cfg(full_attn_every=2))
     opt = torch.optim.AdamW(m.parameters(), lr=3e-3)
@@ -102,8 +102,10 @@ def test_a_hybrid_model_trains_and_refuses_a_kv_cache():
         opt.step()
         losses.append(float(loss))
     assert losses[-1] < losses[0] - 1.0
+    from aksharallm.model.transformer import KVCache
+    wrong = [KVCache(4, 4, 32, 8, torch.float32, "cpu") for _ in m.blocks]
     with pytest.raises(ValueError, match="recurrent state"):
-        m(x[:, :4], caches=m.init_caches(4, 32, dtype=torch.float32, device="cpu"))
+        m(x[:, :4], caches=wrong)
 
 
 def test_the_config_refuses_what_a_recurrence_cannot_be():
@@ -113,8 +115,8 @@ def test_the_config_refuses_what_a_recurrence_cannot_be():
         _layer_cfg(full_attn_every=2, attn_window=16)
 
 
-def test_a_hybrid_model_generates_by_rereading_its_prefix():
-    """No KV cache for the recurrent blocks, so `generate` recomputes the prefix. Trained on
+def test_a_hybrid_model_generates_from_its_prefix():
+    """Generation carries a RecurrentState through the DeltaNet blocks. Trained on
     one sequence where token 1 is followed by 2, 4, 6 and 8 in turn, so only a model reading
     its whole prefix can continue it (an untrained model barely depends on context, and a
     decode that saw only the last token would pass against one)."""
@@ -144,3 +146,67 @@ def test_the_hybrid_arm_is_its_control_plus_one_key():
     assert b["train"].pop("out_dir") == "checkpoints/tiny-hybrid"
     a["train"].pop("out_dir")
     assert a == b
+
+
+def _hybrid(seed=0, **kw):
+    torch.manual_seed(seed)
+    m = Transformer(_layer_cfg(full_attn_every=2, **kw)).double().eval()
+    # Untrained gates start near "remember everything"; push A and the conv away from init so
+    # a state or conv tail carried wrongly cannot hide behind a model that ignores context.
+    for b in m.blocks:
+        if isinstance(b.attn, GatedDeltaNet):
+            torch.nn.init.normal_(b.attn.conv.weight, std=0.5)
+            b.attn.A_log.data.uniform_(-1.0, 1.0)
+    return m
+
+
+@pytest.mark.parametrize("split", [[1] * 40, [17, 1, 1, 1, 20], [3, 30, 7], [40]])
+def test_a_recurrent_state_continues_exactly_where_the_full_forward_would(split):
+    """Reading 40 tokens in pieces (one at a time, a long prompt then single tokens, mixed
+    blocks that take both the stepped and the chunked path) gives every position the same
+    logits as reading all 40 at once. A dropped conv tail, a state that is not carried, or a
+    position counted twice each break it, and none of them would stop the text being fluent."""
+    from aksharallm.model.deltanet import RecurrentState
+    m = _hybrid()
+    x = torch.randint(0, 64, (2, sum(split)))
+    full, _ = m(x, full_logits=True)
+    caches = m.init_caches(2, 64, dtype=torch.float64, device="cpu")
+    assert [type(c).__name__ for c in caches] == ["RecurrentState", "KVCache"] * 2
+    got, at = [], 0
+    for n in split:
+        logits, _ = m(x[:, at:at + n], caches=caches, full_logits=True)
+        got.append(logits)
+        at += n
+    torch.testing.assert_close(torch.cat(got, 1), full, rtol=1e-9, atol=1e-9)
+    assert all(c.pos == at for c in caches)
+    assert isinstance(caches[0], RecurrentState) and caches[0].S.shape == (2, 4, 8, 8)
+
+
+def test_cached_generation_matches_rereading_the_prefix():
+    """The old quadratic path is the reference: same tokens, greedily."""
+    from aksharallm.infer.generate import generate
+    m = _hybrid(seed=3).float()
+    prompt = [5, 9, 2, 33, 7]
+    got = generate(m, prompt, max_new_tokens=20, temperature=0.0, device="cpu")
+    ref = list(prompt)
+    with torch.no_grad():
+        for _ in range(20):
+            logits, _ = m(torch.tensor([ref]))
+            ref.append(int(logits[0, -1].argmax()))
+    assert got == ref
+
+
+def test_a_recurrent_state_refuses_to_rewind():
+    """Speculative decoding rewinds rejected guesses; S cannot un-read a token."""
+    from aksharallm.model.deltanet import RecurrentState
+    st = RecurrentState()
+    st.pos = 5
+    st.rewind(5)
+    with pytest.raises(ValueError, match="cannot be rewound"):
+        st.rewind(3)
+
+
+def test_the_paged_server_refuses_a_hybrid_by_name():
+    from aksharallm.serve.batch import BatchEngine
+    with pytest.raises(ValueError, match="cannot be served by the paged"):
+        BatchEngine(_hybrid(), pool=None, device="cpu")

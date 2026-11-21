@@ -348,12 +348,29 @@ residuals, the FFN, the trainer) is unchanged; the layer takes `Attention`'s arg
 - **Speed.** The chunked recurrence is plain PyTorch, not a fused kernel. On `tiny`'s shape,
   compiled, a hybrid microbatch took 190 ms against 108 ms for all-softmax attention
   (measured while another run shared the card, so read only the ratio, about 1.8×).
-- **Generation.** No KV cache for the recurrent blocks, so `infer/generate.py` re-reads the
-  whole prefix for every token: quadratic and slow, but correct, which is what a training
-  sample and the Playground need. A recurrent decode (carry `S` and the conv tail) is the
-  obvious next step. The serving engine refuses a hybrid model, and the Playground ignores
-  its draft control for one (drafting rewinds a KV cache). Everywhere a checkpoint is listed,
-  its architecture string ends `hybrid: DeltaNet in 4/6`, so it never passes for a plain one.
+- **Generation.** A DeltaNet block's cache is a `RecurrentState`, not a `KVCache`: the
+  matrix `S` per head plus the last three inputs to the 4-tap convolution, which would
+  otherwise see zeros at every step. It is a fixed size at any length. `init_caches` hands
+  each block the kind it needs, so `infer/generate.py` runs one loop for both. A single new
+  token steps the recurrence directly; a prompt goes through the chunked form, which now
+  takes a starting state and returns the final one. On `tiny-hybrid`, CPU, greedy, with the
+  same tokens as re-reading the prefix (measured 2026-11-20):
+
+  | new tokens | re-read the prefix | recurrent state | all-attention `tiny-adamw`, KV cache |
+  |---|---|---|---|
+  | 100 | 76 tok/s | 151 tok/s | 214 tok/s |
+  | 500 | 30 tok/s | **160 tok/s** | 213 tok/s |
+
+  Re-reading slows down as the text grows; the state does not. `S` has already absorbed a
+  token and a decay cannot be undone, so a `RecurrentState` refuses to rewind. That is why
+  the Playground ignores its draft control for a hybrid (drafting rewinds rejected guesses)
+  and the serving engine refuses one (its paged pool is keys and values). Everywhere a
+  checkpoint is listed, its architecture string ends `hybrid: DeltaNet in 4/6`, so it never
+  passes for a plain one.
+  `test_a_recurrent_state_continues_exactly_where_the_full_forward_would` reads 40 tokens
+  in four different splits and requires every position's logits to match one full forward
+  pass to 1e-9 in float64. Dropping the conv tail, not carrying `S`, or counting a position
+  twice each turn it red, and none of them would stop the text from reading fluently.
 
 The experiment is `configs/tiny-hybrid.yaml`: `tiny-adamw` plus `full_attn_every: 3` (four
 DeltaNet blocks, two attention blocks; 14.39M parameters against 13.77M). It asks two
@@ -600,7 +617,7 @@ data flow:
 | 9 | [`aksharallm/model/moe.py`](../aksharallm/model/moe.py) | optional — the one component that replaces step 6's FFN. [doc 15](15-moe.md) |
 | 10 | [`aksharallm/model/flash.py`](../aksharallm/model/flash.py) | optional — step 4's attention, written out in Triton instead of called. Read the module docstring first (it is the derivation), then `_fwd_kernel`'s four-line online-softmax rescale, then `_bwd_kv_kernel` / `_bwd_q_kernel` and why there are two of them |
 | 11 | [`aksharallm/model/rope.py`](../aksharallm/model/rope.py) | optional — step 5's frequency ladder, and the four ways of stretching it past the trained window. [doc 19](19-long-context.md) |
-| 12 | [`aksharallm/model/deltanet.py`](../aksharallm/model/deltanet.py) | optional — the other mixer. `recurrent_gated_delta_rule` first (the definition), then `chunk_gated_delta_rule` (the same function, chunked), then `GatedDeltaNet.forward`, and `ModelConfig.linear_layer` for which blocks get it. `tests/test_deltanet.py` |
+| 12 | [`aksharallm/model/deltanet.py`](../aksharallm/model/deltanet.py) | optional — the other mixer. `recurrent_gated_delta_rule` first (the definition), then `chunk_gated_delta_rule` (the same function, chunked), then `GatedDeltaNet.forward` and `RecurrentState` (its decode cache), and `ModelConfig.linear_layer` for which blocks get it. `tests/test_deltanet.py` |
 
 What pins it: `tests/test_model.py` is the shortest honest summary of this chapter —
 `test_causality`, `test_rope_preserves_norm_and_relative_position`, `test_weight_tying`,

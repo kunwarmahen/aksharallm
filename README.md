@@ -963,7 +963,8 @@ Not built yet, in the order they depend on each other or by value per GPU hour:
 - **Hybrid linear attention**: ✅ built 2026-11-20 (`model.full_attn_every`, a Gated DeltaNet
   layer from scratch, [doc 4](docs/04-model.md)). `tiny-hybrid` val 1.458 vs 1.475 per step,
   1.8× slower per step, and **no cliff at twice its trained window** where attention's loss
-  goes 1.4 → 5.0.
+  goes 1.4 → 5.0. Generation carries each DeltaNet block's state (`RecurrentState`) instead
+  of re-reading the prefix: 160 vs 30 tok/s at 500 tokens on the CPU, identical tokens.
 - **Turning a trained autoregressive model into a diffusion one** instead of training from
   scratch, measured in tokens per forward pass.
 - **A small model for agents**: tool-use SFT ✅ built and run 2026-11-20 (120/120 on trained

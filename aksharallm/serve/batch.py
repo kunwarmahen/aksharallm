@@ -124,6 +124,13 @@ class BatchEngine:
 
     def __init__(self, model, pool: BlockPool, max_batch: int = 32,
                  device: str = "cuda", speculate: int = 0, ngram: int = 3):
+        if getattr(model.cfg, "full_attn_every", 0):
+            # The pool pages keys and values; a hybrid's DeltaNet blocks keep a RecurrentState
+            # per sequence instead (docs/04 § Linear attention). Refused here, by name, rather
+            # than deep inside the first forward.
+            raise ValueError("a hybrid (full_attn_every) model cannot be served by the paged "
+                             "batch engine: its DeltaNet blocks have no keys and values to "
+                             "page. Generate with infer.generate, which carries their state.")
         self.model = model
         self.model.eval()
         self.cache = PagedCache(pool)
