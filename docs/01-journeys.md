@@ -743,6 +743,9 @@ python -m aksharallm.pictures gen-report imggen-shapes --guidance 3   # all 60 c
 
 In the portal: **Pictures → From a sentence to a picture** (pick three words, Draw).
 
+The best G1 so far trains on 64,000 pictures with a slot embedding (`scripts/audio.sh
+imggen-shapes64k-pos-long`; the corpus and codes commands are in chapter 26).
+
 **How you know it worked:** most seen captions drawn right, the four purple-triangle captions
 (never in training) drawn right too, and few drawings that are code-for-code copies of a
 training picture. 📖 [chapter 26 — pictures](26-pictures.md)

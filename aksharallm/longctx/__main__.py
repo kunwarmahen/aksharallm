@@ -119,11 +119,38 @@ def _check_device(args) -> None:
         return
     root = Path(args.root) if args.root else repo_root()
     live = [p.parent.name for p in (root / "checkpoints").glob("*/train.pid")
-            if _alive(p)]
+            if _alive(p) and _on_gpu(p)]
     if live:
         raise InferError(
             f"{', '.join(live)} is training and holding the GPU. Re-run with "
             f"--device cpu (slower, always safe), or --force-gpu if you know there is room.")
+
+
+def _gpu_pids() -> set[int] | None:
+    """Pids holding a CUDA context, from nvidia-smi; None when it cannot say."""
+    import subprocess
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return {int(x) for x in out.stdout.split() if x.strip().isdigit()}
+
+
+def _on_gpu(pid_file: Path) -> bool:
+    """Does this run actually hold the card? A run training on the CPU
+    (`CUDA_VISIBLE_DEVICES=`) writes the same train.pid, and refusing a GPU measurement
+    because of it cost a queue its whole day (2026-11-22). When nvidia-smi cannot answer,
+    assume it does: refusing is the safe mistake."""
+    pids = _gpu_pids()
+    if pids is None:
+        return True
+    try:
+        return int(pid_file.read_text().strip()) in pids
+    except ValueError:
+        return True
 
 
 def _alive(pid_file: Path) -> bool:

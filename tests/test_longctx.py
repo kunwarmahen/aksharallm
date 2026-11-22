@@ -576,3 +576,24 @@ def test_two_needle_results_pair_trial_for_trial_and_refuse_different_trials():
     assert [r["length"] for r in rows[:2]] == [512, 1024] and rows[0]["b_only"] == 1
     with pytest.raises(ValueError):
         compare(res([0, 1, 0, 1]), res([0, 1, 0, 1], city="Oslo"))
+
+
+def test_a_run_training_on_the_cpu_does_not_block_a_gpu_measurement(tmp_path, monkeypatch):
+    """A live train.pid is only a reason to refuse the card when that process holds it: a
+    CPU-only run's pid file once made the night queue's recall scorer refuse and lose a day."""
+    import os
+    from types import SimpleNamespace
+
+    import aksharallm.longctx.__main__ as cli
+    from aksharallm.infer.engine import InferError
+    (tmp_path / "checkpoints/cpu-run").mkdir(parents=True)
+    (tmp_path / "checkpoints/cpu-run/train.pid").write_text(str(os.getpid()))
+    args = SimpleNamespace(device="cuda", force_gpu=False, root=str(tmp_path))
+    monkeypatch.setattr(cli, "_gpu_pids", lambda: set())             # on the CPU
+    cli._check_device(args)
+    monkeypatch.setattr(cli, "_gpu_pids", lambda: {os.getpid()})     # holds the card
+    with pytest.raises(InferError):
+        cli._check_device(args)
+    monkeypatch.setattr(cli, "_gpu_pids", lambda: None)              # cannot tell: refuse
+    with pytest.raises(InferError):
+        cli._check_device(args)

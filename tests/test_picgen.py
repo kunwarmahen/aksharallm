@@ -239,3 +239,79 @@ def test_a_drawing_goes_caption_to_codes_to_a_judged_picture(tmp_path):
     assert len(r["pictures"]) == 3 and r["pictures"][0]["png"].startswith("data:image/png;base64,")
     assert {"count", "colour", "shape"} <= set(r["pictures"][0]["read"])
     assert "--guidance 2" in r["command"]
+
+
+# ---- 2-D positions (the counting fix) --------------------------------------------------
+
+def _pos_model():
+    torch.manual_seed(0)
+    pg = PicGenConfig(books=2, d_model=32, n_layers=2, n_heads=2, dropout=0.0, pos2d=True)
+    model = build(pg, K, 4)
+    for e in (model.row_emb, model.col_emb, model.book_emb):      # make the table matter
+        torch.nn.init.normal_(e.weight, std=1.0)
+    return pg, model.eval()
+
+
+def test_the_slot_embedding_names_the_cell_and_codebook_about_to_be_written():
+    from aksharallm.pictures.gen import PicGenTransformer
+    _, m = _pos_model()
+    assert isinstance(m, PicGenTransformer)
+    w = m.where(0, CAPTION_LEN + 1 + 2 * 16, "cpu")
+    assert torch.equal(w[:CAPTION_LEN], torch.zeros(CAPTION_LEN, 32))    # words: no slot
+    slot = lambda r, c, b: m.row_emb.weight[r] + m.col_emb.weight[c] + m.book_emb.weight[b]
+    assert torch.allclose(w[CAPTION_LEN], slot(0, 0, 0))     # at IMG: the first code goes next
+    assert torch.allclose(w[CAPTION_LEN + 1], slot(0, 0, 1))  # then cell 0's second codebook
+    assert torch.allclose(w[CAPTION_LEN + 2], slot(0, 1, 0))  # then cell 1 = row 0, column 1
+    assert torch.allclose(w[CAPTION_LEN + 8], slot(1, 0, 0))  # cell 4 = row 1, column 0
+    assert torch.equal(w[-1], torch.zeros(32))                 # after the last code: nothing
+
+
+def test_with_2d_positions_cached_decoding_matches_the_full_forward():
+    """The slot index is the position in the WHOLE sequence; during cached decoding it must
+    come from the cache's offset, or every code is told it is the first one."""
+    from aksharallm.model.transformer import KVCache
+    _, m = _pos_model()
+    seq = torch.cat([torch.tensor([word_ids("two red circles") + [IMG]]),
+                     CODE0 + torch.randint(0, K, (1, 10))], dim=1)
+    full, _ = m(seq, full_logits=True)
+    cfg = m.cfg
+    caches = [KVCache(1, cfg.n_heads, cfg.max_seq_len, cfg.d_model // cfg.n_heads,
+                      torch.float32, "cpu") for _ in range(cfg.n_layers)]
+    step, _ = m(seq[:, :CAPTION_LEN + 1], caches=caches)
+    outs = [step[:, -1]]
+    for t in range(CAPTION_LEN + 1, seq.shape[1]):
+        step, _ = m(seq[:, t:t + 1], caches=caches)
+        outs.append(step[:, -1])
+    assert torch.allclose(torch.stack(outs, 1), full[:, CAPTION_LEN:], atol=1e-5)
+
+
+def test_a_2d_checkpoint_saves_and_loads(tmp_path):
+    from dataclasses import asdict
+
+    from aksharallm.pictures.gen import load_generator
+    pg, m = _pos_model()
+    torch.save({"model": m.state_dict(), "model_config": asdict(m.cfg), "picgen": asdict(pg),
+                "stage": "picgen", "step": 1}, tmp_path / "g.pt")
+    m2, pg2, _ = load_generator(tmp_path / "g.pt")
+    assert pg2.pos2d and m2.grid == 4 and torch.equal(m2.row_emb.weight, m.row_emb.weight)
+    codes = sample(m2, ["one red circle"], books=2, codebook_size=K, grid=4, seed=0)
+    assert codes.shape == (1, 2, 4, 4)
+
+
+def test_the_counting_arms_are_each_one_key_from_the_control():
+    """The experiment is only readable if each arm changes exactly what it says."""
+    from aksharallm.config import config_to_dict
+    from aksharallm.pictures.train_gen import load_picgen_config
+
+    def flat(name):
+        d = config_to_dict(load_picgen_config(f"configs/{name}.yaml"))
+        d.pop("name")
+        d["train"].pop("out_dir")
+        return {f"{k}.{kk}": v for k, sub in d.items() for kk, v in sub.items()}
+    ctl = flat("imggen-shapes-gpu")
+    assert ctl == flat("imggen-shapes") | {}               # the control is the first run's config
+    for arm, keys in (("imggen-shapes-pos", {"picgen.pos2d"}),
+                      ("imggen-shapes64k", {"data.codes"}),
+                      ("imggen-shapes64k-pos", {"picgen.pos2d", "data.codes"})):
+        d = flat(arm)
+        assert {k for k in ctl if ctl[k] != d[k]} == keys, arm

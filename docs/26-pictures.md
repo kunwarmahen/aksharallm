@@ -152,6 +152,11 @@ python -m aksharallm.pictures compare logs/pictures/report-imgtok-shapes-stepN.j
 
 # G1, a caption to a picture
 python -m aksharallm.pictures codes imgtok-shapes --books 2     # data/pictures/codes-imgtok-shapes
+# ...or the 64,000-picture corpus the counting fix trains on (docs/26 § Fixing count)
+python -m aksharallm.vision corpus --out data/vision/shapes64k --images 64000
+python -m aksharallm.pictures codes imgtok-shapes --books 2 --corpus data/vision/shapes64k \
+    --out data/pictures/codes-imgtok-shapes-64k
+scripts/audio.sh imggen-shapes64k-pos-long                      # the best G1 so far
 scripts/audio.sh imggen-shapes                                  # train (encodes the codes if missing)
 python -m aksharallm.pictures draw imggen-shapes "two red circles" --guidance 3
 python -m aksharallm.pictures gen-report imggen-shapes --guidance 3   # all 60 captions, judged
@@ -273,6 +278,59 @@ and its errors are almost all off by one in either direction (guidance 1, 32 per
 same order the vision model learned in (colour, then shape, counting last; chapter 22).
 
 
+### Fixing count: four arms, one key apart (2026-11-22)
+
+Two hypotheses for why count lagged. **Not enough pictures**: 7,600 pictures for 56 captions is
+~136 each, the model memorised them by step 2,000 (val loss rose for the next 6,000 steps), and
+counting is the attribute that needs the most examples, because it is a property of the whole
+picture rather than of any one region. **No sense of where**: RoPE gives the transformer only a
+1-D distance along the sequence, and two codes four steps apart in raster order may be side by
+side or on different rows. The fix for the second is a learned *slot embedding*, row + column +
+codebook of the code about to be written, added to each input (`picgen.pos2d`,
+`PicGenTransformer`, a subclass that leaves `Transformer` untouched). A free check first:
+lowering the sampling temperature to 0.4 moved count from 66% to 70%, so the fix had to be in
+training.
+
+The bigger corpus is `vision corpus --images 64000` with the same seed, so its first 8,000
+pictures **are** the original corpus (checked byte for byte) and the reader is exact on all
+64,000. All four arms trained on the GPU, 8,000 steps of 64, same seed, ~3 minutes each
+(`logs/queue/g1-count.sh`); `test_the_counting_arms_are_each_one_key_from_the_control` pins
+the configs. Final checkpoints, 32 drawings per caption, paired per drawing:
+
+| arm | val (best / final) | seen: count | seen: all | held out: all (g1) | held out: all (g3) |
+|---|---|---|---|---|---|
+| control, 8k pictures | 1.945 / 2.677 | 65.6% | 63.8% | 14.8% | 48.4% |
+| + slot embedding | 1.925 / 2.621 | 67.9% | 67.1% | 35.9% | 45.3% |
+| 64k pictures | 1.280 / 1.280 | 83.4% | 83.2% | 68.8% | 67.2% |
+| 64k + slot embedding | 1.261 / 1.261 | **86.3%** | **86.0%** | **74.2%** | 71.9% |
+
+(seen columns at guidance 1; colour and shape are ≥ 98% on seen captions in every arm.)
+
+* **More pictures is the fix.** Control → 64k: seen 63.8% → 83.2% (526 drawings better, 179
+  worse, p 2e-40), the unseen purple triangles 14.8% → 68.8% (74–5, p 8e-17). The val loss no
+  longer turns upward: best and final are the same number, so 8,000 steps under-trains it.
+* **The slot embedding helps a little, every time.** +3 points on seen captions at 8k (372–314,
+  p 0.03) and at 64k (241–190, p 0.016); its held-out gains are not significant at 64k
+  (32–25, p 0.43). A small, real effect on top of the data, not instead of it.
+* **The count errors changed shape.** The control mostly drew *too few* (asked minus drawn:
+  +1 in 518 drawings, −1 in 129); the 64k + slot model errs both ways and rarely (142 / 120).
+* **With enough pictures, guidance is no longer what draws the unseen combination.** At 8k,
+  guidance 3 lifted the purple triangles 14.8% → 48.4% (49–6). At 64k + slot it does nothing
+  for them (74.2% → 71.9%, p 0.79) and costs 3 points on seen captions (205–266, p 0.006): the
+  model already binds "purple" to the triangles without being pushed. Guidance was
+  compensating for a model that had not learned the words well enough.
+* Copies stay at 0–0.3%, variety at 100%.
+
+**And longer.** Because the 64k arms were still improving at 8,000 steps, the winning arm ran
+again for 30,000 (`imggen-shapes64k-pos-long`, 11 minutes): val 1.261 → **1.125**, seen
+captions **89.0%** at guidance 1 (count 89.1%; paired against the 8,000-step arm 195–143,
+p 0.006), the purple triangles 70.3% (g1) / 77.3% (g3), not different from the shorter run
+(p 0.58). What is left of the counting error grows with the number: asked for one shape it
+draws one 98% of the time, two 92%, three 86%, four 80%, and it now errs almost only by drawing
+one too few. From the first run to this one, count went **65.6% → 89.1%** and the never-seen
+combination **14.8% → 70.3%** without guidance. It is the model the portal's Draw now picks
+first (the newest checkpoint).
+
 ## Traps to keep
 
 1. **A score that borrows a name it does not earn.** There is no FID here: FID needs a
@@ -297,7 +355,7 @@ same order the vision model learned in (colour, then shape, counting last; chapt
 | 5 | [`pictures/measure.py`](../aksharallm/pictures/measure.py) → `ladder`, `compare`, `gallery` | PSNR, the reader at each codebook count, codebook use, per-picture verdicts paired by a sign test |
 | 6 | [`pictures/__main__.py`](../aksharallm/pictures/__main__.py) | `read`, `report`, `compare`, `reports` |
 | 7 | [`pictures/codes.py`](../aksharallm/pictures/codes.py) → `WORDS`, `flatten`, `CodesDataset.rows` | G1's vocabulary of words and codes, position-major order, the loss on codes only, the `NULL` caption |
-| 8 | [`pictures/gen.py`](../aksharallm/pictures/gen.py) → `sample`, `draw` | the slot mask, classifier-free guidance over one shared KV cache, decoding through the tokenizer |
+| 8 | [`pictures/gen.py`](../aksharallm/pictures/gen.py) → `sample`, `draw`, `PicGenTransformer` | the slot mask, classifier-free guidance over one shared KV cache, decoding through the tokenizer; the (row, column, codebook) slot embedding, taken from the cache's offset while decoding |
 | 9 | [`pictures/train_gen.py`](../aksharallm/pictures/train_gen.py) → `main` | the same trainer contract; refuses codes from a different tokenizer; draws all 60 captions at each sample |
 | 10 | [`pictures/score.py`](../aksharallm/pictures/score.py) → `report`, `compare` | seen vs held-out captions, copies of training pictures, variety, per-drawing verdicts paired |
 | 11 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
@@ -317,4 +375,7 @@ comparison refusing different captions, the trainer's resume and its refusal of 
 tokenizer's codes, and the portal's inline draw. Six mutants were checked red: guidance halves
 swapped, guidance ignoring the unconditional half, the IMG marker left in the loss, codebook-major
 flattening, the wrong slot range, and the tokenizer check removed.
+The slot embedding adds three more: the slot names the right cell and codebook, cached decoding
+matches the full forward (red if the offset is taken as 0, if the slot is off by one, or if row
+and column are swapped), and a `pos2d` checkpoint round-trips.
 [Lesson 30](lessons/30-guidance.md) breaks guidance.

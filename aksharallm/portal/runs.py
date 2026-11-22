@@ -121,6 +121,11 @@ LAUNCHERS: dict[str, dict] = {
     "imgtok-shapes16": {"script": "scripts/audio.sh", "args": ["imgtok-shapes16"]},
     # G1, a caption to a picture's codes (docs/26): a `picgen:` config, same launcher.
     "imggen-shapes": {"script": "scripts/audio.sh", "args": ["imggen-shapes"]},
+    "imggen-shapes-gpu": {"script": "scripts/audio.sh", "args": ["imggen-shapes-gpu"]},
+    "imggen-shapes-pos": {"script": "scripts/audio.sh", "args": ["imggen-shapes-pos"]},
+    "imggen-shapes64k": {"script": "scripts/audio.sh", "args": ["imggen-shapes64k"]},
+    "imggen-shapes64k-pos": {"script": "scripts/audio.sh", "args": ["imggen-shapes64k-pos"]},
+    "imggen-shapes64k-pos-long": {"script": "scripts/audio.sh", "args": ["imggen-shapes64k-pos-long"]},
     # The speech recogniser (Phase 7, docs/23): same launcher, an `asr:` config.
     "asr-synth": {"script": "scripts/audio.sh", "args": ["asr-synth"]},
     "asr-libri100": {"script": "scripts/audio.sh", "args": ["asr-libri100"]},

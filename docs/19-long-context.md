@@ -545,6 +545,10 @@ model:
 3. **`--device cuda` is refused while a run is training.** These are long forward passes;
    4,096 tokens of logits is half a gigabyte before the loss is computed, and the training
    run has about 3 GB spare. Use `--device cpu`, or `--force-gpu` if you know there is room.
+   "Training" means a live `train.pid` **whose process holds the card** (asked of
+   `nvidia-smi`): a run training on the CPU writes the same pid file, and on 2026-11-22 one
+   made the night queue's recall scorer refuse and the queue give up its whole day window.
+   When `nvidia-smi` cannot answer, it still refuses.
 
 ---
 

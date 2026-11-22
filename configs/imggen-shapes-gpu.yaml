@@ -1,0 +1,49 @@
+# The counting experiment (docs/26 § Fixing count), arm: the control
+# Four arms, one key apart each, all trained on the GPU from the same seed:
+#   imggen-shapes-gpu      the first run's config (control)
+#   imggen-shapes-pos      + picgen.pos2d: true
+#   imggen-shapes64k       + data.codes = the 64,000-picture corpus
+#   imggen-shapes64k-pos   both
+#
+#   python -m aksharallm.vision corpus --out data/vision/shapes64k --images 64000
+#   python -m aksharallm.pictures codes imgtok-shapes --books 2 --corpus data/vision/shapes64k \
+#       --out data/pictures/codes-imgtok-shapes-64k
+#   scripts/audio.sh imggen-shapes-gpu
+
+name: imggen-shapes-gpu
+
+picgen:
+  tokenizer: checkpoints/imgtok-shapes/ckpt_best.pt
+  books: 2            # 2 x 64 cells = 128 codes a picture (1 book misses 5% of held-out colours)
+  d_model: 256
+  n_layers: 6
+  n_heads: 8
+  dropout: 0.1
+  cfg_drop: 0.1
+
+data:
+  codes: data/pictures/codes-imgtok-shapes
+
+optim:
+  lr: 6.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 300
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/imggen-shapes-gpu
+  batch_size: 64
+  max_steps: 8000
+  eval_every: 500
+  eval_batches: 8
+  sample_every: 2000
+  sample_k: 2
+  sample_guidance: 3.0
+  ckpt_every: 1000
+  log_every: 50
+  seed: 1337
+  resume: auto

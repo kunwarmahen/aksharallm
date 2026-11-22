@@ -34,6 +34,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import torch
+import torch.nn as nn
 
 from ..config import ModelConfig
 from ..model.transformer import KVCache, Transformer
@@ -53,6 +54,48 @@ class PicGenConfig:
     #: Share of training captions replaced by NULL, so the model can draw unconditionally
     #: (what classifier-free guidance subtracts). 0 disables guidance.
     cfg_drop: float = 0.1
+    #: Tell the model WHERE the next code goes: add a learned (row, column, codebook)
+    #: embedding at every position, for the slot it is about to fill. RoPE alone gives only
+    #: a 1-D distance along the sequence, and "two cells apart in raster order" is the same
+    #: whether they are side by side or on different rows. Off reproduces the first run.
+    pos2d: bool = False
+
+
+class PicGenTransformer(Transformer):
+    """`Transformer`, unchanged, plus one table: a 2-D "where am I drawing" embedding.
+
+    At input position `p` the model predicts token `p + 1`; when that token is code number
+    `j = p - CAPTION_LEN` (cell `j // books`, codebook `j % books`), the row, column and
+    codebook embeddings of that slot are added to the input embedding. Everything else, the
+    blocks, RoPE, the head and the KV cache, is the parent's, through `inputs_embeds`.
+    """
+
+    def __init__(self, cfg: ModelConfig, grid: int, books: int):
+        super().__init__(cfg)
+        self.grid, self.books = grid, books
+        self.row_emb = nn.Embedding(grid, cfg.d_model)
+        self.col_emb = nn.Embedding(grid, cfg.d_model)
+        self.book_emb = nn.Embedding(books, cfg.d_model)
+        for e in (self.row_emb, self.col_emb, self.book_emb):
+            nn.init.normal_(e.weight, mean=0.0, std=0.02)
+
+    def where(self, start: int, T: int, device) -> torch.Tensor:
+        """`(T, d_model)`: the slot embedding for positions start..start+T-1 (0 where the next
+        token is not a code)."""
+        p = torch.arange(start, start + T, device=device)
+        j = p - CAPTION_LEN
+        n = self.grid * self.grid * self.books
+        ok = (j >= 0) & (j < n)
+        j = j.clamp(0, n - 1)
+        cell, book = j // self.books, j % self.books
+        e = (self.row_emb(cell // self.grid) + self.col_emb(cell % self.grid)
+             + self.book_emb(book))
+        return e * ok[:, None]
+
+    def forward(self, idx, targets=None, caches=None, **kw):
+        start = caches[0].pos if caches is not None else 0
+        x = self.tok_emb(idx) + self.where(start, idx.shape[1], idx.device)[None]
+        return super().forward(None, targets, caches, inputs_embeds=x, **kw)
 
 
 def model_config(pg: PicGenConfig, codebook_size: int, grid: int) -> ModelConfig:
@@ -62,7 +105,8 @@ def model_config(pg: PicGenConfig, codebook_size: int, grid: int) -> ModelConfig
 
 
 def build(pg: PicGenConfig, codebook_size: int, grid: int) -> Transformer:
-    return Transformer(model_config(pg, codebook_size, grid))
+    cfg = model_config(pg, codebook_size, grid)
+    return PicGenTransformer(cfg, grid, pg.books) if pg.pos2d else Transformer(cfg)
 
 
 def load_generator(path: str | Path, device: str = "cpu"):
@@ -71,7 +115,12 @@ def load_generator(path: str | Path, device: str = "cpu"):
     if blob.get("stage") != "picgen":
         raise ValueError(f"{path} is not a G1 picture generator checkpoint")
     pg = PicGenConfig(**blob["picgen"])
-    model = Transformer(ModelConfig(**blob["model_config"]))
+    mc = ModelConfig(**blob["model_config"])
+    if pg.pos2d:
+        grid = int(round(((mc.max_seq_len - CAPTION_LEN - 1) / pg.books) ** 0.5))
+        model = PicGenTransformer(mc, grid, pg.books)
+    else:
+        model = Transformer(mc)
     model.load_state_dict(blob["model"])
     return model.to(device).eval(), pg, blob
 

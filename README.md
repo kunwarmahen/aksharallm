@@ -1002,7 +1002,10 @@ Not built yet, in the order they depend on each other or by value per GPU hour:
 5.09M): 66% of seen captions drawn right without guidance; on the never-seen purple triangles
 guidance doubles the score, 22% → 43% (paired p 0.0007), because without it they come out in
 the colours triangles were trained in, at a small cost on seen captions (66% → 62%); count is
-the bottleneck (off by one), and no drawing copies a training picture.
+the bottleneck (off by one), and no drawing copies a training picture. **Counting fixed the
+same day (GPU, four arms one key apart):** 8× the pictures is the fix (count 66% → 83%, the
+unseen triangles 15% → 69% without guidance), a (row, column) slot embedding adds ~3 points,
+and 30,000 steps reach 89% on seen captions.
 - **The next four, built 2026-11-22 and queued for the 11-23 night**: recall capacity (the
   wide models hold all 64 keys the vocabulary has; narrow arms with 16-wide heads ask where a
   DeltaNet memory runs out, docs/19); the hybrid at ~101M against small-student-muon, with the
