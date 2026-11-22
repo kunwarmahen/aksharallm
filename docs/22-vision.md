@@ -171,6 +171,10 @@ falling back to a *seen* pair for the third.
 - **Stage two.** LLaVA's second stage unfreezes the language model and fine-tunes on
   instruction data. `freeze_language_model: false` exists and is untested at scale.
 - **The 300M.** Everything above is against the 13.8M. The seam is identical; the run is not.
+- **The other direction.** This chapter reads pictures; [chapter 26](26-pictures.md) makes
+  them, from the same shapes corpus: an image tokenizer, then a transformer that draws
+  "two red circles", judged by a rule-based reader (not this model, whose own errors would
+  mix with the drawing's).
 
 ## The code, in reading order
 

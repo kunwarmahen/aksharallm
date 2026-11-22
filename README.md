@@ -139,7 +139,9 @@ aksharallm/
 │   ├── asr-synth.yaml    the speech recogniser on synthetic speech — no download, minutes
 │   ├── asr-libri100.yaml   the recogniser on 100 h of LibriSpeech
 │   ├── asr-libri460.yaml   the same, on 460 h (train-clean-100 + 360)
-│   └── punct.yaml        the dictation punctuation tagger (a third pretraining objective)
+│   ├── punct.yaml        the dictation punctuation tagger (a third pretraining objective)
+│   ├── imgtok-shapes.yaml  the image tokenizer: 64x64 shapes -> 8x8 x 4 codes (docs/26)
+│   └── imggen-shapes.yaml  G1: "two red circles" -> those codes, with guidance (docs/26)
 ├── aksharallm/
 │   ├── config.py         dataclass config loading + CLI overrides
 │   ├── tokenizer/        byte-level BPE training and the chat template
@@ -194,6 +196,13 @@ aksharallm/
 │   │   ├── image.py          a shapes corpus whose captions are known exactly
 │   │   ├── encoder.py        patches, a small ViT, and the LLaVA projector
 │   │   └── lm.py             a FROZEN language model with a picture on its input
+│   ├── pictures/         making pictures: the other direction from vision — see docs/26
+│   │   ├── reader.py         reads a shapes picture back by rule: count, colour, shape
+│   │   ├── tokenizer.py      a picture -> a grid of codes and back (the audio quantizer)
+│   │   ├── measure.py        PSNR + the reader at each codebook count, paired compare
+│   │   ├── codes.py          the corpus as codes; one vocabulary for words and codes
+│   │   ├── gen.py            G1: caption -> codes, slot mask, classifier-free guidance
+│   │   └── score.py          G1 judged: 60 captions, held-out ones, copies, variety
 │   ├── quant/            int8/int4/NF4 from scratch — see docs/11
 │   ├── lora/             LoRA + QLoRA adapters from scratch — see docs/12
 │   │   ├── qtensor.py        group scales, zero-points, 4-bit packing
@@ -994,7 +1003,8 @@ Not built yet, in the order they depend on each other or by value per GPU hour:
   wide models hold all 64 keys the vocabulary has; narrow arms with 16-wide heads ask where a
   DeltaNet memory runs out, docs/19); the hybrid at ~101M against small-student-muon, with the
   needle paired trial by trial (`longctx needle-compare`); tool set v3 (all 32 kinds by SFT,
-  since GRPO's probe found eleven of twelve rl kinds at 0/320, docs/06); and G0 above.
+  since GRPO's probe found eleven of twelve rl kinds at 0/320, docs/06); and G0 above (which
+  ran by day on 11-22 and is solved; G1 followed the same day).
 - **A toy world model**: ✅ built 2026-11-20 ([doc 25](docs/25-world-model.md)); `world-sokoban`
   solved it: 100% exact next frames and 10-step rollouts. The harder world, `keys` (a key
   never drawn once carried, a floor that slips one move in ten), is built and scored on

@@ -60,3 +60,7 @@ python -m aksharallm.pictures report imgtok-shapes     # the ladder and the gall
 ```
 
 Or open the **Pictures** tab, pick a report, and look at the gallery beside the table.
+
+The full run reads back 100% of the val pictures even from one codebook, so the next step
+draws pictures instead of copying them: [lesson 30](docs/lessons/30-guidance.md), where a
+transformer writes these integers from a caption and the same reader judges the result.

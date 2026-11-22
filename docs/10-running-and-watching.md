@@ -665,12 +665,15 @@ The panels, in plain terms:
   data for sokoban, keys, or keys with the **blind agent** (whose moves never give away the
   key), and "score on" evaluates a model on either agent's games. See
   [doc 25](25-world-model.md).
-- **Pictures** — the picture tokenizer (G0 of the picture line): each report's table (PSNR
-  and what the rule-based reader sees at 1, 2 and 4 codebooks, with the originals' row first
-  as the reader's control, and the held-out purple triangles), codebook use, a gallery of
-  originals beside their reconstructions, two reports paired picture by picture, and the
-  report and reader-check jobs (a report from the browser always runs on the CPU). See
-  [doc 26](26-pictures.md).
+- **Pictures** — the picture line. G0, the tokenizer: each report's table (PSNR and what the
+  rule-based reader sees at 1, 2 and 4 codebooks, with the originals' row first as the
+  reader's control, and the held-out purple triangles), codebook use, a gallery of originals
+  beside their reconstructions, two reports paired picture by picture. G1, a sentence to a
+  picture: **Draw** (pick count, colour and shape and a guidance; it draws on the CPU and
+  borders each picture green or red by the reader's verdict), **Every caption, judged** (seen
+  vs held-out captions, copies, variety, a gallery with the held-out captions first) and two
+  G1 reports paired. Jobs: a report, the reader check, encoding the corpus for G1, a G1 report
+  (all on the CPU from the browser). See [doc 26](26-pictures.md).
 - **Tools** — the tool-use model: each report by kind with the held-out kinds marked, two
   reports paired per problem, **Ask it** with the full transcript, and jobs to write the
   data or score a model on problem set v1, v2 or `rl` (GRPO's twelve kinds plus v2's four

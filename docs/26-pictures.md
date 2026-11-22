@@ -1,9 +1,11 @@
-# 26. Making pictures: turning a picture into integers, and back
+# 26. Making pictures: a picture as integers, and drawing one from a sentence
 
 Everything this repo has generated so far is a sequence of integers: text tokens, codec
 codes for speech, the 65 tokens of a game frame. To make it *draw*, a picture first has to
 become such a sequence, and that sequence has to turn back into the picture. That is the
-**image tokenizer**, the first piece (G0) of the picture line planned in `PLAN.md`:
+**image tokenizer**, the first piece (G0) of the picture line planned in `PLAN.md`. The
+second (G1, [below](#from-a-sentence-to-a-picture-g1)) is a transformer that reads "two red
+circles" and writes those integers:
 
 ```mermaid
 flowchart LR
@@ -115,6 +117,26 @@ entries of 512), and the reader said:
 Colour and count were already there; **shape was not**. The gallery showed why: every
 square came back as a soft round blob. 26 dB of PSNR says "close"; the reader says "a
 quarter of these pictures now show the wrong shape". Held-out purple triangles: 0%.
+
+### The full run, 20,000 steps on the card (2026-11-22)
+
+Both grids trained to the end in about a quarter of an hour each (`imgtok-shapes` 4.55M
+parameters, 16 min; `imgtok-shapes16` 1.28M, 14 min). 400 val pictures and the 64 held-out
+purple triangles, reports from the best checkpoints:
+
+| grid | codebooks | numbers / picture | PSNR (val) | all three (val) | PSNR (held out) | all three (held out) |
+|---|---|---|---|---|---|---|
+| 8×8 | 1 | 64 | 56.1 dB | 100% | 41.3 dB | 95.3% |
+| 8×8 | 2 | 128 | 62.1 dB | 100% | 44.3 dB | 100% |
+| 8×8 | 4 | 256 | 63.5 dB | 100% | 46.4 dB | 100% |
+| 16×16 | 1 | 256 | 60.2 dB | 100% | 53.3 dB | 100% |
+| 16×16 | 4 | 1,024 | 66.7 dB | 100% | 55.1 dB | 100% |
+
+Every codebook is in use (495–511 of 512 entries, effective sizes 38–146). Paired picture by
+picture at 4 codebooks the two grids disagree on **nothing** (0 / 0, val and held out), so the
+coarser grid loses nothing the reader can see, and G1 models the 8×8 one. The held-out PSNR
+is ~15 dB lower than val: purple triangles are reconstructed less exactly, but at one
+codebook only three of 64 are misread (their colour), and at two none are.
 
 ## Run it
 
