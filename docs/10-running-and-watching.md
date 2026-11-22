@@ -665,11 +665,17 @@ The panels, in plain terms:
   data for sokoban, keys, or keys with the **blind agent** (whose moves never give away the
   key), and "score on" evaluates a model on either agent's games. See
   [doc 25](25-world-model.md).
+- **Pictures** — the picture tokenizer (G0 of the picture line): each report's table (PSNR
+  and what the rule-based reader sees at 1, 2 and 4 codebooks, with the originals' row first
+  as the reader's control, and the held-out purple triangles), codebook use, a gallery of
+  originals beside their reconstructions, two reports paired picture by picture, and the
+  report and reader-check jobs (a report from the browser always runs on the CPU). See
+  [doc 26](26-pictures.md).
 - **Tools** — the tool-use model: each report by kind with the held-out kinds marked, two
   reports paired per problem, **Ask it** with the full transcript, and jobs to write the
   data or score a model on problem set v1, v2 or `rl` (GRPO's twelve kinds plus v2's four
   held out). See [doc 6](06-posttraining.md) § "Tool use".
-- **Learn** — the repo as a course ([doc 16](16-learning-path.md)). Twenty-eight lessons, each
+- **Learn** — the repo as a course ([doc 16](16-learning-path.md)). Twenty-nine lessons, each
   one *read the doc → open the file → break it → watch a real pytest node go red*. Lessons
   unlock as their prerequisites are finished, a locked one says what is missing, and a lesson
   completes only once its check has been **red and then green** — the check passes on clean
@@ -1310,7 +1316,7 @@ page.
 | 10b | [`aksharallm/portal/queues.py`](../aksharallm/portal/queues.py) | `describe` — a night queue reconstructed from its script, log and `.done` markers, and `_pids_running`, which resolves a relative argv against the process's own cwd (matching the bare path made one live queue "alive" in every checkout) |
 | 11 | [`aksharallm/portal/pipeline.py`](../aksharallm/portal/pipeline.py) | `Pipeline` — the post-training panel. A small parallel reader to `RunStore`, because SFT/DPO/GRPO have no `configs/<run>.yaml` and do have prerequisites |
 | 12 | [`evals.py`](../aksharallm/portal/evals.py) · [`quantize.py`](../aksharallm/portal/quantize.py) · [`finetune.py`](../aksharallm/portal/finetune.py) · [`synth.py`](../aksharallm/portal/synth.py) | one job runner per tab. Read any *one* of them — they are the same shape: start a subprocess of the CLI, stream its output, write a JSON result. [`learn.py`](../aksharallm/portal/learn.py) is the exception, and says why |
-| 12b | [`aksharallm/portal/jobs.py`](../aksharallm/portal/jobs.py) · [`static/js/clijob.js`](../aksharallm/portal/static/js/clijob.js) | `CliJobs`, the one shared runner the newer tabs use (World, Tools, the TTS panel): the job *is* the printed CLI command, success is the exit code (gotcha 20), the identity comes from the argv (gotcha 26). `jobBox` draws it and repolls straight after a start |
+| 12b | [`aksharallm/portal/jobs.py`](../aksharallm/portal/jobs.py) · [`static/js/clijob.js`](../aksharallm/portal/static/js/clijob.js) | `CliJobs`, the one shared runner the newer tabs use (World, Pictures, Tools, the TTS panel): the job *is* the printed CLI command, success is the exit code (gotcha 20), the identity comes from the argv (gotcha 26). `jobBox` draws it and repolls straight after a start |
 | 13 | [`aksharallm/portal/static/js/router.js`](../aksharallm/portal/static/js/router.js) | `registerTab` — the router knows nothing about any tab; each module registers itself with `open` / `leave`. This is why a tab is inert until you open it |
 | 14 | [`aksharallm/portal/static/js/nav.js`](../aksharallm/portal/static/js/nav.js) | `openNav` / `closeNav` — sixty lines, and every one of them is about focus. `BEHIND()` is the list that goes `inert` while the drawer is up |
 | 15 | `static/js/core.js` → `state.js` → `charts.js` → `dashboard.js` → one tab file | the DAG in the diagram above, bottom to top. `main.js` last: it only wires and boots |

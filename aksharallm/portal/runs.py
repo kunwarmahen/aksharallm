@@ -53,6 +53,7 @@ TRAINERS: tuple[str, ...] = (
     "aksharallm.audio.train_speaker",
     "aksharallm.vision.train",
     "aksharallm.asr.train",
+    "aksharallm.pictures.train",
 )
 
 #: Every shell script that pre-flights a run and publishes `launch.pid` / `launch.meta`.
@@ -85,6 +86,8 @@ LAUNCHERS: dict[str, dict] = {
     "small-student-muon": {"script": "scripts/experiment.sh", "args": ["small-student-muon"]},
     "small-student-long-muon": {"script": "scripts/experiment.sh", "args": ["small-student-long-muon"]},
     "tiny-hybrid": {"script": "scripts/experiment.sh", "args": ["tiny-hybrid"]},
+    # The hybrid at ~101M against small-student-muon (docs/19 § Recall at a real size).
+    "small-student-hybrid": {"script": "scripts/experiment.sh", "args": ["small-student-hybrid"]},
     "world-sokoban": {"script": "scripts/experiment.sh", "args": ["world-sokoban"]},
     "world-keys": {"script": "scripts/experiment.sh", "args": ["world-keys"]},
     "world-keys-blind": {"script": "scripts/experiment.sh", "args": ["world-keys-blind"]},
@@ -94,6 +97,11 @@ LAUNCHERS: dict[str, dict] = {
     "recall-hybrid": {"script": "scripts/experiment.sh", "args": ["recall-hybrid"]},
     "recall-deltanet-easy": {"script": "scripts/experiment.sh", "args": ["recall-deltanet-easy"]},
     "recall-deltanet": {"script": "scripts/experiment.sh", "args": ["recall-deltanet"]},
+    # The capacity arms (docs/19 § How much can it hold?): head_dim 16 instead of 64.
+    "recall-hybrid-narrow-easy": {"script": "scripts/experiment.sh", "args": ["recall-hybrid-narrow-easy"]},
+    "recall-hybrid-narrow": {"script": "scripts/experiment.sh", "args": ["recall-hybrid-narrow"]},
+    "recall-deltanet-narrow-easy": {"script": "scripts/experiment.sh", "args": ["recall-deltanet-narrow-easy"]},
+    "recall-deltanet-narrow": {"script": "scripts/experiment.sh", "args": ["recall-deltanet-narrow"]},
     "small-distil": {"script": "scripts/experiment.sh", "args": ["small-distil"]},
     "small-student-long": {"script": "scripts/experiment.sh", "args": ["small-student-long"]},
     # Audio and vision: a different launcher, the same pid/meta/log contract. docs/21, 22.
@@ -107,6 +115,9 @@ LAUNCHERS: dict[str, dict] = {
     "audiolm-lj-stop": {"script": "scripts/audio.sh", "args": ["audiolm-lj-stop"]},
     "audiolm-many": {"script": "scripts/audio.sh", "args": ["audiolm-many"]},
     "audiolm-many-long": {"script": "scripts/audio.sh", "args": ["audiolm-many-long"]},
+    # The picture tokenizer (G0, docs/26): a `picture:` config, the same non-text launcher.
+    "imgtok-shapes": {"script": "scripts/audio.sh", "args": ["imgtok-shapes"]},
+    "imgtok-shapes16": {"script": "scripts/audio.sh", "args": ["imgtok-shapes16"]},
     # The speech recogniser (Phase 7, docs/23): same launcher, an `asr:` config.
     "asr-synth": {"script": "scripts/audio.sh", "args": ["asr-synth"]},
     "asr-libri100": {"script": "scripts/audio.sh", "args": ["asr-libri100"]},
@@ -199,7 +210,7 @@ def exec_cmdline(argv: list[str]) -> str:
 #: test for "this is a run and not a settings file". `model:` is a language model, `codec:`
 #: and `audiolm:` are docs/21, `vision:` is docs/22, `asr:` is docs/23. Deliberately not a
 #: YAML parse: `runs()` is called on every poll of every open page.
-_RUN_CONFIG_RE = re.compile(r"^(model|codec|audiolm|vision|asr|speaker):", re.MULTILINE)
+_RUN_CONFIG_RE = re.compile(r"^(model|codec|audiolm|vision|asr|speaker|picture):", re.MULTILINE)
 
 
 def _is_run_config(path: Path) -> bool:
@@ -956,7 +967,7 @@ class RunStore:
         if not path.exists():
             return {}
         text = self._text(path, limit=1_000_000) or ""
-        kind = next((k for k in ("asr", "codec", "audiolm", "vision", "speaker")
+        kind = next((k for k in ("asr", "codec", "audiolm", "vision", "speaker", "picture")
                      if re.search(rf"^{k}:", text, re.MULTILINE)), "model")
         try:
             if kind != "model":
@@ -1031,6 +1042,14 @@ class RunStore:
             arch = f"{a.n_codebooks} codebooks x {a.codebook_size}, {a.max_frames} frames"
             batch = f"{cfg.train.batch_size} x {cfg.data.window_frames} frames"
             sources = [cfg.data.codes]
+        elif kind == "picture":
+            from ..pictures.train import load_picture_config
+            cfg = load_picture_config(str(path))
+            pc = cfg.picture
+            arch = (f"picture tokenizer: {pc.image_size}px -> {pc.grid}x{pc.grid} grid x "
+                    f"{pc.n_codebooks} codebooks of {pc.codebook_size} ({pc.tokens} integers)")
+            batch = f"{cfg.train.batch_size} pictures"
+            sources = [cfg.data.corpus, f"held out: {cfg.data.holdout}"]
         else:
             from ..vision.train import load_vision_config
             cfg = load_vision_config(str(path))

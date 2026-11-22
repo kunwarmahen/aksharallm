@@ -1,0 +1,49 @@
+# The picture tokenizer, G0 of the picture line (docs/26): a 64x64 shapes picture -> an 8x8
+# grid x 4 codebooks of 512 = 256 integers, and back. The audio codec's recipe in 2-D, with
+# audio/vq.py's ResidualVQ imported unchanged. Scored by reading each reconstruction back
+# with pictures/reader.py (count, colour, shape), exact on the originals.
+#
+#   python -m aksharallm.vision corpus                   # data/vision/shapes, if missing
+#   scripts/audio.sh imgtok-shapes                       # the non-text launcher
+#   python -m aksharallm.pictures report imgtok-shapes   # ladder + gallery -> logs/pictures/
+#
+# Its pair, configs/imgtok-shapes16.yaml, is one key apart (two halvings: a 16x16 grid).
+
+name: imgtok-shapes
+
+picture:
+  image_size: 64
+  channels: [64, 128, 256]   # three halvings: 64 -> 8
+  latent_dim: 64
+  n_codebooks: 4
+  codebook_size: 512
+  quantizer_dropout: true
+  commit: 0.25
+  restart_after: 200
+
+data:
+  corpus: data/vision/shapes
+  holdout: data/vision/shapes-holdout     # purple triangles: never drawn in training
+
+optim:
+  lr: 3.0e-4                # convolutions + an EMA codebook: the codec's rate, not a transformer's
+  min_lr_ratio: 0.1
+  warmup_steps: 300
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.99
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/imgtok-shapes
+  batch_size: 64
+  max_steps: 20000
+  eval_every: 1000
+  eval_batches: 8
+  sample_every: 2000
+  sample_images: 128
+  ckpt_every: 2000
+  log_every: 50
+  seed: 1337
+  resume: auto

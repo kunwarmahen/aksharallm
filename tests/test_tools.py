@@ -106,3 +106,19 @@ def test_v1_reports_still_mean_what_they_meant():
     a = [p.question for p in problems(14, 99, KINDS)]
     b = [p.question for p in problems(14, 99, eval_kinds("v1"))]
     assert a == b
+
+
+@needs_sandbox
+def test_every_v3_reference_call_prints_its_answer():
+    """v3 trains on rl's twelve kinds too, so every one of its reference calls becomes SFT
+    data: each must print the answer the conversation claims."""
+    kinds = eval_kinds("v3")
+    for p in problems(2 * len(kinds), seed=12, kinds=kinds):
+        r = sandbox.run_program(p.code, timeout_s=5.0)
+        assert agent.same_number(agent.final_number(r.stdout), p.answer), (p.kind, p.code, r)
+
+
+def test_v3_is_v2_plus_rl_with_the_same_four_held_out():
+    assert SETS["v3"]["train"] == SETS["v2"]["train"] + SETS["rl"]["train"]
+    assert len(SETS["v3"]["train"]) == 32
+    assert SETS["v3"]["held_out"] == SETS["v2"]["held_out"] == SETS["rl"]["held_out"]

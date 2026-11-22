@@ -1,0 +1,22 @@
+/* The Pictures tab. The gallery is a column of PNG rows (original, then each codebook
+ * count), each scaled to the column's width so a phone shows the whole row rather than
+ * widening the page (gotcha #8): `max-width: 100%` on the image and `min-width: 0` on the
+ * grid's items. Pixels stay square and sharp: these are 64-pixel pictures scaled up. */
+
+.pc-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr));
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+.pc-gallery > * { min-width: 0; }
+.pc-gallery img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  image-rendering: pixelated;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #121212;
+}

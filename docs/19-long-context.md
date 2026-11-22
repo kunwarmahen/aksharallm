@@ -422,7 +422,8 @@ What it says:
   past 512 does not break it.
 - **The capacity limit I expected did not appear.** 48 pairs is 100% for every arm after
   stage 2. Six layers × six heads of 64 × 64 memory is more room than 48 pairs need. Finding
-  the limit needs more pairs or a smaller head; the sweep stops at 48.
+  the limit needs more pairs or a smaller head; the sweep stops at 48. (Followed up below, §
+  How much can it hold?)
 - **Stage 1 is where the arms differ, and it is the most interesting row.** On easy documents
   (no filler, ever), the all-DeltaNet model learned a rule that works at *any* gap: 98.6% at
   1,536 tokens of filler it never saw. Dense attention learned one that works only with no
@@ -444,6 +445,56 @@ A trap paid for while measuring: the easy stage's `ckpt_best.pt` is chosen on th
 The queue scored those `ckpt_best` files (steps 500 and 1,000), which caught DeltaNet
 *before* its lookup formed (19.7% at 8 pairs, against 99.7% at step 1,999). The table uses
 `ckpt_last`, the weights stage 2 starts from.
+
+#### How much can it hold? (built 2026-11-22)
+
+`longctx recall --pairs 32,48,56,64 --gaps 0` is the capacity sweep (`recall.CAPACITY`).
+64 is the ceiling: keys are distinct within a document and the vocabulary has 64, so more
+pairs need a bigger vocabulary and a new model. 56 and 64 are also past the 48 pairs any
+training document holds. A non-default sweep writes its own file
+(`recall-<run>-step<N>-p32_48_56_64-g0.json`), so it never overwrites the standard result.
+
+**Measured on the CPU, the stage-2 models, 1,024 queries per cell:**
+
+| pairs (gap 32) | 32 | 48 | 56 | 64 (every key) |
+|---|---|---|---|---|
+| dense | 100 | 100 | 100 | 100 |
+| hybrid | 100 | 100 | 100 | 99.9 |
+| all DeltaNet | 100 | 100 | 100 | 100 |
+
+Every arm holds every key there is, and past the trained count. For the DeltaNet arms this
+is what the arithmetic says: a delta-rule memory `S` of 64 × 64 per head can hold up to 64
+keys in orthogonal directions, and this vocabulary has exactly 64. So the question has to be
+asked of a smaller memory. `configs/recall-{hybrid,deltanet}-narrow{-easy,}.yaml` are the wide
+arms with **one key changed**, `n_heads: 24` instead of 6, so each head is 16 wide and its
+memory 16 × 16 (a quarter of the state per layer, the same parameters; a test pins that
+nothing else differs). With more keys than dimensions, keys must overlap in each head, and
+recall should fall as the pairs grow. Queued for the 2026-11-23 night
+(`logs/queue/night-1123.sh`), each scored by both sweeps and paired with its wide arm.
+
+#### Recall at a real size (built 2026-11-22)
+
+The recall arms are 13.8M models on synthetic documents. `configs/small-student-hybrid.yaml`
+asks the question on real text: it is `small-student-muon` (~101M, val 3.2673 at 2,000 steps)
+plus `full_attn_every: 3`, so 8 of 12 blocks are Gated DeltaNet. Same data, steps, seed and
+optimizer (a test pins the one-key difference). Muon now leaves a DeltaNet block's `a_proj` /
+`b_proj` to AdamW: each row is one head's decay or write gate, a scalar per head like the MoE
+router, not a linear map.
+
+It is scored with the needle (§ above) on both models, with no scaling and with YaRN ×4, at
+512 / 1,024 / 2,048 / 4,096 tokens, then **paired trial for trial**:
+
+```bash
+python -m aksharallm.longctx needle small-student-hybrid --lengths 512 1024 2048 4096 --trials 6
+python -m aksharallm.longctx needle-compare logs/longctx/small-student-muon-needle-*.json \
+    logs/longctx/small-student-hybrid-needle-*.json
+```
+
+The trials come from a seeded generator, so two models on the same tokenizer and lengths see
+the same haystacks, needles and candidates. `needle-compare` checks that rather than assuming
+it (every trial's length, depth, city and code must match) and prints b-only / a-only with a
+sign test per length. Plus `eval domains` and `--suite fast` for what the hybrid costs on
+ordinary text. Queued for the same nights, last, because it resumes.
 
 ---
 
@@ -525,8 +576,8 @@ real thing; extending it to a window is bounded work and is the obvious next opt
 | 5 | `Transformer._rope` · `pin_rope` | the only stateful thing in the model, and the two traps that come with it |
 | 6 | [`longctx/extend.py`](../aksharallm/longctx/extend.py) | `plan_extension` — a pure function, so the portal can show what *would* change without writing 1.2 GB to find out |
 | 7 | [`longctx/curve.py`](../aksharallm/longctx/curve.py) | `reduction="none"` is the point of the file; then `cliff()`, and why it anchors to the in-window mean rather than position 0 |
-| 8 | [`longctx/haystack.py`](../aksharallm/longctx/haystack.py) | `build_context` (the needle goes in at a *token* boundary) and `_score_candidates` (the off-by-one that would score every candidate on the wrong tokens) |
-| 8b | [`longctx/recall.py`](../aksharallm/longctx/recall.py) | `document` (an answer is hidden behind its key), `accuracy` (the value at `p` is read from the logits at `p − 1`), and `load_for_recall`, which sizes the RoPE table for the longest document without touching a weight. Read from the wrong position in [lesson 28](lessons/28-recall.md) |
+| 8 | [`longctx/haystack.py`](../aksharallm/longctx/haystack.py) | `build_context` (the needle goes in at a *token* boundary) and `_score_candidates` (the off-by-one that would score every candidate on the wrong tokens); `compare`, two results paired trial for trial, refusing trials that do not match |
+| 8b | [`longctx/recall.py`](../aksharallm/longctx/recall.py) | `document` (an answer is hidden behind its key), `accuracy` (the value at `p` is read from the logits at `p − 1`), `load_for_recall`, which sizes the RoPE table for the longest document without touching a weight, and `CAPACITY`, the sweep to every key in the vocabulary. Read from the wrong position in [lesson 28](lessons/28-recall.md) |
 | 9 | [`longctx/__main__.py`](../aksharallm/longctx/__main__.py) | `sweep` is the command the chapter exists for; `_check_device` is the courtesy that stops a measurement killing a run |
 | 10 | [`aksharallm/portal/longctx.py`](../aksharallm/portal/longctx.py) | the Context tab's server side. `plan` is free (metadata only, no weights) and `start` is a detached job, one at a time; note that no path ever arrives from the browser — `default_out_name` decides where an extension lands |
 

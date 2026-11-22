@@ -1,0 +1,88 @@
+<!-- The Pictures tab: the picture line (docs/26). G0, the image tokenizer: pictures to a grid
+     of integers and back, judged by reading each reconstruction back with a rule-based
+     reader that is exact on the originals. -->
+<section class="view" id="view-pictures" hidden>
+  <div class="page">
+
+    <div class="panel">
+      <h2>Pictures — turning a picture into integers, and back</h2>
+      <p class="panel-note">
+        A language model only ever sees integers. To make it draw, a picture first has to
+        become a short list of integers that can be turned back into the picture. That is the
+        <strong>image tokenizer</strong>: an encoder shrinks a 64×64 picture to a small grid,
+        each cell is replaced by the number of its nearest entry in a learned
+        <strong>codebook</strong>, and a decoder paints the picture again from those numbers.
+        It is the audio codec of chapter 21 in two dimensions, with the same quantizer.
+        <a href="#docs?doc=26-pictures.md">Read chapter 26</a>.
+      </p>
+      <div class="au-flow" aria-hidden="true">
+        <span class="au-step">picture<small>64×64×3</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">encoder<small>3 halvings</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step au-step-key">codebooks<small>8×8 grid × 4 numbers</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">decoder<small>3 doublings</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">picture again</span>
+      </div>
+      <p id="pc-corpus" class="panel-note dim"></p>
+    </div>
+
+    <div class="panel">
+      <h3>Does the picture still say the same thing?</h3>
+      <p class="panel-note">
+        Pixel error (<strong>PSNR</strong>, higher is better) is the usual number and a weak
+        one: most of a shapes picture is background, so a picture can lose a whole shape and
+        keep a good PSNR. So every reconstruction is also <strong>read back</strong> by a
+        program that counts the blobs, names their colour and tells a square from a circle
+        from a triangle. It is right on every original (the first row), so whatever it gets
+        wrong is the tokenizer's fault. Each row uses more codebooks: more numbers per
+        picture, a closer copy. The <strong>held-out</strong> pictures are purple triangles,
+        a combination the training pictures never contain.
+      </p>
+      <div class="row">
+        <label class="field">Report <select id="pc-report"></select></label>
+      </div>
+      <div class="scroll-x"><table id="pc-ladder" class="grid"></table></div>
+      <p id="pc-usage" class="panel-note"></p>
+      <h4>The pictures themselves</h4>
+      <p class="panel-note">Each row: the original, then the reconstruction from 1, 2 and 4 codebooks.</p>
+      <div id="pc-gallery" class="pc-gallery"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Two tokenizers, picture by picture</h3>
+      <p class="panel-note">
+        The 8×8 grid spends 256 numbers on a picture; the 16×16 grid spends 1,024. Paired on
+        the same pictures: how many does one read right where the other reads wrong, and is
+        the difference more than chance (<em>p</em>, an exact sign test)?
+      </p>
+      <div class="row">
+        <label class="field">a <select id="pc-a"></select></label>
+        <label class="field">b <select id="pc-b"></select></label>
+        <button id="pc-compare" type="button">Compare</button>
+      </div>
+      <div class="scroll-x"><table id="pc-cmp" class="grid"></table></div>
+      <pre id="pc-cmp-cmd" class="au-cmd" hidden></pre>
+    </div>
+
+    <div class="panel">
+      <h3>Run it from here</h3>
+      <p class="panel-note">
+        Train a tokenizer with the dashboard's <strong>Start</strong> (runs
+        <code>imgtok-shapes</code> and <code>imgtok-shapes16</code>), then make a report here.
+        A report always runs on the CPU from this page, a few seconds at this size. Each job is
+        the CLI command printed under it.
+      </p>
+      <div class="row">
+        <label class="field">Checkpoint <select id="pc-ckpt"></select></label>
+        <label class="field">Pictures <input id="pc-n" type="number" min="16" max="2048" value="256"></label>
+        <button id="pc-run" type="button">Make a report</button>
+        <button id="pc-read" class="ghost" type="button">Check the reader</button>
+      </div>
+      <div id="pc-job"></div>
+    </div>
+
+  </div>
+</section>

@@ -1,0 +1,48 @@
+# The picture tokenizer at a finer grid (docs/26): the pair of configs/imgtok-shapes.yaml, one
+# key apart. Two halvings instead of three, so a 64x64 picture becomes a 16x16 grid x 4
+# codebooks of 512 = 1,024 integers (4x the 8x8 grid's 256). The question the pair asks: how
+# much picture does the coarser grid lose, judged by reading the reconstruction back?
+#
+#   scripts/audio.sh imgtok-shapes16
+#   python -m aksharallm.pictures report imgtok-shapes16
+#   python -m aksharallm.pictures compare logs/pictures/report-imgtok-shapes-*.json \
+#       logs/pictures/report-imgtok-shapes16-*.json
+
+name: imgtok-shapes16
+
+picture:
+  image_size: 64
+  channels: [64, 128]        # two halvings: 64 -> 16, a 16x16 grid (1,024 integers)
+  latent_dim: 64
+  n_codebooks: 4
+  codebook_size: 512
+  quantizer_dropout: true
+  commit: 0.25
+  restart_after: 200
+
+data:
+  corpus: data/vision/shapes
+  holdout: data/vision/shapes-holdout     # purple triangles: never drawn in training
+
+optim:
+  lr: 3.0e-4                # convolutions + an EMA codebook: the codec's rate, not a transformer's
+  min_lr_ratio: 0.1
+  warmup_steps: 300
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.99
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/imgtok-shapes16
+  batch_size: 64
+  max_steps: 20000
+  eval_every: 1000
+  eval_batches: 8
+  sample_every: 2000
+  sample_images: 128
+  ckpt_every: 2000
+  log_every: 50
+  seed: 1337
+  resume: auto

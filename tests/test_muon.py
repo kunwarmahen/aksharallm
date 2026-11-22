@@ -145,3 +145,29 @@ def test_the_100m_muon_arm_is_its_control_plus_one_key(control):
     assert b["train"].pop("out_dir") == f"checkpoints/{arm}"
     a["train"].pop("out_dir")
     assert a == b
+
+
+def test_a_deltanet_blocks_gates_go_to_adamw():
+    """`a_proj` / `b_proj` are a scalar gate per head (like the MoE router), not a linear
+    map; everything else in a DeltaNet block is a matrix and goes to Muon."""
+    m = Transformer(ModelConfig(vocab_size=64, d_model=32, n_layers=3, n_heads=4, n_kv_heads=4,
+                                max_seq_len=16, full_attn_every=3))
+    muon, decay, plain = split_for_muon(m.named_parameters())
+    names = {id(p): n for n, p in m.named_parameters()}
+    gates = {n for n, _ in m.named_parameters() if n.endswith(("a_proj.weight", "b_proj.weight"))}
+    assert len(gates) == 4                                       # two DeltaNet blocks x two
+    assert gates <= {names[id(p)] for p in decay}
+    assert not gates & {names[id(p)] for p in muon}
+    assert any(names[id(p)].endswith("qkv.weight") for p in muon)
+
+
+def test_the_100m_hybrid_is_its_muon_control_plus_one_key():
+    import yaml
+
+    a = yaml.safe_load(open("configs/small-student-muon.yaml"))
+    b = yaml.safe_load(open("configs/small-student-hybrid.yaml"))
+    assert b["model"].pop("full_attn_every") == 3 and "full_attn_every" not in a["model"]
+    assert b.pop("name") == "small-student-hybrid" and a.pop("name") == "small-student-muon"
+    assert b["train"].pop("out_dir") == "checkpoints/small-student-hybrid"
+    a["train"].pop("out_dir")
+    assert a == b

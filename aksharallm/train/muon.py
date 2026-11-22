@@ -157,9 +157,13 @@ def split_for_muon(named_params) -> tuple[list, list, list]:
         if not p.requires_grad:
             continue
         # The MoE router is excluded too: its rows score experts against each other, and an
-        # update that moves every row equally is not what a ranking wants.
+        # update that moves every row equally is not what a ranking wants. A Gated DeltaNet
+        # block's `a_proj` / `b_proj` (d_model -> n_heads) are the same kind of thing: each row
+        # is one head's decay or write gate, a scalar per head rather than a linear map, so
+        # they stay with AdamW (added for the first hybrid trained with Muon, small-student-
+        # hybrid; no earlier run had both).
         if (p.dim() == 2 and "emb" not in name and not name.startswith("lm_head")
-                and "router" not in name):
+                and "router" not in name and not name.endswith(("a_proj.weight", "b_proj.weight"))):
             muon.append(p)
         elif p.dim() >= 2:
             decay.append(p)

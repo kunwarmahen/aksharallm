@@ -216,3 +216,36 @@ def _stderr(hits: list[bool]) -> float | None:
         return None
     p = sum(hits) / n
     return math.sqrt(max(p * (1 - p), 1e-12) / n)
+
+
+def compare(a: dict, b: dict) -> list[dict]:
+    """Two `run` results, paired trial for trial, per length and overall.
+
+    The trials are drawn from a seeded generator, so two models scored with the same
+    tokenizer, filler file, lengths, depths, trials and candidates see the same haystacks,
+    needles and candidates in the same order. That is checked rather than assumed: every
+    trial's (length, depth, city, code) must match, or this refuses. `b_only` = b right where
+    a was wrong; `p` = exact sign test.
+    """
+    from ..eval.versus import sign_test
+    ta, tb = a.get("trials") or [], b.get("trials") or []
+    if len(ta) != len(tb):
+        raise ValueError(f"different trial counts: {len(ta)} vs {len(tb)}")
+    key = ("length", "depth", "city", "true")
+    for x, y in zip(ta, tb):
+        if tuple(x[k] for k in key) != tuple(y[k] for k in key):
+            raise ValueError("the two results were not scored on the same trials (different "
+                             "tokenizer, filler, lengths or seed?)")
+    rows = []
+    for length in [*a["lengths"], None]:
+        pairs = [(x["correct"], y["correct"]) for x, y in zip(ta, tb)
+                 if length is None or x["length"] == length]
+        if not pairs:
+            continue
+        b_only = sum((not u) and v for u, v in pairs)
+        a_only = sum(u and not v for u, v in pairs)
+        rows.append({"length": length, "n": len(pairs),
+                     "a": sum(u for u, _ in pairs) / len(pairs),
+                     "b": sum(v for _, v in pairs) / len(pairs),
+                     "b_only": b_only, "a_only": a_only, "p": sign_test(b_only, a_only)})
+    return rows

@@ -501,6 +501,18 @@ gap sweep shows which ones still find the pair once it is past position 512
 three 100% inside; at 1,586 tokens dense 7%, hybrid and all-DeltaNet 100%. Compare arms
 with `longctx recall-compare a.json b.json`, which pairs them query by query.
 
+Two follow-ups (built 2026-11-22, queued for the 11-23 night). **How much can it hold?** All
+three hold every one of the vocabulary's 64 keys, so the narrow arms (16-wide heads instead of
+64) ask where a DeltaNet memory runs out. **Does it hold at a real size?** The same hybrid at
+~101M on real text, with the needle on it and its control, paired trial for trial:
+
+```bash
+python -m aksharallm.longctx recall recall-deltanet-narrow --pairs 32,48,56,64 --gaps 0
+scripts/experiment.sh small-student-hybrid         # small-student-muon + full_attn_every: 3
+python -m aksharallm.longctx needle small-student-hybrid --lengths 512 1024 2048 4096 --trials 6
+python -m aksharallm.longctx needle-compare A-needle.json B-needle.json
+```
+
 📖 [chapter 19 — long context](19-long-context.md)
 
 ---
@@ -543,6 +555,15 @@ The expensive routes. Each one is a real research direction rather than a switch
   loop"). Measured 2026-11-21: read the probe first. It kept 27 of 480 problems, every one an
   absolute difference, so that kind went 5 → 14 of 20 and nothing else moved (held-out 0 →
   1/80). If the probe keeps one kind, the run can only teach one kind.
+
+  The other eleven kinds were 0 of 320 completions each, so a bigger probe would find nothing.
+  Set v3 shows them by imitation instead: SFT on all 32 kinds (v2's + rl's), the same four
+  held out ([doc 6](06-posttraining.md) § "Set v3"; data built, queued for 2026-11-23):
+
+  ```bash
+  python -m aksharallm.tools data --set v3
+  python -m aksharallm.tools eval checkpoints/small-code-py-tools-v3/sft_best.pt --set v3 --label setv3
+  ```
 
 - **Distillation** — train a small model to copy a big one's *probabilities*, not just its
   answers. Both models must share a tokenizer, so here it is between our own models. Start
@@ -643,6 +664,7 @@ flowchart TD
     A --> R["🎙️ dictation<br/>speech in, text out<br/>(its own encoder, CTC)"]
     T --> D["🎲 diffusion<br/>fill in blanks instead of<br/>predicting the next token"]
     T --> W["🎮 world model<br/>the next frame of a game<br/>we wrote"]
+    T --> P["🎨 pictures<br/>an image tokenizer, then<br/>a transformer that draws"]
     classDef s fill:#2d6cdf,stroke:#1a4a9e,color:#fff
     class T s
 ```
@@ -689,6 +711,24 @@ an impossible frame. For `keys`: KL from the true next-frame distribution near 0
 door a belief near 1 when the pickup is in view and near 0 when nothing is held, and a mean
 belief over doors with no pickup in view that matches the share really held (calibrated).
 📖 [chapter 25 — world model](25-world-model.md)
+
+**Making pictures** is the other direction from vision: generate them, not read them. The
+first piece is an **image tokenizer** (G0): the audio codec in two dimensions, turning a
+64×64 shapes picture into an 8×8 grid of codes and back, judged by a program that reads each
+reconstruction back (count, colour, shape) and is exact on every original:
+
+```bash
+python -m aksharallm.pictures read                 # the judge on the corpus: must be 100%
+scripts/audio.sh imgtok-shapes                     # train (and imgtok-shapes16, the 16x16 grid)
+python -m aksharallm.pictures report imgtok-shapes # PSNR + what the judge reads, 1-4 codebooks
+python -m aksharallm.pictures reports
+```
+
+In the portal: **☰ Menu → Pictures** (the table, the gallery, two reports paired).
+
+**How you know it worked:** the originals' row at 100% (the judge's control), "all three"
+near it at four codebooks, the held-out purple triangles as good as the rest, and every
+codebook with hundreds of entries in use. 📖 [chapter 26 — pictures](26-pictures.md)
 
 The point of every one is how little had to change. Audio needed a codec and got TTS and ASR
 as *one model in two orders*. Vision needed no codec at all — patches replace one — and

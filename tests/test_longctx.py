@@ -560,3 +560,19 @@ def test_the_tab_lists_a_recall_result_and_starts_the_recall_command(tmp_path, m
     monkeypatch.setattr(lc, "_spawn", lambda cmd, kind, device, why: spawned.append(cmd) or {})
     lc.start("recall", "toy/ckpt_best.pt")
     assert spawned[0][2:5] == ["aksharallm.longctx", "recall", "toy/ckpt_best.pt"]
+
+
+def test_two_needle_results_pair_trial_for_trial_and_refuse_different_trials():
+    from aksharallm.longctx.haystack import compare
+
+    def res(hits, city="Lima"):
+        return {"lengths": [512, 1024], "chance": 0.25,
+                "trials": [{"length": 512 if i < 2 else 1024, "depth": 0.5, "city": city,
+                            "true": f"c{i}", "correct": h, "margin": 0.0}
+                           for i, h in enumerate(hits)]}
+    rows = compare(res([0, 1, 0, 1]), res([1, 1, 1, 0]))
+    allrow = rows[-1]
+    assert allrow["length"] is None and (allrow["b_only"], allrow["a_only"]) == (2, 1)
+    assert [r["length"] for r in rows[:2]] == [512, 1024] and rows[0]["b_only"] == 1
+    with pytest.raises(ValueError):
+        compare(res([0, 1, 0, 1]), res([0, 1, 0, 1], city="Oslo"))

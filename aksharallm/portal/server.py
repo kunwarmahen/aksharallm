@@ -62,6 +62,7 @@ from .jobs import JobError
 from .tooluse import ToolUse, ToolsError
 from .tts import Tts, TtsError
 from .world import World, WorldError
+from .pictures import Pictures, PicturesError
 from .diffusion import Diffusion
 from .interp import Interp
 from .longctx import LongContext
@@ -101,7 +102,7 @@ class Handler(BaseHTTPRequestHandler):
                  evals: EvalJobs, synth: SynthJobs, learn: Learn, interp: Interp,
                  longctx: LongContext, diffusion: Diffusion, serving: ServeJobs,
                  audio: Audio, vision: Vision, dictation: Dictation,
-                 world: World, tooluse: ToolUse, tts: Tts,
+                 world: World, tooluse: ToolUse, tts: Tts, pictures: Pictures | None = None,
                  cost: CostConfig, quiet: bool = True, **kw):
         self.store = store
         self.scheduler = scheduler
@@ -123,6 +124,7 @@ class Handler(BaseHTTPRequestHandler):
         self.vision = vision
         self.dictation = dictation
         self.world = world
+        self.pictures = pictures
         self.tooluse = tooluse
         self.tts = tts
         self.cost = cost
@@ -417,10 +419,10 @@ class Handler(BaseHTTPRequestHandler):
             # world / tooluse / tts: the 2026-11-20 builds. Inline reads and short model calls,
             # plus one detached CLI job per tab (portal/jobs.py) whose command is printed.
             if len(parts) == 3 and parts[:2] in (["api", "world"], ["api", "tooluse"],
-                                                 ["api", "tts"]):
+                                                 ["api", "tts"], ["api", "pictures"]):
                 try:
                     return self._json(self._new_post(parts[1], parts[2], data))
-                except (WorldError, ToolsError, TtsError, JobError, ValueError) as e:
+                except (WorldError, ToolsError, TtsError, PicturesError, JobError, ValueError) as e:
                     return self._json({"error": str(e)}, code=400)
             # vision: /api/vision/<caption|samples>. Inline like audio and interp — a
             # caption is a handful of forward passes over a 14M model.
@@ -517,7 +519,7 @@ class Handler(BaseHTTPRequestHandler):
         self._error(404, f"no such path: {url.path}")
 
     def _new_post(self, tab: str, action: str, data: dict) -> dict:
-        """POST /api/<world|tooluse|tts>/<action>. One table, so each tab's verbs are legible."""
+        """POST /api/<world|tooluse|tts|pictures>/<action>. One table, so each tab's verbs are legible."""
         if action == "job":
             return getattr(self, tab).start(data)
         if action == "stop":
@@ -529,7 +531,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.tooluse.ask(str(data.get("checkpoint") or ""),
                                     str(data.get("question") or ""),
                                     bool(data.get("use_tool", True)))
-        if tab in ("tooluse", "tts") and action == "compare":
+        if tab in ("tooluse", "tts", "pictures") and action == "compare":
             return getattr(self, tab).compare(str(data.get("a") or ""), str(data.get("b") or ""))
         if tab == "tts" and action == "clip":
             return self.tts.clip(str(data.get("name") or ""), int(data.get("index") or 0))
@@ -652,6 +654,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(self.tooluse.overview())
         if parts == ["tts"]:
             return self._json(self.tts.overview())
+        if parts == ["pictures"]:
+            return self._json(self.pictures.overview())
+        if parts == ["pictures", "report"]:
+            try:
+                return self._json(self.pictures.report(str((query.get("name") or [""])[0])))
+            except PicturesError as e:
+                return self._json({"error": str(e)}, code=400)
         if parts in (["tooluse", "report"], ["tts", "report"]):
             name = str((query.get("name") or [""])[0])
             try:
@@ -1106,6 +1115,7 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
     world = World(store.root, device_for=plan)
     tooluse = ToolUse(store.root, device_for=plan)
     tts = Tts(store.root)
+    pictures = Pictures(store.root)
     serving = ServeJobs(store.root)
     handler = partial(Handler, store=store, scheduler=scheduler, sampler=sampler,
                       source=source, explain=explain, playground=playground,
@@ -1113,7 +1123,7 @@ def serve(root: Path | None = None, host: str = "127.0.0.1", port: int = 8765,
                       synth=synth, learn=learn, interp=interp, longctx=longctx,
                       diffusion=diffusion, serving=serving, audio=audio,
                       vision=vision, dictation=dictation,
-                      world=world, tooluse=tooluse, tts=tts,
+                      world=world, tooluse=tooluse, tts=tts, pictures=pictures,
                       cost=cost,
                       quiet=quiet)
     ThreadingHTTPServer.allow_reuse_address = True

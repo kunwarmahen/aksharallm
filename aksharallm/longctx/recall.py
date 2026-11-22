@@ -68,6 +68,10 @@ TRAIN = {"pairs": (4, 48), "gap": (0, 200), "short_gap": 32, "p_long_gap": 0.3, 
 #: What the scorer sweeps. Gaps past ~460 put the pairs beyond the trained window.
 BY_PAIRS = (8, 16, 32, 48)
 BY_GAP = (0, 128, 384, 768, 1536)
+#: The capacity sweep (`longctx recall --pairs 32,48,56,64`): every key in the vocabulary at
+#: the top, so nothing past 64 can be asked without a bigger vocabulary (and a new model).
+#: Training stops at 48 pairs, so 56 and 64 are also a step past the trained range.
+CAPACITY = (32, 48, 56, 64)
 EVAL_SEED = 40_000
 
 
@@ -212,7 +216,7 @@ def max_len(by_pairs=BY_PAIRS, by_gap=BY_GAP, gap_pairs: int = 16, pairs_gap: in
     return int(longest)
 
 
-def load_for_recall(path: str | Path, device: str):
+def load_for_recall(path: str | Path, device: str, by_pairs=BY_PAIRS, by_gap=BY_GAP):
     """A checkpoint with its position table sized for the longest scored document. The RoPE
     cache is derived from the config and never saved, so this changes no weight: positions
     past the trained window are simply asked for, with no scaling (that is the test)."""
@@ -221,7 +225,7 @@ def load_for_recall(path: str | Path, device: str):
     ck = torch.load(path, map_location="cpu", weights_only=False)
     mcfg = dict(ck["model_config"])
     trained = int(mcfg["max_seq_len"])
-    mcfg["max_seq_len"] = max(trained, max_len())
+    mcfg["max_seq_len"] = max(trained, max_len(by_pairs, by_gap))
     model = Transformer(ModelConfig(**mcfg))
     model.load_state_dict(ck["model"])
     return model.to(device).eval(), ck, trained

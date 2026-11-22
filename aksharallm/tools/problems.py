@@ -31,7 +31,9 @@ learned the idea has something to stand on, and one that learned templates does 
 not: v2 went 0/80 on the held-out kinds, each answered with a neighbouring kind's code.
 `rl` is twelve more kinds for GRPO with the tool in the loop (train/grpo.py --reward tools),
 which rewards the answer the tool's output leads to rather than imitation of a call, and
-keeps v2's four held out.
+keeps v2's four held out. GRPO could only sharpen what the model already sometimes solved,
+which on rl was one kind (absolute difference); `v3` is the other lever, SFT on all thirty-two
+kinds (v2's twenty + rl's twelve), the same four held out.
 
 Read with: docs/06-posttraining.md -- the chapter this implements; it ends with the order to
 read these files in.
@@ -303,6 +305,12 @@ SETS = {
     # v2's, so the one question that matters is asked of the same four kinds: does rewarding
     # the RESULT on twelve new kinds teach writing new code, where imitating twenty did not?
     "rl": {"train": RL_KINDS, "held_out": V2_HELD_OUT},
+    # SFT on v2's twenty AND rl's twelve: thirty-two kinds, the same four held out. GRPO on rl
+    # left eleven of its kinds at 0/320 in the probe (the v2 model wrote a neighbour's code for
+    # each), so the reward had nothing to sharpen; v3 shows them to the model by imitation.
+    # Many rl kinds sit beside a v2 kind with different code (product vs multiply, cube vs
+    # power, range vs maximum, sumsquares vs sum), so the operation word decides the code.
+    "v3": {"train": TRAIN_KINDS + MORE_KINDS + RL_KINDS, "held_out": V2_HELD_OUT},
 }
 
 

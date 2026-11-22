@@ -1,0 +1,171 @@
+# 26. Making pictures: turning a picture into integers, and back
+
+Everything this repo has generated so far is a sequence of integers: text tokens, codec
+codes for speech, the 65 tokens of a game frame. To make it *draw*, a picture first has to
+become such a sequence, and that sequence has to turn back into the picture. That is the
+**image tokenizer**, the first piece (G0) of the picture line planned in `PLAN.md`:
+
+```mermaid
+flowchart LR
+    G0["G0 image tokenizer<br/>(this chapter, built)"] --> G1["G1 a transformer<br/>over the codes"]
+    G0 --> G3["G3 latent diffusion"]
+    G2["G2 diffusion in pixels"] --> G3
+    G1 --> G4["G4 text to image"]
+    G3 --> G4
+    G4 --> G5["G5 short videos<br/>of moving shapes"]
+```
+
+It is the audio codec of [chapter 21](21-audio.md) turned sideways: strided convolutions
+shrink the input, residual vector quantization turns each cell of what is left into a few
+integers, and a mirrored decoder paints the input again. The quantizer
+(`audio/vq.py`'s `ResidualVQ`) is **imported unchanged**. Its EMA codebooks, first-batch
+seeding, dead-code restart and quantizer dropout were written for speech and carry over to
+pictures without an edit.
+
+## The pictures, and why they are drawn rather than downloaded
+
+The corpus is the one the vision chapter ([chapter 22](22-vision.md)) already draws: 64×64
+pictures of one to four shapes (circle, square or triangle) in one of five colours, on a
+near-black background, each made from a description we chose ("three red circles").
+8,000 pictures, 98 MB, rendered in seconds. Purple triangles are never drawn; a separate
+set of 64 of them is the **held-out combination**.
+
+Drawing them ourselves is what makes the tokenizer **measurable** rather than merely
+demonstrable. A reconstruction of a photograph can only be looked at. A reconstruction of
+"three red circles" can be checked: does it still show three, still red, still circles?
+
+## Reading a picture back, with no model
+
+`pictures/reader.py` answers that question by rule:
+
+```mermaid
+flowchart LR
+    I["picture"] --> F["foreground: pixels far<br/>from the background grey"]
+    F --> C["colour: nearest of the<br/>5 palette colours, majority"]
+    F --> L["connected blobs,<br/>20+ pixels each"]
+    L --> N["count"]
+    L --> S["shape = how much of its bounding<br/>box a blob fills: square ~1.0,<br/>circle ~0.79, triangle ~0.5"]
+```
+
+A learned reader (the vision model) could do this too, but it has its own error rate, and a
+tokenizer's mistakes would then be mixed with the reader's. The rule-based reader is
+**exact on every original** (all 8,000 and all 64 held-out pictures; a test checks every
+count × colour × shape on fresh renders), so whatever it gets wrong on a reconstruction is
+the reconstruction's fault. That row, *the originals*, is printed first in every report as
+the positive control.
+
+It is also strict in the useful direction: a light blur (σ = 1 pixel) still reads as a
+square, a heavy one (σ = 3) reads as a circle, which is exactly what an undertrained
+decoder paints (below). A test pins both sides.
+
+## The tokenizer
+
+```mermaid
+flowchart LR
+    X["64x64x3"] --> E["conv, then 3 x<br/>(res block, 4x4 conv stride 2)"]
+    E --> Z["8x8 x 64"]
+    Z --> Q["ResidualVQ: 4 codebooks x 512<br/>(the audio quantizer, unchanged)"]
+    Q --> I["4 x 8 x 8 = 256 integers"]
+    Q --> D["3 x (nearest upsample,<br/>conv, res block)"]
+    D --> Y["64x64x3"]
+```
+
+| choice | why |
+|---|---|
+| 4×4 kernels at stride 2 down | every input pixel is covered exactly twice, so no checkerboard of pixels seen once and twice |
+| nearest upsample + conv up, not a transposed conv | a stride-2 transposed conv overlaps unevenly and paints a faint checkerboard on flat regions, and a shapes picture is almost all flat region |
+| GroupNorm, not BatchNorm | a picture's encoding must not depend on what else is in its training batch (the test checks the encoder in *train* mode, the only mode where BatchNorm would leak) |
+| L1 + L2 pixel loss | L2 alone blurs edges, L1 alone is slow to fix a whole region's colour; no LPIPS or adversarial loss, because both need a network that is not ours |
+| the latent flattened to 64 positions for `ResidualVQ` | raster order, so the quantizer sees `(B, D, T)` exactly as it did for audio |
+| quantizer dropout | each batch uses 1 to 4 codebooks, so every prefix decodes (otherwise "1 codebook" is never trained) |
+
+4.55M parameters. An 8×8 grid of 4 codes from 512 is 256 integers, or 2,304 bits, for a
+picture of 98,304 bits. `configs/imgtok-shapes16.yaml` is the same model with two halvings
+instead of three: a 16×16 grid, 1,024 integers. The pair asks how much the coarser grid
+loses, read back by the reader, before G1 has to model 4× longer sequences.
+
+## What a report says
+
+`python -m aksharallm.pictures report <run>` reconstructs the val pictures at 1, 2 and 4
+codebooks and writes `logs/pictures/report-<run>-step<N>.json` plus a gallery of PNG rows
+(the original, then each codebook count):
+
+| column | meaning |
+|---|---|
+| PSNR | pixel error in dB. The usual number and a weak one: most of a shapes picture is background, so a lost shape costs little PSNR |
+| count / colour / shape / all three | what the reader sees in the reconstruction, against the description it was drawn from |
+| held-out: all three | the same on purple triangles, a combination the tokenizer never saw |
+| codebook use | distinct entries used and the effective size (perplexity) per codebook. A codebook of 512 with an effective size of 20 is a 20-entry codebook, and **the loss curve cannot show that** |
+
+Each row keeps its per-picture verdicts, so two reports pair picture by picture:
+`pictures compare A.json B.json` prints b-only / a-only and an exact sign test, for the val
+pictures and the held-out ones. That is how the 8×8 and 16×16 grids are compared.
+
+### The smoke run, 300 steps on the CPU
+
+Not a result (the real run is 20,000 steps on the card), but it shows what the reader is
+for. At step 299 the loss had fallen from 1.54 to 0.053, every codebook was in use (339–359
+entries of 512), and the reader said:
+
+| codebooks | PSNR | count | colour | shape | all three |
+|---|---|---|---|---|---|
+| 1 | 25.3 dB | 96.9% | 100% | 26.6% | 26.6% |
+| 4 | 26.0 dB | 95.3% | 100% | 26.6% | 26.6% |
+
+Colour and count were already there; **shape was not**. The gallery showed why: every
+square came back as a soft round blob. 26 dB of PSNR says "close"; the reader says "a
+quarter of these pictures now show the wrong shape". Held-out purple triangles: 0%.
+
+## Run it
+
+```bash
+python -m aksharallm.vision corpus                      # data/vision/shapes (seconds), if missing
+python -m aksharallm.pictures read                      # the reader on the corpus: must be 100%
+scripts/audio.sh imgtok-shapes                          # train (the non-text launcher)
+python -m aksharallm.pictures report imgtok-shapes      # ladder + held-out + gallery
+python -m aksharallm.pictures reports                   # every report, one line each
+python -m aksharallm.pictures compare logs/pictures/report-imgtok-shapes-stepN.json \
+    logs/pictures/report-imgtok-shapes16-stepM.json
+```
+
+`scripts/audio.sh` is the launcher for every run whose config is not a text model; it reads
+the `picture:` section, renders the corpus if missing, checks the reader on 500 pictures
+before spending the card, and publishes the same pid/meta/log contract as every launcher, so
+`scripts/stop.sh`, the scheduler and the dashboard's Start drive it unchanged.
+
+In the portal: **Pictures** (under *Reach further*) shows every report with the originals'
+row first, the gallery, a paired comparison of two reports, and the two jobs (a report, on
+the CPU, and the reader check), each with its CLI command printed.
+
+## Traps to keep
+
+1. **A score that borrows a name it does not earn.** There is no FID here: FID needs a
+   pretrained Inception network. When G1+ need a distribution score, it will be a distance
+   in the feature space of *our own* classifier, named as such (gotcha 12).
+2. **Codebook collapse is silent.** Printed every logged step (`used a/b/c/d`) and in every
+   report.
+3. **`ImageCaptions(val_frac=0)` still keeps one picture back** (`max(1, …)`), so the first
+   reader check said "7,999 of 7,999". The reader and the held-out scores read the whole set
+   as one split (`split="val", val_frac=1.0`).
+4. **A report started from the browser runs on the CPU**: a button must never put work on a
+   card someone else is using. The night queue passes `--device cuda` itself.
+
+## The code, in reading order
+
+| # | file | what to look for |
+|---|---|---|
+| 1 | [`pictures/reader.py`](../aksharallm/pictures/reader.py) → `read`, `judge` | foreground by distance from the background, blobs by flood fill, shape by bounding-box fill; why the reader must be exact on the originals |
+| 2 | [`pictures/tokenizer.py`](../aksharallm/pictures/tokenizer.py) → `PictureConfig`, `PictureTokenizer` | the 2-D codec: encoder, `ResidualVQ` on the flattened grid, decoder; `encode`/`decode` and the codebook-prefix dial |
+| 3 | [`audio/vq.py`](../aksharallm/audio/vq.py) → `ResidualVQ` | the quantizer, unchanged from audio: EMA, seeding, restart, dropout |
+| 4 | [`pictures/train.py`](../aksharallm/pictures/train.py) → `main` | the trainer contract (pid, STOP, session records, resume with the data generator's state), codebook use every logged step |
+| 5 | [`pictures/measure.py`](../aksharallm/pictures/measure.py) → `ladder`, `compare`, `gallery` | PSNR, the reader at each codebook count, codebook use, per-picture verdicts paired by a sign test |
+| 6 | [`pictures/__main__.py`](../aksharallm/pictures/__main__.py) | `read`, `report`, `compare`, `reports` |
+| 7 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, two jobs through `portal/jobs.py` |
+
+Tests: `tests/test_pictures.py`. They cover the reader on every count × colour × shape, the
+reader seeing blur and recolouring, the codebook prefix ignoring later codebooks, batch
+independence in train mode, the ladder and the paired compare, the trainer's save and
+resume, and the portal refusing a gallery path outside `logs/pictures/`. Six mutants were
+checked red: loose shape thresholds, swapped compare columns, a missing containment check,
+BatchNorm in place of GroupNorm, a resume restarting at step 0, and a prefix decode reading
+every codebook. [Lesson 29](lessons/29-pictures.md) breaks the reader.

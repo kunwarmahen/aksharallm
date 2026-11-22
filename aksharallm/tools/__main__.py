@@ -131,7 +131,8 @@ def main(argv=None) -> int:
     sub = p.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("data", help="teaching conversations -> JSONL for prepare_sft")
     s.add_argument("--set", choices=tuple(SETS), default="v1",
-                   help="v1: 6 kinds trained, 1 held out; v2: 20 trained, 4 held out")
+                   help="v1: 6 kinds trained, 1 held out; v2: 20 trained, 4 held out; "
+                        "rl: GRPO's 12; v3: 32 trained (v2 + rl), the same 4 held out")
     s.add_argument("--out", default=None, help="default data/tools/sft.jsonl (v1), sft-<set>.jsonl")
     s.add_argument("--n", type=int, default=30_000)
     s.add_argument("--seed", type=int, default=0)

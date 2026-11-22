@@ -10,6 +10,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import torch
 
 from aksharallm.longctx import recall
@@ -119,3 +120,28 @@ def test_the_portal_pairs_two_saved_results_and_refuses_old_ones(tmp_path):
     assert [(r["b_only"], r["a_only"]) for r in rows] == [(16, 0), (16, 0)]
     with pytest.raises(InferError, match="per-query"):
         lc.recall_compare("recall-old.json", "recall-b.json")
+
+
+@pytest.mark.parametrize("arm", ["hybrid", "deltanet"])
+@pytest.mark.parametrize("stage", ["-easy", ""])
+def test_the_narrow_arms_differ_only_in_head_width(arm, stage):
+    """The capacity experiment: 24 heads of 16 instead of 6 of 64, nothing else."""
+    import yaml
+
+    wide = yaml.safe_load(open(f"configs/recall-{arm}{stage}.yaml"))
+    narrow = yaml.safe_load(open(f"configs/recall-{arm}-narrow{stage}.yaml"))
+    assert (wide["model"].pop("n_heads"), narrow["model"].pop("n_heads")) == (6, 24)
+    assert (wide["model"].pop("n_kv_heads"), narrow["model"].pop("n_kv_heads")) == (6, 24)
+    for d, name in ((wide, f"recall-{arm}{stage}"), (narrow, f"recall-{arm}-narrow{stage}")):
+        assert d.pop("name") == name
+        assert d["train"].pop("out_dir") == f"checkpoints/{name}"
+        init = d["train"].pop("init", None)
+        if not stage:
+            assert init == f"checkpoints/{name}-easy/ckpt_last.pt"
+    assert wide == narrow
+
+
+def test_the_capacity_sweep_is_sized_for_its_longest_document():
+    from aksharallm.longctx.recall import CAPACITY, N_KEYS, max_len
+    assert max(CAPACITY) == N_KEYS
+    assert max_len(CAPACITY, (0,)) == 1 + 2 * 64 + 32 + 1 + 2 * 8

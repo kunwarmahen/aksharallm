@@ -411,6 +411,10 @@ Loss by position, 32 windows of 1,024 tokens (twice the trained 512):
   inside its window, recalls **7%** (paired 952–0). After easy documents alone, the
   all-DeltaNet model already recalled 98.6% at that distance, where dense recalled 0%. All
   three end at the same validation loss (2.907): only the distance sweep tells them apart.
+  Each one also holds all 64 keys the vocabulary has (a 64-wide head can keep 64 keys
+  apart), so the capacity arms shrink the head to 16; and `small-student-hybrid` asks the
+  same question at ~101M on real text (doc 19 § "How much can it hold?" / "Recall at a real
+  size", queued 2026-11-23). Muon leaves a DeltaNet block's two per-head gates to AdamW.
 
 ## Grouped-Query Attention (GQA)
 

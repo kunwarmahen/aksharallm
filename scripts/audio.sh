@@ -15,6 +15,7 @@
 #   scripts/audio.sh audiolm-synth    # the audio LM over a trained codec's tokens
 #   scripts/audio.sh asr-synth        # the Conformer-CTC recogniser on synthetic speech
 #   scripts/audio.sh asr-libri100     # ...on LibriSpeech train-clean-100 (docs/23)
+#   scripts/audio.sh imgtok-shapes    # the picture tokenizer (docs/26): not audio, same contract
 #
 # Env knobs (same names and meanings as phase2.sh):
 #   STOP_AFTER=500      train 500 steps this launch, then save and exit
@@ -60,8 +61,13 @@ elif grep -qE '^asr:' "$CFG"; then
 elif grep -qE '^speaker:' "$CFG"; then
     TRAINER=aksharallm.audio.train_speaker
     KIND=speaker
+elif grep -qE '^picture:' "$CFG"; then
+    # The picture tokenizer (docs/26): not audio, but the same kind of run -- a codec over a
+    # packed corpus -- so it shares this launcher rather than growing a fourth copy of it.
+    TRAINER=aksharallm.pictures.train
+    KIND=picture
 else
-    echo "$CFG has no 'codec:', 'audiolm:', 'asr:' or 'speaker:' section -- not an audio run." >&2
+    echo "$CFG has no 'codec:', 'audiolm:', 'asr:', 'speaker:' or 'picture:' section -- not an audio run." >&2
     echo "For a language model over text, use scripts/phase2.sh or scripts/experiment.sh." >&2
     exit 2
 fi
@@ -175,6 +181,24 @@ for c in corpora:
 EOF
 )
 CORPUS=$(echo "$CORPORA" | head -1)
+if [ "$KIND" = picture ]; then
+    # A picture corpus is images.bin + manifest.json (vision/image.py), and the held-out
+    # combination is scored on every sample, so both are made here if missing (seconds).
+    if [ ! -s "$CORPUS/images.bin" ]; then
+        if [ "$CORPUS" = "data/vision/shapes" ]; then
+            echo "    $CORPUS is missing. Rendering the shapes corpus (~10 s)..."
+            $PY -m aksharallm.vision corpus
+        else
+            echo "    ERROR: $CORPUS/images.bin does not exist." >&2
+            exit 1
+        fi
+    fi
+    sz=$(stat -c%s "$CORPUS/images.bin")
+    echo "    $CORPUS/images.bin: $((sz / 1000000)) MB = $((sz / 12288)) pictures at 64x64"
+    $PY -m aksharallm.pictures read --corpus "$CORPUS" --n 500 \
+        || { echo "    the reader is not exact on the corpus -- every score would be wrong" >&2; exit 1; }
+    CORPORA=""
+fi
 for C in $CORPORA; do
     [ -s "$C/audio.bin" ] && continue
     if [ "$C" = "data/audio/synth" ]; then
@@ -218,6 +242,7 @@ else
     echo "           invisible in the loss curve and fatal to everything downstream."
     SMOKE_EXTRA=(-o train.sample_every=0)
     [ "$KIND" = asr ] && SMOKE_EXTRA=()   # a recogniser writes no audio samples
+    [ "$KIND" = picture ] && SMOKE_EXTRA=(-o train.sample_every=0 -o train.sample_images=0)
     $PY -m $TRAINER "$CFG" \
         -o train.max_steps=30 -o train.out_dir=/tmp/aksharallm_audio_smoke \
         -o train.resume=null -o train.eval_every=0 "${SMOKE_EXTRA[@]}" \
@@ -289,4 +314,6 @@ elif [ "$KIND" = speaker ]; then
     echo "    measure: $PY -m aksharallm.audio speaker-eval $RUN_DIR/ckpt_best.pt"
 elif [ "$KIND" = asr ]; then
     echo "    measure: $PY -m aksharallm.asr eval $(basename "$RUN_DIR") --corpus data/asr/test-clean"
+elif [ "$KIND" = picture ]; then
+    echo "    measure: $PY -m aksharallm.pictures report $(basename "$RUN_DIR")"
 fi

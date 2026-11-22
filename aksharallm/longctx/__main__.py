@@ -17,6 +17,8 @@
     python -m aksharallm.longctx recall-data                 # -> data/recall, CPU
     python -m aksharallm.longctx recall recall-hybrid --device cuda
     python -m aksharallm.longctx recall-compare logs/longctx/recall-A.json logs/longctx/recall-B.json
+    python -m aksharallm.longctx recall recall-deltanet --pairs 32,48,56,64 --gaps 0   # capacity
+    python -m aksharallm.longctx needle-compare logs/longctx/A-needle-1.json logs/longctx/B-needle-2.json
 
 The portal's **Context** tab drives the same functions. This exists so the numbers are
 available over ssh, and because `sweep` is the one command that answers the question the
@@ -266,6 +268,21 @@ def _write(args, kind: str, payload: dict) -> Path:
     return path
 
 
+def cmd_needle_compare(args) -> int:
+    from .haystack import compare
+    a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
+    rows = compare(a, b)
+    print(f"a = {args.a}\nb = {args.b}\n"
+          f"{len(a['trials'])} trials, paired (chance {a['chance']:.0%})\n")
+    print("    length     n       a       b   b only  a only        p")
+    for r in rows:
+        p = "–" if r["p"] is None else f"{r['p']:.3g}"
+        name = "all" if r["length"] is None else str(r["length"])
+        print(f"    {name:>6} {r['n']:>5} {r['a'] * 100:6.1f}% {r['b'] * 100:6.1f}% "
+              f"{r['b_only']:>7} {r['a_only']:>7} {p:>8}")
+    return 0
+
+
 def cmd_recall_data(args) -> int:
     from .recall import prepare
     meta = prepare(args.out, train_tokens=args.train_tokens, val_tokens=args.val_tokens,
@@ -285,10 +302,15 @@ def _recall_ckpt(root: Path, name: str) -> Path:
 
 
 def cmd_recall(args) -> int:
-    from .recall import N_VALUES, load_for_recall, score
+    from .recall import BY_GAP, BY_PAIRS, N_KEYS, N_VALUES, load_for_recall, score
     root = Path(args.root) if args.root else repo_root()
     path = _recall_ckpt(root, args.checkpoint)
-    model, ck, trained = load_for_recall(path, args.device)
+    by_pairs = tuple(int(x) for x in args.pairs.split(",")) if args.pairs else BY_PAIRS
+    by_gap = tuple(int(x) for x in args.gaps.split(",")) if args.gaps else BY_GAP
+    if max(by_pairs) > N_KEYS:
+        raise ValueError(f"at most {N_KEYS} pairs: keys are distinct within a document and the "
+                         f"vocabulary has {N_KEYS}")
+    model, ck, trained = load_for_recall(path, args.device, by_pairs, by_gap)
     if model.cfg.vocab_size != 148:
         raise ValueError(f"{path} has a {model.cfg.vocab_size}-token vocabulary; a recall model "
                          "has 148 (train one on data/recall)")
@@ -297,7 +319,7 @@ def cmd_recall(args) -> int:
             f"/{model.cfg.n_layers}" if model.cfg.full_attn_every else "dense attention")
     print(f"{path}  ({kind}, trained on {trained}-token windows)")
     t = time.time()
-    r = score(model, n=args.docs, device=args.device,
+    r = score(model, n=args.docs, device=args.device, by_pairs=by_pairs, by_gap=by_gap,
               progress=None if args.quiet else print)
     print(f"\n  by pairs (gap 32)       chance: any value {1 / N_VALUES:.1%}, "
           "this document's values 1/pairs")
@@ -308,7 +330,11 @@ def cmd_recall(args) -> int:
     for x in r["by_gap"]:
         far = "  <- past the window" if x["length"] > trained else ""
         print(f"    gap {x['gap']:>5}  len {x['length']:>5}   {x['accuracy'] * 100:5.1f}%{far}")
-    out = root / RESULTS / f"recall-{path.parent.name}-step{ck.get('step')}.json"
+    # A non-default sweep gets its own file, so a capacity check never overwrites the
+    # standard result that `recall-compare` and the Context tab read.
+    tag = ("" if (by_pairs, by_gap) == (BY_PAIRS, BY_GAP) else
+           "-p" + "_".join(map(str, by_pairs)) + "-g" + "_".join(map(str, by_gap)))
+    out = root / RESULTS / f"recall-{path.parent.name}-step{ck.get('step')}{tag}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"checkpoint": str(path), "step": ck.get("step"), "kind": kind,
                                "trained_window": trained, **r,
@@ -393,6 +419,11 @@ def build_parser() -> argparse.ArgumentParser:
     n.add_argument("--candidates", type=int, default=4)
     n.set_defaults(fn=cmd_needle)
 
+    c = sub.add_parser("needle-compare", help="two needle results, paired trial for trial")
+    c.add_argument("a", help="logs/longctx/*-needle-*.json")
+    c.add_argument("b", help="logs/longctx/*-needle-*.json")
+    c.set_defaults(fn=cmd_needle_compare)
+
     r = sub.add_parser("recall-data", help="associative-recall documents for the pretraining loop")
     r.add_argument("--out", default="data/recall")
     r.add_argument("--train-tokens", type=int, default=240_000_000)
@@ -407,6 +438,10 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--device", default="cpu")
     q.add_argument("--docs", type=int, default=64, help="documents per shape")
     q.add_argument("--quiet", action="store_true")
+    q.add_argument("--pairs", default=None, metavar="LIST",
+                   help="pairs sweep, e.g. 32,48,56,64 (the capacity sweep; at most 64)")
+    q.add_argument("--gaps", default=None, metavar="LIST",
+                   help="gap sweep, e.g. 0,768 (16 pairs each)")
     q.add_argument("--force-gpu", action="store_true",
                    help="use the GPU even while a run is training")
     q.set_defaults(fn=cmd_recall)

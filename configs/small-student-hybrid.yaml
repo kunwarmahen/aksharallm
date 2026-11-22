@@ -1,0 +1,59 @@
+# The hybrid at a useful size (docs/04 § Linear attention, docs/19 § Recall at a real size):
+# small-student-muon (~101M, val 3.2673 at 2,000 steps, 2026-11-20) plus ONE key,
+# `full_attn_every: 3`, so 8 of its 12 blocks are Gated DeltaNet and 4 keep attention.
+# At 13.8M on synthetic recall the hybrid kept 100% at 3x its window where dense fell to 7%
+# (docs/19); this asks whether that survives contact with real text: the same data, steps,
+# seed and optimizer as its control, then the needle-in-a-haystack at 1x-4x the 1,024 window
+# on both, paired trial for trial (`longctx needle-compare`).
+#
+#   scripts/experiment.sh small-student-hybrid
+#   python -m aksharallm.longctx needle small-student-hybrid --lengths 512 1024 2048 4096
+#   python -m aksharallm.eval domains small-student-hybrid
+
+name: small-student-hybrid
+
+model:
+  vocab_size: 32768       # the blend tokenizer -- the teacher's, which distillation requires
+  d_model: 768            # small-code is 1024 x 24 (300M); this is ~101M, 3x smaller
+  n_layers: 12
+  n_heads: 12
+  n_kv_heads: 4
+  max_seq_len: 1024
+  tie_embeddings: true
+  dropout: 0.0
+  full_attn_every: 3       # the ONE key that differs from small-student-muon: Gated DeltaNet in
+                           # 8 of 12 blocks, attention in blocks 3, 6, 9, 12 (tiny-hybrid's shape)
+
+data:
+  val_bin: data/blend/val.bin
+  tokenizer: data/blend/tokenizer.json
+  train_sources:
+    - {bin: data/blend/fineweb-edu-10bt.bin, weight: 0.85}
+    - {bin: data/blend/codeparrot-python.bin, weight: 0.15}
+
+optim:
+  lr: 6.0e-4              # a 3x smaller model takes a higher LR than the 300M's 3e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 300
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  schedule: cosine
+  name: muon              # as small-student-muon, the control
+
+train:
+  out_dir: checkpoints/small-student-hybrid
+  batch_size: 16
+  grad_accum: 15          # 16 * 15 * 1024 = 245,760 tokens/step, as small-code
+  seq_len: 1024
+  max_steps: 2000         # ~492M tokens, ~5 per parameter: the undertrained regime a teacher should help most
+  eval_every: 500
+  eval_batches: 50
+  sample_every: 1000
+  ckpt_every: 250
+  log_every: 20
+  compile: true
+  seed: 1337
+  wandb_project: null
+  resume: auto
