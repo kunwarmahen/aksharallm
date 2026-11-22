@@ -531,6 +531,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.tooluse.ask(str(data.get("checkpoint") or ""),
                                     str(data.get("question") or ""),
                                     bool(data.get("use_tool", True)))
+        if tab == "pictures" and action == "draw":
+            return self.pictures.draw(data)
         if tab in ("tooluse", "tts", "pictures") and action == "compare":
             return getattr(self, tab).compare(str(data.get("a") or ""), str(data.get("b") or ""))
         if tab == "tts" and action == "clip":

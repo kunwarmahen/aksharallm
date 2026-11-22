@@ -675,7 +675,7 @@ The panels, in plain terms:
   reports paired per problem, **Ask it** with the full transcript, and jobs to write the
   data or score a model on problem set v1, v2 or `rl` (GRPO's twelve kinds plus v2's four
   held out). See [doc 6](06-posttraining.md) § "Tool use".
-- **Learn** — the repo as a course ([doc 16](16-learning-path.md)). Twenty-nine lessons, each
+- **Learn** — the repo as a course ([doc 16](16-learning-path.md)). Thirty lessons, each
   one *read the doc → open the file → break it → watch a real pytest node go red*. Lessons
   unlock as their prerequisites are finished, a locked one says what is missing, and a lesson
   completes only once its check has been **red and then green** — the check passes on clean

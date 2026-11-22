@@ -728,7 +728,24 @@ In the portal: **☰ Menu → Pictures** (the table, the gallery, two reports pa
 
 **How you know it worked:** the originals' row at 100% (the judge's control), "all three"
 near it at four codebooks, the held-out purple triangles as good as the rest, and every
-codebook with hundreds of entries in use. 📖 [chapter 26 — pictures](26-pictures.md)
+codebook with hundreds of entries in use.
+
+The second piece (**G1**) draws from a sentence: a transformer reads "two red circles" and
+writes the picture's codes, with classifier-free guidance pushing the drawing towards the
+words, and the same judge reads the result:
+
+```bash
+python -m aksharallm.pictures codes imgtok-shapes --books 2      # the corpus as codes
+scripts/audio.sh imggen-shapes                                   # train G1
+python -m aksharallm.pictures draw imggen-shapes "two red circles" --guidance 3
+python -m aksharallm.pictures gen-report imggen-shapes --guidance 3   # all 60 captions
+```
+
+In the portal: **Pictures → From a sentence to a picture** (pick three words, Draw).
+
+**How you know it worked:** most seen captions drawn right, the four purple-triangle captions
+(never in training) drawn right too, and few drawings that are code-for-code copies of a
+training picture. 📖 [chapter 26 — pictures](26-pictures.md)
 
 The point of every one is how little had to change. Audio needed a codec and got TTS and ASR
 as *one model in two orders*. Vision needed no codec at all — patches replace one — and

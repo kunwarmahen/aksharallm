@@ -20,3 +20,32 @@
   border-radius: 6px;
   background: #121212;
 }
+
+/* G1: drawings from a caption, each with what the reader saw. */
+.pc-draw-row > * { min-width: 0; }
+.pc-draw-row input[type="number"] { width: 100%; }
+.pc-drawn {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(120px, 100%), 1fr));
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.pc-drawn > *, .pc-gen-gallery > * { min-width: 0; margin: 0; }
+.pc-drawn img, .pc-gen-gallery img {
+  display: block;
+  width: 100%;
+  height: auto;
+  image-rendering: pixelated;
+  border: 2px solid var(--border);
+  border-radius: 6px;
+  background: #121212;
+}
+.pc-drawn figure.ok img { border-color: var(--good); }
+.pc-drawn figure.bad img { border-color: var(--critical); }
+.pc-drawn figcaption, .pc-gen-gallery figcaption { font-size: 0.8rem; margin-top: 0.2rem; overflow-wrap: anywhere; }
+.pc-gen-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr));
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}

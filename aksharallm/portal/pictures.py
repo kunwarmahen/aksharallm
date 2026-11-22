@@ -9,6 +9,10 @@
 * **compare** — two reports, paired picture by picture (`measure.compare`).
 * **jobs** — `pictures report` (on the CPU) and `pictures read`, detached through `CliJobs`,
   the command printed. Training is the dashboard's Start (`imgtok-shapes` is in `LAUNCHERS`).
+* **G1, a sentence to a picture** — `draw` runs inline on the CPU (128 sampling steps of a
+  ~5M transformer, a second or two) and returns each picture with what the reader saw in it;
+  `gen-*.json` reports (all 60 captions, seen and held-out) list, open and pair like the
+  tokenizer's; `pictures codes` and `pictures gen-report` are jobs.
 
 Read with: docs/26-pictures.md -- the chapter this implements; it ends with the order to read
 these files in.
@@ -27,7 +31,7 @@ from ..audio.ttsreports import finite
 from .jobs import CliJobs, JobError
 
 RESULTS = Path("logs/pictures")
-_NAME = re.compile(r"^report-[A-Za-z0-9_.-]+\.json$")
+_NAME = re.compile(r"^(report|gen)-[A-Za-z0-9_.-]+\.json$")
 
 
 class PicturesError(RuntimeError):
@@ -57,6 +61,37 @@ class Pictures:
                         "mtime": path.stat().st_mtime})
         return sorted(out, key=lambda r: r["mtime"], reverse=True)
 
+    def generators(self) -> list[dict]:
+        """G1 caption-to-picture checkpoints (`stage == "picgen"`)."""
+        out = []
+        for path in sorted(self.root.glob("checkpoints/*/ckpt_*.pt")):
+            try:
+                blob = torch.load(path, map_location="cpu", weights_only=False, mmap=True)
+            except Exception:
+                continue
+            if blob.get("stage") != "picgen":
+                continue
+            pg = blob.get("picgen") or {}
+            out.append({"rel": str(path.relative_to(self.root)), "step": blob.get("step"),
+                        "books": pg.get("books"), "tokenizer": pg.get("tokenizer"),
+                        "best_val": blob.get("best_val"), "mtime": path.stat().st_mtime})
+        return sorted(out, key=lambda r: r["mtime"], reverse=True)
+
+    def gen_reports(self) -> list[dict]:
+        out = []
+        for p in sorted((self.root / RESULTS).glob("gen-*.json"),
+                        key=lambda p: p.stat().st_mtime, reverse=True):
+            try:
+                d = json.loads(p.read_text())
+                out.append({"name": p.name, "run": d.get("run"), "step": d.get("step"),
+                            "k": d.get("k"), "guidance": d.get("guidance"),
+                            "seen_all": d["seen"]["all"],
+                            "held_out_all": (d.get("held_out") or {}).get("all"),
+                            "copies": d["seen"].get("copies"), "variety": d.get("variety")})
+            except (OSError, ValueError, KeyError):
+                continue
+        return out
+
     def reports(self) -> list[dict]:
         folder = self.root / RESULTS
         out = []
@@ -85,8 +120,11 @@ class Pictures:
                 "holdout": (self.root / "data/vision/shapes-holdout/manifest.json").is_file()}
 
     def overview(self) -> dict:
+        codes = sorted(str(p.parent.relative_to(self.root))
+                       for p in self.root.glob("data/pictures/*/meta.json"))
         return finite({"checkpoints": self.checkpoints(), "reports": self.reports(),
-                       "corpus": self.corpus(), "jobs": self.jobs.status()})
+                       "generators": self.generators(), "gen_reports": self.gen_reports(),
+                       "codes": codes, "corpus": self.corpus(), "jobs": self.jobs.status()})
 
     def _load(self, name: str) -> dict:
         if not _NAME.match(name or ""):
@@ -113,6 +151,8 @@ class Pictures:
     def compare(self, a: str, b: str) -> dict:
         from ..pictures.measure import compare
         x, y = self._load(a), self._load(b)
+        if a.startswith("gen-") or b.startswith("gen-"):
+            return self._gen_compare(a, b, x, y)
         out = {"a": a, "b": b, "rows": []}
         try:
             out["rows"].append({"set": "val pictures", **compare(x, y)})
@@ -124,8 +164,89 @@ class Pictures:
         out["command"] = f"python -m aksharallm.pictures compare {RESULTS}/{a} {RESULTS}/{b}"
         return finite(out)
 
+    def _gen_compare(self, a: str, b: str, x: dict, y: dict) -> dict:
+        from ..pictures.score import compare
+        if not (a.startswith("gen-") and b.startswith("gen-")):
+            raise PicturesError("pair two G1 reports, or two tokenizer reports, not one of each")
+        try:
+            parts = compare(x, y)
+        except ValueError as e:
+            raise PicturesError(str(e)) from e
+        names = {"seen": "seen captions", "held_out": "held-out captions (purple triangles)"}
+        return finite({"a": a, "b": b,
+                       "rows": [{"set": names[k], **v} for k, v in parts.items()],
+                       "command": f"python -m aksharallm.pictures gen-compare "
+                                  f"{RESULTS}/{a} {RESULTS}/{b}"})
+
+    def draw(self, spec: dict) -> dict:
+        """Draw pictures for one caption, inline on the CPU, each read back by the reader.
+        The model stays loaded between calls (keyed by checkpoint), like the Interp tab's."""
+        import io
+
+        from PIL import Image
+
+        from ..pictures.codes import fact_of, word_ids
+        from ..pictures.gen import draw, load_generator
+        from ..pictures.reader import judge
+        from ..pictures.train import load_tokenizer
+        rel = str(spec.get("checkpoint") or "")
+        if rel not in {g["rel"] for g in self.generators()}:
+            raise PicturesError(f"not a G1 picture generator: {rel!r}")
+        caption = " ".join(str(spec.get("caption") or "").lower().split())
+        try:
+            word_ids(caption)
+        except ValueError as e:
+            raise PicturesError(str(e)) from e
+        n = int(spec.get("n") or 8)
+        guidance = float(spec.get("guidance") if spec.get("guidance") is not None else 3.0)
+        seed = int(spec.get("seed") or 0)
+        if not 1 <= n <= 32 or not 0 <= guidance <= 10:
+            raise PicturesError("pictures 1–32, guidance 0–10")
+        cache = getattr(self, "_g1", None)
+        if not cache or cache[0] != rel:
+            model, pg, blob = load_generator(self.root / rel, "cpu")
+            tok = Path(pg.tokenizer)
+            tokenizer, _ = load_tokenizer(tok if tok.is_absolute() else self.root / tok, "cpu")
+            self._g1 = cache = (rel, model, pg, blob, tokenizer)
+        _, model, pg, blob, tokenizer = cache
+        pics, _ = draw(model, tokenizer, [caption] * n, pg=pg, guidance=guidance, seed=seed)
+        want = fact_of(caption)
+        out = []
+        for img in pics:
+            buf = io.BytesIO()
+            Image.fromarray(img).save(buf, format="PNG")
+            v = judge(img, want)
+            out.append({"png": "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode(),
+                        "ok": bool(v["all"]), "read": v["read"]})
+        g = f"{guidance:g}"
+        return finite({"caption": caption, "step": blob.get("step"), "pictures": out,
+                       "agree": sum(p["ok"] for p in out),
+                       "held_out": (want["colour"], want["shape"]) == ("purple", "triangle"),
+                       "command": f'python -m aksharallm.pictures draw {rel} "{caption}" '
+                                  f"--n {n} --guidance {g} --seed {seed}"})
+
     def start(self, spec: dict) -> dict:
         kind = spec.get("kind")
+        if kind == "gen-report":
+            rel = str(spec.get("checkpoint") or "")
+            if rel not in {g["rel"] for g in self.generators()}:
+                raise JobError(f"not a G1 picture generator: {rel!r}")
+            k = int(spec.get("k") or 8)
+            guidance = float(spec.get("guidance") if spec.get("guidance") is not None else 3.0)
+            if not 1 <= k <= 32 or not 0 <= guidance <= 10:
+                raise JobError("pictures per caption 1–32, guidance 0–10")
+            return self.jobs.start(["gen-report", rel, "--k", str(k), "--guidance", f"{guidance:g}",
+                                    "--device", "cpu"],
+                                   f"G1 report on {rel}, {k} per caption, guidance {guidance:g}")
+        if kind == "codes":
+            rel = str(spec.get("checkpoint") or "")
+            if rel not in {c["rel"] for c in self.checkpoints()}:
+                raise JobError(f"not a picture tokenizer checkpoint: {rel!r}")
+            books = int(spec.get("books") or 2)
+            run = Path(rel).parent.name
+            return self.jobs.start(["codes", rel, "--books", str(books),
+                                    "--out", f"data/pictures/codes-{run}"],
+                                   f"encode the corpus with {rel}, {books} codebooks")
         if kind == "report":
             rel = str(spec.get("checkpoint") or "")
             if rel not in {c["rel"] for c in self.checkpoints()}:

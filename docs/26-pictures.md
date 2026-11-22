@@ -7,7 +7,7 @@ become such a sequence, and that sequence has to turn back into the picture. Tha
 
 ```mermaid
 flowchart LR
-    G0["G0 image tokenizer<br/>(this chapter, built)"] --> G1["G1 a transformer<br/>over the codes"]
+    G0["G0 image tokenizer<br/>(built)"] --> G1["G1 a caption to<br/>the codes (built)"]
     G0 --> G3["G3 latent diffusion"]
     G2["G2 diffusion in pixels"] --> G3
     G1 --> G4["G4 text to image"]
@@ -119,6 +119,7 @@ quarter of these pictures now show the wrong shape". Held-out purple triangles: 
 ## Run it
 
 ```bash
+# G0, the tokenizer
 python -m aksharallm.vision corpus                      # data/vision/shapes (seconds), if missing
 python -m aksharallm.pictures read                      # the reader on the corpus: must be 100%
 scripts/audio.sh imgtok-shapes                          # train (the non-text launcher)
@@ -126,6 +127,13 @@ python -m aksharallm.pictures report imgtok-shapes      # ladder + held-out + ga
 python -m aksharallm.pictures reports                   # every report, one line each
 python -m aksharallm.pictures compare logs/pictures/report-imgtok-shapes-stepN.json \
     logs/pictures/report-imgtok-shapes16-stepM.json
+
+# G1, a caption to a picture
+python -m aksharallm.pictures codes imgtok-shapes --books 2     # data/pictures/codes-imgtok-shapes
+scripts/audio.sh imggen-shapes                                  # train (encodes the codes if missing)
+python -m aksharallm.pictures draw imggen-shapes "two red circles" --guidance 3
+python -m aksharallm.pictures gen-report imggen-shapes --guidance 3   # all 60 captions, judged
+python -m aksharallm.pictures gen-compare A.json B.json               # paired per drawing
 ```
 
 `scripts/audio.sh` is the launcher for every run whose config is not a text model; it reads
@@ -134,8 +142,71 @@ before spending the card, and publishes the same pid/meta/log contract as every 
 `scripts/stop.sh`, the scheduler and the dashboard's Start drive it unchanged.
 
 In the portal: **Pictures** (under *Reach further*) shows every report with the originals'
-row first, the gallery, a paired comparison of two reports, and the two jobs (a report, on
-the CPU, and the reader check), each with its CLI command printed.
+row first, the gallery, a paired comparison of two reports, and the jobs (a report, on the
+CPU, the reader check, encoding the corpus for G1, a G1 report), each with its CLI command
+printed. For G1 it has **Draw**: pick the three words and a guidance, and it draws on the CPU
+in a second or two, each picture bordered green or red by the reader's verdict; and **Every
+caption, judged**, with the held-out captions first in the gallery.
+
+## From a sentence to a picture (G1)
+
+The tokenizer turns out to be solved on this corpus (the full run, 20,000 steps): every val
+picture and every held-out purple triangle reads back right at 4 codebooks, and **one codebook
+is already enough for 100% of the val pictures** (56 dB), with 95% on the held-out ones. So G1
+models the first **two** codebooks: 64 cells × 2 = 128 codes a picture, all 100% when read back.
+
+G1 is the next-token transformer of [chapter 4](04-model.md), imported unchanged. A picture is
+written as a sequence after its caption:
+
+```mermaid
+flowchart LR
+    W["three red circles"] --> S["[three] [red] [circles] [IMG]"]
+    S --> T["transformer<br/>(model/transformer.py, unchanged)"]
+    T --> C["128 codes, one at a time:<br/>cell 0 book 0, cell 0 book 1, cell 1 book 0, ..."]
+    C --> D["tokenizer's decoder (G0)"]
+    D --> P["picture"] --> R["reader: right count,<br/>colour, shape?"]
+```
+
+| choice | why |
+|---|---|
+| one vocabulary: 3 specials + 15 words + 2 × 512 codes | a code from book 1 is a different id from the same number in book 0, so the model always knows which codebook a slot holds |
+| position-major order (each cell's two codes together) | the second code refines the first, so it comes straight after it; codebook-major would ask for all 64 refinements before the model has seen any |
+| the slot mask in the sampler | at each step only one codebook's 512 ids are legal; the sampler sets the rest to −∞. Training has no mask, so a model that had not learned the layout would show it in the loss |
+| loss on codes only | the caption and the IMG marker carry no loss, so the val loss is cross-entropy **per code** (step 0 reads ln 1042 = 6.95, uniform over the whole vocabulary; ln 512 = 6.24 is a model that has learned only which codebook each slot holds) |
+| words from the corpus's constants, not its captions | "purple" and "triangles" are words although no picture shows both |
+| 10% of captions dropped to `NULL` | the same model then also draws with no caption, which is what guidance needs |
+
+### Guidance
+
+**Classifier-free guidance** is the knob every text-to-image system has. At each sampling step
+the model is run twice, with the caption and with `NULL`, and the logits are pushed away from
+the captionless ones:
+
+```
+logits = uncond + w * (cond - uncond)
+```
+
+`w = 1` is the model as trained, `w = 0` ignores the caption, and `w > 1` exaggerates whatever
+the caption changes. In a diffusion model the same line is applied to the predicted noise;
+here it is applied to the next code's logits. Both halves share one KV cache (2B rows, the
+same length).
+
+### How a drawing is scored
+
+`pictures gen-report <run>` draws `k` pictures for each of the **60 captions** the words can
+make (4 counts × 5 colours × 3 shapes), reads every one, and reports:
+
+| column | meaning |
+|---|---|
+| seen / held out | the 56 captions with training pictures, and the 4 purple-triangle captions with none |
+| count / colour / shape / all three | the reader's verdict against the caption |
+| copies | drawings identical, code for code, to a training picture: memory, not drawing |
+| variety | distinct pictures among one caption's `k`: what guidance trades for obedience |
+
+Every (caption, sample) keeps its verdict, and sampling is seeded, so two reports (two guidance
+settings, two checkpoints) pair drawing by drawing: `pictures gen-compare A.json B.json`.
+
+**MEASURED** — filled in below after the run.
 
 ## Traps to keep
 
@@ -160,7 +231,11 @@ the CPU, and the reader check), each with its CLI command printed.
 | 4 | [`pictures/train.py`](../aksharallm/pictures/train.py) → `main` | the trainer contract (pid, STOP, session records, resume with the data generator's state), codebook use every logged step |
 | 5 | [`pictures/measure.py`](../aksharallm/pictures/measure.py) → `ladder`, `compare`, `gallery` | PSNR, the reader at each codebook count, codebook use, per-picture verdicts paired by a sign test |
 | 6 | [`pictures/__main__.py`](../aksharallm/pictures/__main__.py) | `read`, `report`, `compare`, `reports` |
-| 7 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, two jobs through `portal/jobs.py` |
+| 7 | [`pictures/codes.py`](../aksharallm/pictures/codes.py) → `WORDS`, `flatten`, `CodesDataset.rows` | G1's vocabulary of words and codes, position-major order, the loss on codes only, the `NULL` caption |
+| 8 | [`pictures/gen.py`](../aksharallm/pictures/gen.py) → `sample`, `draw` | the slot mask, classifier-free guidance over one shared KV cache, decoding through the tokenizer |
+| 9 | [`pictures/train_gen.py`](../aksharallm/pictures/train_gen.py) → `main` | the same trainer contract; refuses codes from a different tokenizer; draws all 60 captions at each sample |
+| 10 | [`pictures/score.py`](../aksharallm/pictures/score.py) → `report`, `compare` | seen vs held-out captions, copies of training pictures, variety, per-drawing verdicts paired |
+| 11 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
 
 Tests: `tests/test_pictures.py`. They cover the reader on every count × colour × shape, the
 reader seeing blur and recolouring, the codebook prefix ignoring later codebooks, batch
@@ -169,3 +244,12 @@ resume, and the portal refusing a gallery path outside `logs/pictures/`. Six mut
 checked red: loose shape thresholds, swapped compare columns, a missing containment check,
 BatchNorm in place of GroupNorm, a resume restarting at step 0, and a prefix decode reading
 every codebook. [Lesson 29](lessons/29-pictures.md) breaks the reader.
+
+`tests/test_picgen.py` covers G1: the flatten order and its inverse, the loss on codes only and
+the dropped caption, the slot mask, guidance (a constructed model that prefers one code with a
+caption and another without, so `w = 0`, `1` and `3` must each pick the right one), the paired
+comparison refusing different captions, the trainer's resume and its refusal of another
+tokenizer's codes, and the portal's inline draw. Six mutants were checked red: guidance halves
+swapped, guidance ignoring the unconditional half, the IMG marker left in the loss, codebook-major
+flattening, the wrong slot range, and the tokenizer check removed.
+[Lesson 30](lessons/30-guidance.md) breaks guidance.

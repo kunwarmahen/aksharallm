@@ -16,6 +16,7 @@
 #   scripts/audio.sh asr-synth        # the Conformer-CTC recogniser on synthetic speech
 #   scripts/audio.sh asr-libri100     # ...on LibriSpeech train-clean-100 (docs/23)
 #   scripts/audio.sh imgtok-shapes    # the picture tokenizer (docs/26): not audio, same contract
+#   scripts/audio.sh imggen-shapes    # G1, caption -> picture codes (docs/26), same contract
 #
 # Env knobs (same names and meanings as phase2.sh):
 #   STOP_AFTER=500      train 500 steps this launch, then save and exit
@@ -66,8 +67,12 @@ elif grep -qE '^picture:' "$CFG"; then
     # packed corpus -- so it shares this launcher rather than growing a fourth copy of it.
     TRAINER=aksharallm.pictures.train
     KIND=picture
+elif grep -qE '^picgen:' "$CFG"; then
+    # G1 (docs/26): a transformer from a caption to the tokenizer's codes.
+    TRAINER=aksharallm.pictures.train_gen
+    KIND=picgen
 else
-    echo "$CFG has no 'codec:', 'audiolm:', 'asr:', 'speaker:' or 'picture:' section -- not an audio run." >&2
+    echo "$CFG has no 'codec:', 'audiolm:', 'asr:', 'speaker:', 'picture:' or 'picgen:' section -- not an audio run." >&2
     echo "For a language model over text, use scripts/phase2.sh or scripts/experiment.sh." >&2
     exit 2
 fi
@@ -199,6 +204,27 @@ if [ "$KIND" = picture ]; then
         || { echo "    the reader is not exact on the corpus -- every score would be wrong" >&2; exit 1; }
     CORPORA=""
 fi
+if [ "$KIND" = picgen ]; then
+    # G1 trains on the tokenizer's codes, not on pictures: check the tokenizer exists and
+    # encode the corpus with it if the codes are missing (seconds on the CPU).
+    read -r TOK CODES < <($PY - "$CFG" <<'EOF'
+import sys, yaml
+c = yaml.safe_load(open(sys.argv[1])) or {}
+print((c.get("picgen") or {}).get("tokenizer", ""), (c.get("data") or {}).get("codes", ""))
+EOF
+)
+    if [ ! -s "$TOK" ]; then
+        echo "    ERROR: the tokenizer $TOK does not exist. Train it first: scripts/audio.sh imgtok-shapes" >&2
+        exit 1
+    fi
+    if [ ! -s "$CODES/codes.npy" ]; then
+        BOOKS=$($PY -c "import yaml,sys; print((yaml.safe_load(open(sys.argv[1]))['picgen'] or {}).get('books', 2))" "$CFG")
+        echo "    $CODES is missing. Encoding the corpus with $TOK ($BOOKS codebooks)..."
+        CUDA_VISIBLE_DEVICES= $PY -m aksharallm.pictures codes "$TOK" --books "$BOOKS" --out "$CODES" || exit 1
+    fi
+    echo "    codes: $CODES ($($PY -c "import json,sys; m=json.load(open(sys.argv[1])); print(f\"{m['n']:,} pictures x {m['books']} codebooks, from {m['tokenizer']} step {m['tokenizer_step']}\")" "$CODES/meta.json"))"
+    CORPORA=""
+fi
 for C in $CORPORA; do
     [ -s "$C/audio.bin" ] && continue
     if [ "$C" = "data/audio/synth" ]; then
@@ -243,6 +269,7 @@ else
     SMOKE_EXTRA=(-o train.sample_every=0)
     [ "$KIND" = asr ] && SMOKE_EXTRA=()   # a recogniser writes no audio samples
     [ "$KIND" = picture ] && SMOKE_EXTRA=(-o train.sample_every=0 -o train.sample_images=0)
+    [ "$KIND" = picgen ] && SMOKE_EXTRA=(-o train.sample_every=0 -o train.sample_k=0)
     $PY -m $TRAINER "$CFG" \
         -o train.max_steps=30 -o train.out_dir=/tmp/aksharallm_audio_smoke \
         -o train.resume=null -o train.eval_every=0 "${SMOKE_EXTRA[@]}" \
@@ -316,4 +343,7 @@ elif [ "$KIND" = asr ]; then
     echo "    measure: $PY -m aksharallm.asr eval $(basename "$RUN_DIR") --corpus data/asr/test-clean"
 elif [ "$KIND" = picture ]; then
     echo "    measure: $PY -m aksharallm.pictures report $(basename "$RUN_DIR")"
+elif [ "$KIND" = picgen ]; then
+    echo "    measure: $PY -m aksharallm.pictures gen-report $(basename "$RUN_DIR") --guidance 3"
+    echo "    draw:    $PY -m aksharallm.pictures draw $(basename "$RUN_DIR") \"two red circles\""
 fi

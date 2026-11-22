@@ -68,10 +68,76 @@
     </div>
 
     <div class="panel">
+      <h3>From a sentence to a picture</h3>
+      <p class="panel-note">
+        The second step (<strong>G1</strong>): a small transformer, the same kind that writes
+        text, reads a caption such as <em>two red circles</em> and writes the picture's code
+        numbers one at a time; the tokenizer's decoder paints them. Nothing here is copied from
+        a training picture: it is drawn fresh each time, and the reader checks it.
+        <strong>Guidance</strong> pushes the drawing towards the caption (1 = none; 3 is the
+        usual setting): higher obeys the words more and varies less.
+        <strong>Purple triangles</strong> are never shown in training, though both words are,
+        with other partners: drawing one means the model learned what the words mean, not
+        which pictures go with which caption.
+      </p>
+      <div class="au-flow" aria-hidden="true">
+        <span class="au-step">"two red circles"</span>
+        <span class="au-arrow">→</span>
+        <span class="au-step au-step-key">transformer<small>128 code numbers, one at a time</small></span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">tokenizer's decoder</span>
+        <span class="au-arrow">→</span>
+        <span class="au-step">picture, then read back</span>
+      </div>
+      <div class="row pc-draw-row">
+        <label class="field">Model <select id="pc-gen"></select></label>
+        <label class="field">How many <select id="pc-w-count"></select></label>
+        <label class="field">Colour <select id="pc-w-colour"></select></label>
+        <label class="field">Shape <select id="pc-w-shape"></select></label>
+      </div>
+      <div class="row pc-draw-row">
+        <label class="field">Guidance <input id="pc-guidance" type="number" min="0" max="10" step="0.5" value="3"></label>
+        <label class="field">Pictures <input id="pc-draw-n" type="number" min="1" max="32" value="8"></label>
+        <label class="field">Seed <input id="pc-seed" type="number" min="0" value="0"></label>
+        <button id="pc-draw" type="button">Draw</button>
+      </div>
+      <p id="pc-draw-note" class="panel-note"></p>
+      <div id="pc-drawn" class="pc-drawn"></div>
+      <pre id="pc-draw-cmd" class="au-cmd" hidden></pre>
+    </div>
+
+    <div class="panel">
+      <h3>Every caption, judged</h3>
+      <p class="panel-note">
+        A report draws several pictures for each of the 60 captions the words can make and
+        reads every one back. <strong>Copies</strong> counts drawings identical, code for
+        code, to a training picture (memorising rather than drawing). <strong>Variety</strong>
+        is the share of a caption's pictures that differ from each other.
+      </p>
+      <div class="row">
+        <label class="field">Report <select id="pc-gen-report"></select></label>
+      </div>
+      <div class="scroll-x"><table id="pc-gen-table" class="grid"></table></div>
+      <p id="pc-gen-note" class="panel-note"></p>
+      <div id="pc-gen-gallery" class="pc-gen-gallery"></div>
+      <h4>Two settings, picture by picture</h4>
+      <p class="panel-note">Two reports drawn with the same captions and seed (say guidance 1 against 3),
+        paired drawing by drawing, with an exact sign test.</p>
+      <div class="row">
+        <label class="field">a <select id="pc-ga"></select></label>
+        <label class="field">b <select id="pc-gb"></select></label>
+        <button id="pc-gcompare" type="button">Compare</button>
+      </div>
+      <div class="scroll-x"><table id="pc-gcmp" class="grid"></table></div>
+      <pre id="pc-gcmp-cmd" class="au-cmd" hidden></pre>
+    </div>
+
+    <div class="panel">
       <h3>Run it from here</h3>
       <p class="panel-note">
         Train a tokenizer with the dashboard's <strong>Start</strong> (runs
-        <code>imgtok-shapes</code> and <code>imgtok-shapes16</code>), then make a report here.
+        <code>imgtok-shapes</code> and <code>imgtok-shapes16</code>; G1 is
+        <code>imggen-shapes</code>), then make a report here.
         A report always runs on the CPU from this page, a few seconds at this size. Each job is
         the CLI command printed under it.
       </p>
@@ -80,6 +146,19 @@
         <label class="field">Pictures <input id="pc-n" type="number" min="16" max="2048" value="256"></label>
         <button id="pc-run" type="button">Make a report</button>
         <button id="pc-read" class="ghost" type="button">Check the reader</button>
+        <button id="pc-codes" class="ghost" type="button">Encode the corpus for G1</button>
+      </div>
+      <p class="panel-note">
+        G1: <strong>Encode the corpus</strong> turns every training picture into the chosen
+        tokenizer's codes (2 codebooks, <code>data/pictures/codes-&lt;run&gt;</code>), which is
+        what <code>imggen-shapes</code> trains on (dashboard Start). Then judge a G1 model on
+        every caption:
+      </p>
+      <div class="row">
+        <label class="field">G1 model <select id="pc-gen-job"></select></label>
+        <label class="field">Per caption <input id="pc-k" type="number" min="1" max="32" value="8"></label>
+        <label class="field">Guidance <input id="pc-gen-g" type="number" min="0" max="10" step="0.5" value="3"></label>
+        <button id="pc-gen-run" type="button">Make a G1 report</button>
       </div>
       <div id="pc-job"></div>
     </div>
