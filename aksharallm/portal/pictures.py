@@ -62,17 +62,19 @@ class Pictures:
         return sorted(out, key=lambda r: r["mtime"], reverse=True)
 
     def generators(self) -> list[dict]:
-        """G1 caption-to-picture checkpoints (`stage == "picgen"`)."""
+        """Drawing models: G1 (`stage == "picgen"`, codes) and G2 (`stage == "flow"`, pixels)."""
         out = []
         for path in sorted(self.root.glob("checkpoints/*/ckpt_*.pt")):
             try:
                 blob = torch.load(path, map_location="cpu", weights_only=False, mmap=True)
             except Exception:
                 continue
-            if blob.get("stage") != "picgen":
+            stage = blob.get("stage")
+            if stage not in ("picgen", "flow"):
                 continue
-            pg = blob.get("picgen") or {}
+            pg = blob.get(stage) or {}
             out.append({"rel": str(path.relative_to(self.root)), "step": blob.get("step"),
+                        "kind": "G1" if stage == "picgen" else "G2",
                         "books": pg.get("books"), "tokenizer": pg.get("tokenizer"),
                         "best_val": blob.get("best_val"), "mtime": path.stat().st_mtime})
         return sorted(out, key=lambda r: r["mtime"], reverse=True)
@@ -186,12 +188,10 @@ class Pictures:
         from PIL import Image
 
         from ..pictures.codes import fact_of, word_ids
-        from ..pictures.gen import draw, load_generator
         from ..pictures.reader import judge
-        from ..pictures.train import load_tokenizer
         rel = str(spec.get("checkpoint") or "")
         if rel not in {g["rel"] for g in self.generators()}:
-            raise PicturesError(f"not a G1 picture generator: {rel!r}")
+            raise PicturesError(f"not a drawing model (G1 or G2): {rel!r}")
         caption = " ".join(str(spec.get("caption") or "").lower().split())
         try:
             word_ids(caption)
@@ -204,12 +204,10 @@ class Pictures:
             raise PicturesError("pictures 1–32, guidance 0–10")
         cache = getattr(self, "_g1", None)
         if not cache or cache[0] != rel:
-            model, pg, blob = load_generator(self.root / rel, "cpu")
-            tok = Path(pg.tokenizer)
-            tokenizer, _ = load_tokenizer(tok if tok.is_absolute() else self.root / tok, "cpu")
-            self._g1 = cache = (rel, model, pg, blob, tokenizer)
-        _, model, pg, blob, tokenizer = cache
-        pics, _ = draw(model, tokenizer, [caption] * n, pg=pg, guidance=guidance, seed=seed)
+            from ..pictures.drawer import load_drawer
+            self._g1 = cache = (rel, load_drawer(self.root / rel, self.root, "cpu"))
+        d = cache[1]
+        pics = d.draw([caption] * n, guidance=guidance, seed=seed)
         want = fact_of(caption)
         out = []
         for img in pics:
@@ -219,7 +217,7 @@ class Pictures:
             out.append({"png": "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode(),
                         "ok": bool(v["all"]), "read": v["read"]})
         g = f"{guidance:g}"
-        return finite({"caption": caption, "step": blob.get("step"), "pictures": out,
+        return finite({"caption": caption, "step": d.step, "kind": d.kind, "pictures": out,
                        "agree": sum(p["ok"] for p in out),
                        "held_out": (want["colour"], want["shape"]) == ("purple", "triangle"),
                        "command": f'python -m aksharallm.pictures draw {rel} "{caption}" '
@@ -230,7 +228,7 @@ class Pictures:
         if kind == "gen-report":
             rel = str(spec.get("checkpoint") or "")
             if rel not in {g["rel"] for g in self.generators()}:
-                raise JobError(f"not a G1 picture generator: {rel!r}")
+                raise JobError(f"not a drawing model (G1 or G2): {rel!r}")
             k = int(spec.get("k") or 8)
             guidance = float(spec.get("guidance") if spec.get("guidance") is not None else 3.0)
             if not 1 <= k <= 32 or not 0 <= guidance <= 10:

@@ -59,6 +59,12 @@ class ModelConfig:
     #: embedding matrix doubles as the classifier and nothing about the architecture changes.
     #: The punctuation tagger uses 12 (`dictate/punct.py`). 0 = not a tagger.
     tag_classes: int = 0
+    #: The transformer is a BODY only: the caller always passes `inputs_embeds` and takes
+    #: `return_hidden`, with its own objective outside (the G2 flow model, docs/26, feeds it
+    #: noisy picture patches and reads velocities off its own head). That is the one other
+    #: case where `causal: false` has something to train on, so it is said explicitly rather
+    #: than smuggled in through a fake mask id.
+    embeds_only: bool = False
 
     # ---- long context (see docs/19) ----------------------------------------------------
     #: How to stretch RoPE past the window the weights were trained on. `type: none` is the
@@ -137,11 +143,12 @@ class ModelConfig:
             if self.attn_window is not None:
                 raise ValueError("attn_window is a causal idea; it does not apply with "
                                  "causal: false (see docs/20)")
-            if self.mask_token_id is None and not self.tag_classes:
+            if self.mask_token_id is None and not self.tag_classes and not self.embeds_only:
                 raise ValueError("causal: false with no mask_token_id — a bidirectional "
                                  "model has no objective to train on. Set "
                                  "mask_token_id: <vocab_size - 1> for masked diffusion, or "
-                                 "tag_classes for a tagger.")
+                                 "tag_classes for a tagger, or embeds_only when the caller "
+                                 "brings its own inputs and objective.")
         if self.tag_classes:
             if self.causal:
                 raise ValueError("tag_classes needs causal: false — a tagger labels a word "

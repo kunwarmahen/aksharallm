@@ -46,7 +46,7 @@ def train_code_set(ds) -> set[bytes]:
 def report(model, tokenizer, pg, *, train_ds, k: int = 8, guidance: float = 1.0,
            temperature: float = 1.0, top_k: int | None = None, seed: int = 0,
            device: str = "cpu", captions: list[str] | None = None) -> dict:
-    """Draw `k` pictures for each caption (default: all 60) and score them."""
+    """G1: draw `k` pictures for each caption (default: all 60) and score them."""
     from .codes import flatten
     from .gen import draw
     captions = captions or all_captions()
@@ -54,10 +54,35 @@ def report(model, tokenizer, pg, *, train_ds, k: int = 8, guidance: float = 1.0,
     t0 = time.time()
     pics, codes = draw(model, tokenizer, asked, pg=pg, guidance=guidance,
                        temperature=temperature, top_k=top_k, seed=seed, device=device)
-    seen = train_code_set(train_ds)
     toks = flatten(codes.numpy().reshape(len(asked), pg.books, -1).astype(np.int64),
                    pg.books, tokenizer.cfg.codebook_size)
-    verdicts = [judge(p, fact_of(c)) for p, c in zip(pics, asked)]
+    out = judge_drawings(captions, k, pics, toks, train_code_set(train_ds))
+    return out | {"guidance": guidance, "temperature": temperature, "top_k": top_k,
+                  "seed": seed, "seconds": round(time.time() - t0, 1)}
+
+
+def tokens_of(pictures: np.ndarray, tokenizer, books: int, device: str = "cpu") -> np.ndarray:
+    """Pictures -> the same position-major code tokens G1 writes, so a picture drawn in
+    pixels (G2) can be checked for copies and variety exactly as G1's drawings are."""
+    import torch
+
+    from ..vision.image import to_tensor
+    from .codes import flatten
+    out = []
+    for i in range(0, len(pictures), 256):
+        x = torch.from_numpy(to_tensor(np.asarray(pictures[i:i + 256]))).to(device)
+        idx = tokenizer.encode(x, books)[:, :books]
+        out.append(flatten(idx.reshape(len(x), books, -1).cpu().numpy().astype(np.int64),
+                           books, tokenizer.cfg.codebook_size))
+    return np.concatenate(out)
+
+
+def judge_drawings(captions: list[str], k: int, pics: np.ndarray, toks: np.ndarray,
+                   seen: set[bytes]) -> dict:
+    """The scoring shared by every drawing model: `pics` holds `k` pictures per caption, in
+    caption order; `toks` are their code tokens (for copies and variety)."""
+    asked = [c for c in captions for _ in range(k)]
+    verdicts = [judge(p, fact_of(c)) for p, c in zip(pics, asked, strict=True)]
     copies = [t.astype(np.int64).tobytes() in seen for t in toks]
 
     def group(sel: list[int]) -> dict:
@@ -81,11 +106,9 @@ def report(model, tokenizer, pg, *, train_ds, k: int = 8, guidance: float = 1.0,
                             "all": sum(verdicts[i]["all"] for i in sel) / k,
                             "distinct": distinct, "copies": sum(copies[i] for i in sel),
                             "reads": [verdicts[i]["read"] for i in sel]})
-    return {"k": k, "guidance": guidance, "temperature": temperature, "top_k": top_k,
-            "seed": seed, "captions": captions, "seen": group(rest), "held_out": group(held),
+    return {"k": k, "captions": captions, "seen": group(rest), "held_out": group(held),
             "variety": float(np.mean([p["distinct"] / k for p in per_caption])),
-            "per_caption": per_caption, "seconds": round(time.time() - t0, 1),
-            "_pictures": pics}
+            "per_caption": per_caption, "_pictures": pics}
 
 
 def gallery(result: dict, out_dir: str | Path, per_row: int = 8) -> list[str]:

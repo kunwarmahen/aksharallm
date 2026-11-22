@@ -55,6 +55,7 @@ TRAINERS: tuple[str, ...] = (
     "aksharallm.asr.train",
     "aksharallm.pictures.train",
     "aksharallm.pictures.train_gen",
+    "aksharallm.pictures.train_flow",
 )
 
 #: Every shell script that pre-flights a run and publishes `launch.pid` / `launch.meta`.
@@ -126,6 +127,8 @@ LAUNCHERS: dict[str, dict] = {
     "imggen-shapes64k": {"script": "scripts/audio.sh", "args": ["imggen-shapes64k"]},
     "imggen-shapes64k-pos": {"script": "scripts/audio.sh", "args": ["imggen-shapes64k-pos"]},
     "imggen-shapes64k-pos-long": {"script": "scripts/audio.sh", "args": ["imggen-shapes64k-pos-long"]},
+    # G2, flow matching in pixels (docs/26): a `flow:` config, same launcher.
+    "flow-shapes": {"script": "scripts/audio.sh", "args": ["flow-shapes"]},
     # The speech recogniser (Phase 7, docs/23): same launcher, an `asr:` config.
     "asr-synth": {"script": "scripts/audio.sh", "args": ["asr-synth"]},
     "asr-libri100": {"script": "scripts/audio.sh", "args": ["asr-libri100"]},
@@ -218,7 +221,7 @@ def exec_cmdline(argv: list[str]) -> str:
 #: test for "this is a run and not a settings file". `model:` is a language model, `codec:`
 #: and `audiolm:` are docs/21, `vision:` is docs/22, `asr:` is docs/23. Deliberately not a
 #: YAML parse: `runs()` is called on every poll of every open page.
-_RUN_CONFIG_RE = re.compile(r"^(model|codec|audiolm|vision|asr|speaker|picture|picgen):", re.MULTILINE)
+_RUN_CONFIG_RE = re.compile(r"^(model|codec|audiolm|vision|asr|speaker|picture|picgen|flow):", re.MULTILINE)
 
 
 def _is_run_config(path: Path) -> bool:
@@ -975,7 +978,7 @@ class RunStore:
         if not path.exists():
             return {}
         text = self._text(path, limit=1_000_000) or ""
-        kind = next((k for k in ("asr", "codec", "audiolm", "vision", "speaker", "picture", "picgen")
+        kind = next((k for k in ("asr", "codec", "audiolm", "vision", "speaker", "picture", "picgen", "flow")
                      if re.search(rf"^{k}:", text, re.MULTILINE)), "model")
         try:
             if kind != "model":
@@ -1067,6 +1070,15 @@ class RunStore:
                     f"(guidance)")
             batch = f"{cfg.train.batch_size} pictures"
             sources = [cfg.data.codes, f"tokenizer: {g.tokenizer}"]
+        elif kind == "flow":
+            from ..pictures.train_flow import load_flow_config
+            cfg = load_flow_config(str(path))
+            f = cfg.flow
+            arch = (f"G2 flow matching in pixels: DiT d={f.d_model} L={f.n_layers} H={f.n_heads}, "
+                    f"{f.grid}x{f.grid} patches of {f.patch}px, {f.sample_steps} Euler steps, "
+                    f"caption dropped {f.cfg_drop:.0%} (guidance)")
+            batch = f"{cfg.train.batch_size} pictures"
+            sources = [cfg.data.corpus]
         else:
             from ..vision.train import load_vision_config
             cfg = load_vision_config(str(path))

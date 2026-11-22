@@ -13,8 +13,12 @@ G1, a sentence to a picture:
     python -m aksharallm.pictures gen-report imggen-shapes --guidance 3   # all 60 captions, judged
     python -m aksharallm.pictures gen-compare A.json B.json  # two G1 reports, paired
 
+G2, flow matching in pixels: `draw` and `gen-report` take a G2 run the same way
+(`flow-shapes`), and `--steps` sets its number of Euler steps.
+
 Training is `scripts/audio.sh imgtok-shapes` (or `python -m aksharallm.pictures.train
-configs/imgtok-shapes.yaml`), and `scripts/audio.sh imggen-shapes` for G1.
+configs/imgtok-shapes.yaml`), `scripts/audio.sh imggen-shapes` for G1, and
+`scripts/audio.sh flow-shapes` for G2.
 
 Read with: docs/26-pictures.md -- the chapter this implements; it ends with the order to read
 these files in.
@@ -169,35 +173,29 @@ def cmd_codes(args) -> int:
     return 0
 
 
-def _load_g1(name: str, device: str):
-    from .gen import load_generator
-    from .train import load_tokenizer
+def _load_drawer(name: str, device: str):
+    from .drawer import load_drawer
     root = _root()
-    path = find_checkpoint(name, root)
-    model, pg, blob = load_generator(path, device)
-    tok = Path(pg.tokenizer)
-    tokenizer, _ = load_tokenizer(tok if tok.is_absolute() else root / tok, device)
-    return path, model, pg, blob, tokenizer
+    return load_drawer(find_checkpoint(name, root), root, device)
 
 
 def cmd_draw(args) -> int:
+    import numpy as np
+
     from ..vision.image import write_png
     from .codes import fact_of
-    from .gen import draw
     from .reader import judge
-    device = _device(args.device)
-    path, model, pg, blob, tokenizer = _load_g1(args.checkpoint, device)
-    pics, _ = draw(model, tokenizer, [args.caption] * args.n, pg=pg, guidance=args.guidance,
-                   temperature=args.temperature, top_k=args.top_k, seed=args.seed, device=device)
+    d = _load_drawer(args.checkpoint, _device(args.device))
+    pics = d.draw([args.caption] * args.n, guidance=args.guidance, temperature=args.temperature,
+                  top_k=args.top_k, seed=args.seed, steps=args.steps)
     want = fact_of(args.caption)
     verdicts = [judge(p, want) for p in pics]
     ok = sum(v["all"] for v in verdicts)
-    print(f"{path} (step {blob.get('step')}): {args.n} x {args.caption!r} at guidance "
+    print(f"{d.path} ({d.kind}, step {d.step}): {args.n} x {args.caption!r} at guidance "
           f"{args.guidance:g}: the reader agrees on {ok} of {args.n}")
     for i, v in enumerate(verdicts):
         r = v["read"]
         print(f"  #{i}: {'ok   ' if v['all'] else 'WRONG'} read {r['count']} {r['colour']} {r['shape']}")
-    import numpy as np
     gap = np.full((64, 3, 3), 255, dtype=np.uint8)
     row = np.concatenate(sum(([t, gap] for t in pics), [])[:-1], axis=1)
     out = Path(args.out or _root() / RESULTS / "draw" / (args.caption.replace(" ", "-") + ".png"))
@@ -208,23 +206,21 @@ def cmd_draw(args) -> int:
 
 
 def cmd_gen_report(args) -> int:
-    from .codes import CodesDataset
-    from .score import gallery, public, report
+    from .score import gallery, public
     root = _root()
-    device = _device(args.device)
-    path, model, pg, blob, tokenizer = _load_g1(args.checkpoint, device)
-    codes = (blob.get("config") or {}).get("data", {}).get("codes")
-    train_ds = CodesDataset(root / codes, books=pg.books, split="train")
-    r = report(model, tokenizer, pg, train_ds=train_ds, k=args.k, guidance=args.guidance,
-               temperature=args.temperature, top_k=args.top_k, seed=args.seed, device=device)
-    run = path.parent.name
-    stem = f"gen-{run}-step{blob.get('step')}-g{args.guidance:g}"
+    d = _load_drawer(args.checkpoint, _device(args.device))
+    r = d.report(k=args.k, guidance=args.guidance, temperature=args.temperature,
+                 top_k=args.top_k, seed=args.seed, steps=args.steps)
+    run = d.path.parent.name
+    stem = f"gen-{run}-step{d.step}-g{args.guidance:g}"
     if args.k != 8:                       # never overwrite the default k=8 report
         stem += f"-k{args.k}"
     if args.temperature != 1.0 or args.top_k or args.seed:
         stem += f"-t{args.temperature:g}-k{args.top_k or 0}-s{args.seed}"
+    if args.steps:
+        stem += f"-n{args.steps}"
     names = gallery(r, root / RESULTS / stem)
-    print(f"{path} (step {blob.get('step')}): {args.k} pictures for each of "
+    print(f"{d.path} ({d.kind}, step {d.step}): {args.k} pictures for each of "
           f"{len(r['captions'])} captions, guidance {args.guidance:g}, {r['seconds']}s\n")
     print("               n    count  colour   shape     all  copies")
     for label, key in (("seen", "seen"), ("held out", "held_out")):
@@ -236,8 +232,8 @@ def cmd_gen_report(args) -> int:
     print(f"\n  variety: {r['variety'] * 100:.0f}% of the {args.k} pictures per caption are distinct")
     print("  held-out captions: " + "  ".join(
         f"{p['caption']} {p['all'] * 100:.0f}%" for p in r["per_caption"] if p["held_out"]))
-    out = public(r) | {"checkpoint": str(path), "run": run, "step": blob.get("step"),
-                       "books": pg.books, "gallery": [f"{stem}/{n}" for n in names]}
+    out = public(r) | {"checkpoint": str(d.path), "run": run, "step": d.step,
+                       "books": d.books, "gallery": [f"{stem}/{n}" for n in names]}
     f = root / RESULTS / f"{stem}.json"
     f.write_text(json.dumps(out, indent=1))
     print(f"\nwrote {f}  (gallery: one PNG per caption)")
@@ -288,7 +284,7 @@ def main(argv=None) -> int:
     for name, fn, hlp in (("draw", cmd_draw, "G1: draw pictures for one caption"),
                           ("gen-report", cmd_gen_report, "G1: draw every caption and judge it")):
         s = sub.add_parser(name, help=hlp)
-        s.add_argument("checkpoint", help="a .pt, or a G1 run name")
+        s.add_argument("checkpoint", help="a .pt, or a G1 / G2 run name")
         if name == "draw":
             s.add_argument("caption", help="three words: count colour shape, e.g. 'two red circles'")
             s.add_argument("--n", type=int, default=8)
@@ -298,6 +294,7 @@ def main(argv=None) -> int:
         s.add_argument("--guidance", type=float, default=3.0, help="1 = no guidance")
         s.add_argument("--temperature", type=float, default=1.0)
         s.add_argument("--top-k", type=int, default=None)
+        s.add_argument("--steps", type=int, default=None, help="G2: Euler steps (default: the config's)")
         s.add_argument("--seed", type=int, default=0)
         s.add_argument("--device", default="cpu", help="cpu (default), cuda or auto")
         s.set_defaults(fn=fn)

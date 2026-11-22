@@ -204,7 +204,7 @@ def test_the_portal_draws_only_from_a_g1_checkpoint_and_known_words(tmp_path):
     from aksharallm.portal.jobs import JobError
     from aksharallm.portal.pictures import Pictures, PicturesError
     p = Pictures(tmp_path)
-    with pytest.raises(PicturesError, match="not a G1"):
+    with pytest.raises(PicturesError, match="not a drawing model"):
         p.draw({"checkpoint": "checkpoints/tiny/ckpt_best.pt", "caption": "two red circles"})
     with pytest.raises(JobError):
         p.start({"kind": "gen-report", "checkpoint": "checkpoints/tiny/ckpt_best.pt"})

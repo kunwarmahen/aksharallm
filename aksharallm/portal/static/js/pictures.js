@@ -73,7 +73,7 @@ async function draw() {
       seed: Number($('#pc-seed').value) || 0,
     });
     $('#pc-draw-note').innerHTML = `“${escHtml(r.caption)}”: the reader agrees with <b>${r.agree} of `
-      + `${r.pictures.length}</b> pictures (step ${fmt.int(r.step)})`
+      + `${r.pictures.length}</b> pictures (${escHtml(r.kind || 'G1')}, step ${fmt.int(r.step)})`
       + (r.held_out ? ' — <b>a held-out combination</b>: no training picture shows it' : '');
     $('#pc-drawn').innerHTML = r.pictures.map((p, i) => `<figure class="${p.ok ? 'ok' : 'bad'}">`
       + `<img src="${p.png}" alt="drawing ${i + 1} of ${escHtml(r.caption)}">`
@@ -159,8 +159,8 @@ async function load() {
   await showGenReport($('#pc-gen-report').value || null);
   $('#pc-gcompare').disabled = pc.genReports.length < 2;
   const gens = res.generators || [];
-  const genOpts = gens.map((g) => `<option value="${escHtml(g.rel)}">${escHtml(g.rel)} — step `
-    + `${fmt.int(g.step)}, ${g.books} codebooks</option>`).join('');
+  const genOpts = gens.map((g) => `<option value="${escHtml(g.rel)}">${escHtml(g.kind || 'G1')} · `
+    + `${escHtml(g.rel)} — step ${fmt.int(g.step)}</option>`).join('');
   for (const id of ['#pc-gen', '#pc-gen-job']) {
     const keep = $(id).value;
     $(id).innerHTML = genOpts;

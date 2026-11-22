@@ -76,6 +76,9 @@
         a training picture: it is drawn fresh each time, and the reader checks it.
         <strong>Guidance</strong> pushes the drawing towards the caption (1 = none; 3 is the
         usual setting): higher obeys the words more and varies less.
+        Two kinds of model can draw here: <strong>G1</strong> writes the code numbers one at a
+        time, <strong>G2</strong> starts from pure noise and clears the whole picture in 50
+        small steps (flow matching, the way Stable Diffusion 3 works).
         <strong>Purple triangles</strong> are never shown in training, though both words are,
         with other partners: drawing one means the model learned what the words mean, not
         which pictures go with which caption.

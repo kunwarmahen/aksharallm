@@ -17,6 +17,7 @@
 #   scripts/audio.sh asr-libri100     # ...on LibriSpeech train-clean-100 (docs/23)
 #   scripts/audio.sh imgtok-shapes    # the picture tokenizer (docs/26): not audio, same contract
 #   scripts/audio.sh imggen-shapes    # G1, caption -> picture codes (docs/26), same contract
+#   scripts/audio.sh flow-shapes      # G2, flow matching in pixels (docs/26), same contract
 #
 # Env knobs (same names and meanings as phase2.sh):
 #   STOP_AFTER=500      train 500 steps this launch, then save and exit
@@ -71,8 +72,12 @@ elif grep -qE '^picgen:' "$CFG"; then
     # G1 (docs/26): a transformer from a caption to the tokenizer's codes.
     TRAINER=aksharallm.pictures.train_gen
     KIND=picgen
+elif grep -qE '^flow:' "$CFG"; then
+    # G2 (docs/26): flow matching in pixels. Reads a picture corpus like the tokenizer does.
+    TRAINER=aksharallm.pictures.train_flow
+    KIND=flow
 else
-    echo "$CFG has no 'codec:', 'audiolm:', 'asr:', 'speaker:', 'picture:' or 'picgen:' section -- not an audio run." >&2
+    echo "$CFG has no 'codec:', 'audiolm:', 'asr:', 'speaker:', 'picture:', 'picgen:' or 'flow:' section -- not an audio run." >&2
     echo "For a language model over text, use scripts/phase2.sh or scripts/experiment.sh." >&2
     exit 2
 fi
@@ -186,13 +191,16 @@ for c in corpora:
 EOF
 )
 CORPUS=$(echo "$CORPORA" | head -1)
-if [ "$KIND" = picture ]; then
+if [ "$KIND" = picture ] || [ "$KIND" = flow ]; then
     # A picture corpus is images.bin + manifest.json (vision/image.py), and the held-out
     # combination is scored on every sample, so both are made here if missing (seconds).
     if [ ! -s "$CORPUS/images.bin" ]; then
         if [ "$CORPUS" = "data/vision/shapes" ]; then
             echo "    $CORPUS is missing. Rendering the shapes corpus (~10 s)..."
             $PY -m aksharallm.vision corpus
+        elif [ "$CORPUS" = "data/vision/shapes64k" ]; then
+            echo "    $CORPUS is missing. Rendering 64,000 shapes pictures (~15 s)..."
+            $PY -m aksharallm.vision corpus --out "$CORPUS" --images 64000 && rm -rf "$CORPUS-holdout"
         else
             echo "    ERROR: $CORPUS/images.bin does not exist." >&2
             exit 1
@@ -270,6 +278,7 @@ else
     [ "$KIND" = asr ] && SMOKE_EXTRA=()   # a recogniser writes no audio samples
     [ "$KIND" = picture ] && SMOKE_EXTRA=(-o train.sample_every=0 -o train.sample_images=0)
     [ "$KIND" = picgen ] && SMOKE_EXTRA=(-o train.sample_every=0 -o train.sample_k=0)
+    [ "$KIND" = flow ] && SMOKE_EXTRA=(-o train.sample_every=0 -o train.sample_k=0)
     $PY -m $TRAINER "$CFG" \
         -o train.max_steps=30 -o train.out_dir=/tmp/aksharallm_audio_smoke \
         -o train.resume=null -o train.eval_every=0 "${SMOKE_EXTRA[@]}" \
@@ -343,7 +352,7 @@ elif [ "$KIND" = asr ]; then
     echo "    measure: $PY -m aksharallm.asr eval $(basename "$RUN_DIR") --corpus data/asr/test-clean"
 elif [ "$KIND" = picture ]; then
     echo "    measure: $PY -m aksharallm.pictures report $(basename "$RUN_DIR")"
-elif [ "$KIND" = picgen ]; then
+elif [ "$KIND" = picgen ] || [ "$KIND" = flow ]; then
     echo "    measure: $PY -m aksharallm.pictures gen-report $(basename "$RUN_DIR") --guidance 3"
     echo "    draw:    $PY -m aksharallm.pictures draw $(basename "$RUN_DIR") \"two red circles\""
 fi

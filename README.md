@@ -110,7 +110,7 @@ grep is one line away from the prose. `tests/test_docs.py` fails if either point
 | 13 | [Evaluation](docs/13-eval.md) | Is the model actually any good? MMLU/ARC/HellaSwag/PIQA scored by log-likelihood, GSM8K, HumanEval executed for real, an LLM-judge — and why 25% on MMLU is not a failure |
 | 14 | [Synthetic data](docs/14-synthetic-data.md) | Making the training set with a local teacher instead of downloading it: a seed grid instead of a temperature, tests that are **executed twice**, near-duplicate detection, and why the rejection tally is the quality signal |
 | 15 | [Mixture of experts](docs/15-moe.md) | More parameters than you compute with: a router, N experts, top-k per token — the load-balancing loss, why upcycling is an identity at init, and the collapse that is invisible in the loss curve |
-| 16 | [The learning path](docs/16-learning-path.md) | The repo as a course: thirty lessons that each end in breaking real code and watching a real test go red — and why a lesson only counts once the check has been red *and then* green |
+| 16 | [The learning path](docs/16-learning-path.md) | The repo as a course: thirty-one lessons that each end in breaking real code and watching a real test go red — and why a lesson only counts once the check has been red *and then* green |
 | 17 | [Serving](docs/17-serving.md) | Turning a checkpoint into something you use: a paged KV cache so memory is bounded by what is *used*, continuous batching so thirty conversations share one pass over the weights (50 → 272 tok/s), and an OpenAI-shaped API so existing clients work |
 | 18 | [Looking inside](docs/18-interpretability.md) | Attention maps recomputed from the layer's own inputs, the logit lens (*when* did it decide?), activation patching (which activation actually carries the fact), and a sparse autoencoder that pulls apart superposition |
 | 19 | [Long context](docs/19-long-context.md) | Reading further than the weights were trained for, without retraining anything: RoPE scaling (linear/NTK/YaRN), sliding windows and why they need attention sinks, and the two measurements — loss by position and needle-in-a-haystack — that disagree |
@@ -120,7 +120,7 @@ grep is one line away from the prose. `tests/test_docs.py` fails if either point
 | 23 | [Speech recognition](docs/23-speech-recognition.md) | Dictation that is still right on day two: a from-scratch Conformer trained with a from-scratch CTC (bit-identical to PyTorch's in float64), measured against a published list of what a dictation app gets wrong once used — and the first check found our own model writing words on silence until it was shown clips with nothing to say. Then the dictation layer: a punctuation tagger that cannot write a word of its own, corrections that teach it your names (8% → 54% after one fix), and a keyboard shortcut that types into any app |
 | 24 | [Distillation](docs/24-distillation.md) | A small model taught by a big one: the teacher's whole next-token distribution as a second target, softened by a temperature and scaled by T² so the temperature does not quietly turn it down. Only between models that share a tokenizer, checked by the file's contents rather than its size. A fourth objective in the one training loop, with the logits computed in recomputed chunks because they, not the weights, are the memory |
 | 25 | [A world model](docs/25-world-model.md) | The transformer predicting the next frame of a game we wrote (push boxes onto goals) from the frames before it and an action. Every cell is a token, so there is no codec and no new trainer. Scored exactly, because we know the rules: whole frames by outcome against what copying the last frame would score, and open-loop rollouts that count impossible frames |
-| 26 | [Making pictures](docs/26-pictures.md) | G0 and G1 of the picture line: an image tokenizer that turns a 64×64 picture into a grid of integers and back, the audio codec in 2-D with its quantizer imported unchanged. Scored by reading every reconstruction back with a rule-based judge that is exact on the originals and strict enough to see a blur, because pixel error barely notices a square repainted as a circle; then a transformer that draws "two red circles" from those codes, with classifier-free guidance, judged on captions it never saw |
+| 26 | [Making pictures](docs/26-pictures.md) | G0, G1 and G2 of the picture line: an image tokenizer that turns a 64×64 picture into a grid of integers and back, the audio codec in 2-D with its quantizer imported unchanged. Scored by reading every reconstruction back with a rule-based judge that is exact on the originals and strict enough to see a blur, because pixel error barely notices a square repainted as a circle; then a transformer that draws "two red circles" from those codes, with classifier-free guidance, judged on captions it never saw; then flow matching, noise moved to a picture in 50 straight steps by the same transformer over patches |
 
 ---
 
@@ -141,7 +141,8 @@ aksharallm/
 │   ├── asr-libri460.yaml   the same, on 460 h (train-clean-100 + 360)
 │   ├── punct.yaml        the dictation punctuation tagger (a third pretraining objective)
 │   ├── imgtok-shapes.yaml  the image tokenizer: 64x64 shapes -> 8x8 x 4 codes (docs/26)
-│   └── imggen-shapes.yaml  G1: "two red circles" -> those codes, with guidance (docs/26)
+│   ├── imggen-shapes.yaml  G1: "two red circles" -> those codes, with guidance (docs/26)
+│   └── flow-shapes.yaml  G2: noise -> picture by flow matching, in pixels (docs/26)
 ├── aksharallm/
 │   ├── config.py         dataclass config loading + CLI overrides
 │   ├── tokenizer/        byte-level BPE training and the chat template
@@ -202,7 +203,9 @@ aksharallm/
 │   │   ├── measure.py        PSNR + the reader at each codebook count, paired compare
 │   │   ├── codes.py          the corpus as codes; one vocabulary for words and codes
 │   │   ├── gen.py            G1: caption -> codes, slot mask, classifier-free guidance
-│   │   └── score.py          G1 judged: 60 captions, held-out ones, copies, variety
+│   │   ├── score.py          drawings judged: 60 captions, held-out ones, copies, variety
+│   │   ├── flow.py           G2: flow matching in pixels, the transformer over patches
+│   │   └── drawer.py         one door for G1 and G2: draw, score, report
 │   ├── quant/            int8/int4/NF4 from scratch — see docs/11
 │   ├── lora/             LoRA + QLoRA adapters from scratch — see docs/12
 │   │   ├── qtensor.py        group scales, zero-points, 4-bit packing
@@ -1005,7 +1008,10 @@ the colours triangles were trained in, at a small cost on seen captions (66% →
 the bottleneck (off by one), and no drawing copies a training picture. **Counting fixed the
 same day (GPU, four arms one key apart):** 8× the pictures is the fix (count 66% → 83%, the
 unseen triangles 15% → 69% without guidance), a (row, column) slot embedding adds ~3 points,
-and 30,000 steps reach 89% on seen captions.
+and 30,000 steps reach 89% on seen captions. **G2, flow matching in pixels, is built**: the
+same transformer run bidirectionally over picture patches moves noise to a picture in 50
+Euler steps, steered by the caption; queued to train once the night queue finishes, scored
+against G1 drawing for drawing.
 - **The next four, built 2026-11-22 and queued for the 11-23 night**: recall capacity (the
   wide models hold all 64 keys the vocabulary has; narrow arms with 16-wide heads ask where a
   DeltaNet memory runs out, docs/19); the hybrid at ~101M against small-student-muon, with the

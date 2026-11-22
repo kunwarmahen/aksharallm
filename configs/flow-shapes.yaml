@@ -1,0 +1,51 @@
+# G2 of the picture line (docs/26 § "G2: drawing by flow matching"): a diffusion transformer
+# moves pure noise to a 64x64 picture in 50 straight Euler steps, steered by the caption, in
+# pixels. Same corpus, reader and 60 captions as G1 (imggen-shapes64k-pos-long), so the two
+# are compared drawing for drawing. Trained with 10% of captions dropped for guidance.
+#
+#   python -m aksharallm.vision corpus --out data/vision/shapes64k --images 64000   # if missing
+#   scripts/audio.sh flow-shapes                                  # the non-text launcher
+#   python -m aksharallm.pictures gen-report flow-shapes --guidance 3
+#   python -m aksharallm.pictures draw flow-shapes "two red circles"
+
+name: flow-shapes
+
+flow:
+  image_size: 64
+  patch: 4                # 16x16 = 256 patch tokens
+  d_model: 384
+  n_layers: 8
+  n_heads: 6
+  dropout: 0.0
+  cfg_drop: 0.1
+  sample_steps: 50
+  tokenizer: checkpoints/imgtok-shapes/ckpt_best.pt   # only to score copies / variety
+  books: 2
+
+data:
+  corpus: data/vision/shapes64k
+  codes: data/pictures/codes-imgtok-shapes-64k
+
+optim:
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 1000
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.99
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/flow-shapes
+  batch_size: 64
+  max_steps: 30000
+  eval_every: 1000
+  eval_batches: 8
+  sample_every: 5000
+  sample_k: 2
+  sample_guidance: 3.0
+  ckpt_every: 2000
+  log_every: 50
+  seed: 1337
+  resume: auto

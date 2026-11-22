@@ -375,7 +375,7 @@ component of it, and the diff is the lesson.
 |---|---|---|
 | 1 | [`configs/tiny-diffusion.yaml`](../configs/tiny-diffusion.yaml) | four fields different from `configs/tiny.yaml`. Diff them — that is the whole experiment |
 | 2 | [`diffusion/corrupt.py`](../aksharallm/diffusion/corrupt.py) | `corrupt`, then `diffusion_loss`. Four lines of arithmetic; the docstring is why each one is that way. Note what `stats` separates: the weighted loss and the interpretable `ce_masked` |
-| 3 | [`aksharallm/config.py`](../aksharallm/config.py) | `causal`, `mask_token_id`, `is_diffusion`, `DiffusionConfig` — and the `__post_init__` refusals (a sliding window, or `causal: false` with no mask id) |
+| 3 | [`aksharallm/config.py`](../aksharallm/config.py) | `causal`, `mask_token_id`, `is_diffusion`, `DiffusionConfig` — and the `__post_init__` refusals (a sliding window, or `causal: false` with no mask id, no tagger classes and no `embeds_only`; the last is the G2 picture model, chapter 26, which feeds the transformer its own inputs and owns its objective) |
 | 4 | [`model/transformer.py`](../aksharallm/model/transformer.py) | `self.causal` in `Attention.__init__`, the three places it reaches (`flash_attention(causal=)`, `is_causal=`, the cache refusal in `forward`). That is the entire architectural change |
 | 5 | [`train/pretrain.py`](../aksharallm/train/pretrain.py) → `ARObjective`, `objective_for` | the seam. Then find the four call sites in `main()` and confirm the loop never asks which objective it has |
 | 6 | [`diffusion/objective.py`](../aksharallm/diffusion/objective.py) | the other implementation of that seam, including `check()` — the vocabulary rule that makes the two paradigms' checkpoints incompatible |

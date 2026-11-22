@@ -746,6 +746,16 @@ In the portal: **Pictures → From a sentence to a picture** (pick three words, 
 The best G1 so far trains on 64,000 pictures with a slot embedding (`scripts/audio.sh
 imggen-shapes64k-pos-long`; the corpus and codes commands are in chapter 26).
 
+The third piece (**G2**) draws the way Stable Diffusion 3 does: pure noise moved to a picture in
+50 small steps by **flow matching**, with the same transformer run over picture patches, the
+same judge and the same captions, so it compares drawing for drawing with G1:
+
+```bash
+scripts/audio.sh flow-shapes                                          # train G2
+python -m aksharallm.pictures gen-report flow-shapes --guidance 3 --k 32
+python -m aksharallm.pictures draw flow-shapes "three purple triangles"
+```
+
 **How you know it worked:** most seen captions drawn right, the four purple-triangle captions
 (never in training) drawn right too, and few drawings that are code-for-code copies of a
 training picture. 📖 [chapter 26 — pictures](26-pictures.md)

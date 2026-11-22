@@ -11,7 +11,7 @@ circles" and writes those integers:
 flowchart LR
     G0["G0 image tokenizer<br/>(built)"] --> G1["G1 a caption to<br/>the codes (built)"]
     G0 --> G3["G3 latent diffusion"]
-    G2["G2 diffusion in pixels"] --> G3
+    G2["G2 flow matching<br/>in pixels (built)"] --> G3
     G1 --> G4["G4 text to image"]
     G3 --> G4
     G4 --> G5["G5 short videos<br/>of moving shapes"]
@@ -157,6 +157,11 @@ python -m aksharallm.vision corpus --out data/vision/shapes64k --images 64000
 python -m aksharallm.pictures codes imgtok-shapes --books 2 --corpus data/vision/shapes64k \
     --out data/pictures/codes-imgtok-shapes-64k
 scripts/audio.sh imggen-shapes64k-pos-long                      # the best G1 so far
+
+# G2, flow matching in pixels (same 64k corpus)
+scripts/audio.sh flow-shapes
+python -m aksharallm.pictures gen-report flow-shapes --guidance 3 --k 32   # --steps N to vary
+python -m aksharallm.pictures draw flow-shapes "three purple triangles"
 scripts/audio.sh imggen-shapes                                  # train (encodes the codes if missing)
 python -m aksharallm.pictures draw imggen-shapes "two red circles" --guidance 3
 python -m aksharallm.pictures gen-report imggen-shapes --guidance 3   # all 60 captions, judged
@@ -331,6 +336,63 @@ one too few. From the first run to this one, count went **65.6% → 89.1%** and 
 combination **14.8% → 70.3%** without guidance. It is the model the portal's Draw now picks
 first (the newest checkpoint).
 
+## G2: drawing by flow matching
+
+G1 writes a picture one code at a time. **G2 starts from pure noise and moves the whole picture
+towards a drawing**, in 50 small steps, steered by the caption at every one: the way Stable
+Diffusion 3, Flux and the Veo/Sora family generate. It works in pixels (the latent version is
+G3), on the same 64,000 pictures, and is scored by the same reader on the same 60 captions,
+so G1 and G2 compare drawing for drawing.
+
+```mermaid
+flowchart LR
+    N["noise<br/>x0 ~ N(0, I)"] -->|"50 Euler steps<br/>x += v / 50"| P["picture x1"]
+    subgraph step["one step at time t"]
+        X["x_t (noisy picture)"] --> T["transformer, causal: false<br/>[time] [3 words] [256 patches]"]
+        T --> V["velocity v<br/>(where to move each pixel)"]
+    end
+```
+
+**The training rule is four lines** (`pictures/flow.py`, `flow_loss`):
+
+```
+x0 ~ N(0, I)                     noise
+x_t = (1 - t) x0 + t x1          a straight line from noise (t = 0) to a training picture (t = 1)
+target = x1 - x0                 the direction along that line: its velocity
+loss = | model(x_t, t, caption) - target |^2
+```
+
+This is **flow matching** (rectified flow). There is no noise schedule to tune (DDPM's betas and
+alphas), and because the paths are straight, drawing takes tens of steps instead of a thousand.
+Times are drawn from a logit-normal (as Stable Diffusion 3 does): most training happens where
+the picture is half formed, which is where the decisions are.
+
+**The model is the same transformer a third time.** A picture is cut into 16×16 patches of 4×4
+pixels; each patch becomes a token (plus a row and column embedding), and the time step and
+the three caption words become four more tokens in front. `model/transformer.py` runs over
+them unchanged with `causal: false` (every patch sees every other patch, as in masked
+diffusion, chapter 20), and a linear head reads a velocity off each patch's hidden state. The
+caption enters **in context**, as tokens, not through a new kind of block (DiT's adaLN): the
+transformer is told nothing. The config says so in a new key, `embeds_only: true`, because a
+bidirectional model with no mask token used to be refused as having nothing to train on, and
+here the objective is outside it.
+
+| choice | why |
+|---|---|
+| straight paths, predict velocity | the simplest objective that samples in few steps; the loss is a plain MSE |
+| output layer initialised to zero | step 0 predicts zero velocity, so the first loss is a known number, 1 + mean(x1²) ≈ 1.72 here |
+| logit-normal times | little training at t ≈ 0 (pure noise) and t ≈ 1 (finished picture), where there is nothing to learn |
+| fixed seed for val | val uses the same pictures, noise and times every time, so "best" is never the kindest noise |
+| guidance on velocities | `v = v_uncond + w (v_cond − v_uncond)`, the same line as G1's, on a different quantity |
+| copies and variety through the tokenizer | drawn pixels are encoded by G0 and checked against the training pictures' codes, exactly as G1's drawings are |
+
+`pictures/drawer.py` is one door for both models: `draw`, `gen-report` and the portal's Draw
+panel load a G1 or a G2 checkpoint the same way, and `gen-compare` pairs a G2 report against a
+G1 one when they drew the same captions with the same k and seed.
+
+**MEASURED** — queued (`logs/queue/g2.sh`) to run when the night queue has finished; 14.5M
+parameters, ~0.1–0.2 s/step on the card, 30,000 steps.
+
 ## Traps to keep
 
 1. **A score that borrows a name it does not earn.** There is no FID here: FID needs a
@@ -358,7 +420,10 @@ first (the newest checkpoint).
 | 8 | [`pictures/gen.py`](../aksharallm/pictures/gen.py) → `sample`, `draw`, `PicGenTransformer` | the slot mask, classifier-free guidance over one shared KV cache, decoding through the tokenizer; the (row, column, codebook) slot embedding, taken from the cache's offset while decoding |
 | 9 | [`pictures/train_gen.py`](../aksharallm/pictures/train_gen.py) → `main` | the same trainer contract; refuses codes from a different tokenizer; draws all 60 captions at each sample |
 | 10 | [`pictures/score.py`](../aksharallm/pictures/score.py) → `report`, `compare` | seen vs held-out captions, copies of training pictures, variety, per-drawing verdicts paired |
-| 11 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
+| 11 | [`pictures/flow.py`](../aksharallm/pictures/flow.py) → `flow_loss`, `sample`, `FlowModel` | G2: the straight path and its velocity, Euler sampling with guidance, the transformer run bidirectionally over [time, words, patches] |
+| 12 | [`pictures/train_flow.py`](../aksharallm/pictures/train_flow.py) → `evaluate`, `main` | the trainer contract again; val on fixed pictures, noise and times |
+| 13 | [`pictures/drawer.py`](../aksharallm/pictures/drawer.py) → `load_drawer` | one door for G1 and G2: draw, score, copies through the tokenizer |
+| 14 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
 
 Tests: `tests/test_pictures.py`. They cover the reader on every count × colour × shape, the
 reader seeing blur and recolouring, the codebook prefix ignoring later codebooks, batch
@@ -379,3 +444,12 @@ The slot embedding adds three more: the slot names the right cell and codebook, 
 matches the full forward (red if the offset is taken as 0, if the slot is off by one, or if row
 and column are swapped), and a `pos2d` checkpoint round-trips.
 [Lesson 30](lessons/30-guidance.md) breaks guidance.
+
+`tests/test_flow.py` covers G2 with exact oracles: patches cut and put back in raster order; a
+velocity field that knows the picture must be integrated onto it exactly; the true velocity
+scores zero loss and its negative does not; guidance must combine a model that says +0.1 with
+a caption and −0.1 without in the right proportions; patch 0 must change when only the last
+patch does (bidirectional); val loss is repeatable; and the drawing door and the portal take a
+G2 checkpoint. Six mutants were checked red: times one step late, the target's sign flipped,
+guidance halves swapped, a causal transformer, stepping backwards, and patches out of order.
+[Lesson 31](lessons/31-flow-matching.md) flips the velocity.

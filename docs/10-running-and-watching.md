@@ -668,8 +668,8 @@ The panels, in plain terms:
 - **Pictures** — the picture line. G0, the tokenizer: each report's table (PSNR and what the
   rule-based reader sees at 1, 2 and 4 codebooks, with the originals' row first as the
   reader's control, and the held-out purple triangles), codebook use, a gallery of originals
-  beside their reconstructions, two reports paired picture by picture. G1, a sentence to a
-  picture: **Draw** (pick count, colour and shape and a guidance; it draws on the CPU and
+  beside their reconstructions, two reports paired picture by picture. G1 (codes, one at a
+  time) and G2 (flow matching in pixels) draw from a sentence, listed together: **Draw** (pick count, colour and shape and a guidance; it draws on the CPU and
   borders each picture green or red by the reader's verdict), **Every caption, judged** (seen
   vs held-out captions, copies, variety, a gallery with the held-out captions first) and two
   G1 reports paired. Jobs: a report, the reader check, encoding the corpus for G1, a G1 report
@@ -678,7 +678,7 @@ The panels, in plain terms:
   reports paired per problem, **Ask it** with the full transcript, and jobs to write the
   data or score a model on problem set v1, v2 or `rl` (GRPO's twelve kinds plus v2's four
   held out). See [doc 6](06-posttraining.md) § "Tool use".
-- **Learn** — the repo as a course ([doc 16](16-learning-path.md)). Thirty lessons, each
+- **Learn** — the repo as a course ([doc 16](16-learning-path.md)). Thirty-one lessons, each
   one *read the doc → open the file → break it → watch a real pytest node go red*. Lessons
   unlock as their prerequisites are finished, a locked one says what is missing, and a lesson
   completes only once its check has been **red and then green** — the check passes on clean
