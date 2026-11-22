@@ -55,6 +55,14 @@ it has `NULL`. Then `w = 1` and `w = 3` must give 5, and `w = 0` must give 7.
 > ignore the caption more. Only a measurement that knows what the caption asked for (the
 > reader, here) would ever notice, and a gallery of nice-looking shapes would not.
 
+## What it did on the real model
+
+On `imggen-shapes` (docs/26 § Measured), without guidance the never-seen "purple triangles"
+came out the right shape in the colours triangles were trained in: 35% purple, the rest red,
+blue or yellow. At guidance 3 they were 84% purple and the held-out score doubled (21.9% →
+43.0%, paired p 0.0007), while captions it already knew fell a little (66.2% → 62.0%,
+p 0.006). Guidance 5 broke the shapes.
+
 ## Run it yourself
 
 ```bash

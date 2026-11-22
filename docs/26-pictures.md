@@ -228,7 +228,50 @@ make (4 counts × 5 colours × 3 shapes), reads every one, and reports:
 Every (caption, sample) keeps its verdict, and sampling is seeded, so two reports (two guidance
 settings, two checkpoints) pair drawing by drawing: `pictures gen-compare A.json B.json`.
 
-**MEASURED** — filled in below after the run.
+### Measured: the first run (2026-11-22)
+
+`imggen-shapes`, 5.09M parameters, 8,000 steps of 64 pictures, trained **on the CPU** (the
+launcher refused to share the card with a queued run; ~2–3 s/step, 4 h). Step 0 read 6.99
+against ln 1042 = 6.95.
+
+**The val loss and the drawings disagree.** Val loss bottomed at **1.946 at step 2,000** and
+then rose steadily to 2.52 at step 7,999 while the training loss kept falling: on likelihood,
+7,600 pictures are memorised by 5M parameters. But the drawings did not get worse. Paired on
+the same 480 drawings, step 2,000 and step 7,999 are indistinguishable (guidance 3: 83 vs 84
+discordant, p 1.0; guidance 1: p 0.50), and neither copies a single training picture. Val
+loss scores every possible picture; the sampler only ever visits the likely ones.
+
+Every number below is from `ckpt_best.pt` (step 2,000), 8 drawings per caption (32 where
+marked), seed 0:
+
+| guidance | captions | n | count | colour | shape | all three | copies |
+|---|---|---|---|---|---|---|---|
+| 1 (none) | seen | 1,792 | 68.8% | 98.0% | 98.7% | **66.2%** | 0% |
+| 1 (none) | held out | 128 | 68.8% | **35.2%** | 94.5% | **21.9%** | 0% |
+| 3 | seen | 1,792 | 65.2% | 98.9% | 94.9% | **62.0%** | 0% |
+| 3 | held out | 128 | 57.0% | **84.4%** | 90.6% | **43.0%** | 0% |
+| 5 | seen | 448 | 47.5% | 98.0% | 79.7% | 36.8% | 0% |
+| 5 | held out | 32 | 37.5% | 87.5% | 84.4% | 21.9% | 0% |
+
+(32 per caption for guidance 1 and 3; variety is 100% everywhere: no caption ever drew the
+same picture twice.)
+
+**Guidance is what makes the unseen combination purple.** Without it, "three purple triangles"
+comes out as triangles of the right shape in the *wrong* colour: of 128 held-out drawings, 45
+are purple, 47 red, 21 blue and 14 yellow, and some single pictures mix two colours, which no
+training picture ever does. The word "triangle" pulls towards the colours triangles were seen
+in. Guidance exaggerates what the caption changes, and "purple" is part of that, so at
+guidance 3 colour rises to 84% and the held-out score doubles, **21.9% → 43.0% (44 drawings
+better, 17 worse, p 0.0007)**. It costs a little on captions the model knows, **66.2% → 62.0%
+(330 better, 406 worse, p 0.006)**, and guidance 5 breaks shapes (seen 36.8%). That is the
+trade every text-to-image system makes with this knob, measured exactly: obedience on the
+unfamiliar against fidelity on the familiar.
+
+**Count is the bottleneck.** Colour and shape are 94–99% on seen captions; count is 65–69%,
+and its errors are almost all off by one in either direction (guidance 1, 32 per caption: asked for three, 113 drew two,
+65 drew four). Counting needs the whole picture at once rather than one region, which is the
+same order the vision model learned in (colour, then shape, counting last; chapter 22).
+
 
 ## Traps to keep
 

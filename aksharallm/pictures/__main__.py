@@ -219,6 +219,8 @@ def cmd_gen_report(args) -> int:
                temperature=args.temperature, top_k=args.top_k, seed=args.seed, device=device)
     run = path.parent.name
     stem = f"gen-{run}-step{blob.get('step')}-g{args.guidance:g}"
+    if args.k != 8:                       # never overwrite the default k=8 report
+        stem += f"-k{args.k}"
     if args.temperature != 1.0 or args.top_k or args.seed:
         stem += f"-t{args.temperature:g}-k{args.top_k or 0}-s{args.seed}"
     names = gallery(r, root / RESULTS / stem)
