@@ -756,6 +756,9 @@ python -m aksharallm.pictures gen-report flow-shapes --guidance 3 --k 32
 python -m aksharallm.pictures draw flow-shapes "three purple triangles"
 ```
 
+**How you know G2 worked:** first run, 56 minutes on the card: 99% of seen captions and 100% of
+the never-seen purple triangles drawn right, against 89% / 70% for the best G1, no copies.
+
 **How you know it worked:** most seen captions drawn right, the four purple-triangle captions
 (never in training) drawn right too, and few drawings that are code-for-code copies of a
 training picture. 📖 [chapter 26 — pictures](26-pictures.md)

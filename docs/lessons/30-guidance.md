@@ -67,7 +67,8 @@ Then the same model trained on 8 times the pictures (docs/26 § Fixing count) dr
 triangles right 74% of the time **without** guidance, and guidance 3 no longer helped them
 (p 0.79) while still costing a little on the captions it knew. Guidance had been making up for
 a model that had not learned the words well enough: it is a knob for pushing a weak model,
-and its value has to be measured again every time the model changes.
+and its value has to be measured again every time the model changes. G2 (lesson 31), which revises the
+whole picture at every step, draws every never-seen purple triangle right with or without it.
 
 ## Run it yourself
 

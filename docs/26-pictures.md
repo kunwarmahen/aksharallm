@@ -390,8 +390,49 @@ here the objective is outside it.
 panel load a G1 or a G2 checkpoint the same way, and `gen-compare` pairs a G2 report against a
 G1 one when they drew the same captions with the same k and seed.
 
-**MEASURED** — queued (`logs/queue/g2.sh`) to run when the night queue has finished; 14.5M
-parameters, ~0.1–0.2 s/step on the card, 30,000 steps.
+### Measured: G2 against G1 (2026-11-22)
+
+`flow-shapes`, 14.5M parameters, 30,000 steps of 64 pictures on the GPU in 56 minutes (0.17
+s/step beside another run, 0.08 alone). Step 0 read 1.716 (zero velocity, as predicted); val
+fell to **0.0047** and never turned upward. During training (2 drawings per caption, guidance
+3) the score went 56% → 83% → 68% → 98% → 99% → 100% at steps 5k–30k.
+
+On the same 60 captions, 32 drawings each, same seed, against the best G1
+(`imggen-shapes64k-pos-long`, same 64,000 pictures, same 30,000 steps):
+
+| model | guidance | seen: count | seen: all three | held out: all three | copies |
+|---|---|---|---|---|---|
+| G1 (codes, one at a time) | 1 | 89.1% | 89.0% | 70.3% | 0% |
+| **G2 (flow matching, pixels)** | 1 | **99.2%** | **99.2%** | **100%** | 0% |
+| G1 | 3 | 86.4% | 84.5% | 77.3% | 0% |
+| **G2** | 3 | 99.1% | 99.1% | 100% | 0% |
+
+Paired drawing by drawing at guidance 1: seen **197 better, 13 worse (p 2e-43)**, the purple
+triangles **38 better, 0 worse (p 7e-12)**. Colour and shape are 100% everywhere, count 99%,
+every one of the 128 held-out drawings is right, no drawing is a copy of a training picture,
+and no caption ever drew the same picture twice. Guidance changes nothing (99.2% vs 99.1%):
+the model already obeys the words.
+
+**Why G2 counts where G1 could not.** G1 commits to the top-left cell first and can never take
+it back; by the time it learns there should have been one more triangle, the cells where it
+could go are written. G2 decides the whole picture together and revises it at every step:
+"how many shapes are there" is a question about the picture as a whole, and every step of G2
+looks at the picture as a whole.
+
+**How few steps it needs** (guidance 1, 8 per caption):
+
+| Euler steps | 2 | 5 | 10 | 25 | 50 |
+|---|---|---|---|---|---|
+| seen: all three | 40.0% | 94.9% | 98.0% | 99.1% | 99.2% |
+| held out: all three | 9.4% | 87.5% | 96.9% | 100% | 100% |
+
+Straight paths are what make this possible: 10 steps give 98%, where DDPM-style diffusion
+needs hundreds. G2's drawing costs 50 forward passes of a 14.5M model; G1's costs 128 passes of
+a 5M one, so the two are within a factor of about two in compute per picture.
+
+The shapes corpus is now solved by G2. What it cannot show is detail, texture or real
+captions; that is what G3 (the same thing in G0's latent, far cheaper per step) and G4 (real
+text, real pictures) are for.
 
 ## Traps to keep
 

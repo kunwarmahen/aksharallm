@@ -1010,8 +1010,9 @@ same day (GPU, four arms one key apart):** 8× the pictures is the fix (count 66
 unseen triangles 15% → 69% without guidance), a (row, column) slot embedding adds ~3 points,
 and 30,000 steps reach 89% on seen captions. **G2, flow matching in pixels, is built**: the
 same transformer run bidirectionally over picture patches moves noise to a picture in 50
-Euler steps, steered by the caption; queued to train once the night queue finishes, scored
-against G1 drawing for drawing.
+Euler steps, steered by the caption. First run (56 min on the card, 14.5M): **99.2%** of seen
+captions and **100%** of the never-seen purple triangles drawn right, against 89.0% / 70.3% for
+the best G1 on the same pictures (paired p 2e-43 / 7e-12); 10 steps already give 98%.
 - **The next four, built 2026-11-22 and queued for the 11-23 night**: recall capacity (the
   wide models hold all 64 keys the vocabulary has; narrow arms with 16-wide heads ask where a
   DeltaNet memory runs out, docs/19); the hybrid at ~101M against small-student-muon, with the

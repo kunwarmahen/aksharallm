@@ -55,6 +55,15 @@ to be zero, and one that returns the negative and requires its loss to be large.
 > every picture. Nothing about the loss can tell you which way round it is. Only a test that
 > knows the true answer (or the reader looking at the result) can.
 
+## What it did on the real model
+
+`flow-shapes` (docs/26 § Measured: G2 against G1) drew 99.2% of the seen captions right and
+**all 128** drawings of the never-seen purple triangles, against 89.0% and 70.3% for the best
+G1 trained on the same pictures for the same steps (paired p 2e-43 and 7e-12). Ten Euler steps
+already give 98%; two give 40%. G1 writes the picture cell by cell and cannot go back to add the
+triangle it forgot; G2 revises the whole picture at every step, and counting is a question
+about the whole picture.
+
 ## Run it yourself
 
 ```bash
