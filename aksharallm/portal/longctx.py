@@ -279,6 +279,17 @@ class LongContext:
             raise InferError(f"no result {name!r}")
         return json.loads(path.read_text())
 
+    def recall_compare(self, a: str, b: str) -> dict:
+        """Two recall results paired query by query (`longctx recall-compare`, same function).
+        A file scored before per-query records existed is refused with the reason, not
+        compared on its percentages."""
+        from ..longctx.recall import compare
+        try:
+            rows = compare(self.result(a), self.result(b))
+        except ValueError as e:
+            raise InferError(str(e)) from None
+        return {"a": a, "b": b, "rows": rows}
+
     @staticmethod
     def _headline(path: Path, blob: dict) -> dict:
         row = {"name": path.name, "when": int(path.stat().st_mtime),

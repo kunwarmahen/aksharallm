@@ -142,7 +142,8 @@ def accuracy(model, *, pairs: int, gap: int, n: int = 64, queries: int = 8,
     argmax gets right. All documents of one shape have one length, so no padding."""
     rng = np.random.default_rng(seed + 7919 * pairs + gap)
     docs = [document(rng, pairs, gap, queries) for _ in range(n)]
-    right = total = 0
+    marks = []          # one 0/1 per query, in document order: the same queries for every
+                        # model (the documents are seeded by shape), so two models pair up
     amp = (torch.autocast("cuda", dtype=torch.bfloat16)
            if str(device).startswith("cuda") else torch.autocast("cpu", enabled=False))
     for i in range(0, n, batch):
@@ -153,10 +154,39 @@ def accuracy(model, *, pairs: int, gap: int, n: int = 64, queries: int = 8,
         pred = logits.argmax(-1).cpu()
         for row, (toks, answers) in enumerate(chunk):
             for pos in answers:
-                right += int(pred[row, pos - 1]) == toks[pos]
-                total += 1
-    return {"pairs": pairs, "gap": gap, "length": len(docs[0][0]), "n": total,
-            "accuracy": right / total, "chance_any": 1 / N_VALUES, "chance_in_doc": 1 / pairs}
+                marks.append("1" if int(pred[row, pos - 1]) == toks[pos] else "0")
+    right = marks.count("1")
+    return {"pairs": pairs, "gap": gap, "length": len(docs[0][0]), "n": len(marks),
+            "accuracy": right / len(marks), "chance_any": 1 / N_VALUES,
+            "chance_in_doc": 1 / pairs, "correct": "".join(marks)}
+
+
+def compare(a: dict, b: dict) -> list[dict]:
+    """Two `score` results, paired query by query, cell by cell. Refuses results scored on
+    different documents (a different `--docs`, or a file from before per-query records), since
+    unpaired accuracies would be all that is left and a difference of two percentages hides
+    which queries moved. `b_only` = b right where a was wrong; `p` = exact sign test."""
+    from ..eval.versus import sign_test
+    if a.get("n_docs") != b.get("n_docs"):
+        raise ValueError(f"scored on different documents: {a.get('n_docs')} vs "
+                         f"{b.get('n_docs')} per shape")
+    rows = []
+    for sweep in ("by_pairs", "by_gap"):
+        for x, y in zip(a[sweep], b[sweep], strict=True):
+            if (x["pairs"], x["gap"]) != (y["pairs"], y["gap"]):
+                raise ValueError(f"different cells: {x['pairs']}/{x['gap']} vs "
+                                 f"{y['pairs']}/{y['gap']}")
+            if "correct" not in x or "correct" not in y:
+                raise ValueError("a result has no per-query record; re-score it with "
+                                 "`longctx recall` (files before 2026-11-22 have none)")
+            ca, cb = x["correct"], y["correct"]
+            b_only = sum(u == "0" and v == "1" for u, v in zip(ca, cb, strict=True))
+            a_only = sum(u == "1" and v == "0" for u, v in zip(ca, cb, strict=True))
+            rows.append({"sweep": sweep, "pairs": x["pairs"], "gap": x["gap"],
+                         "length": x["length"], "n": len(ca), "a": x["accuracy"],
+                         "b": y["accuracy"], "b_only": b_only, "a_only": a_only,
+                         "p": sign_test(b_only, a_only)})
+    return rows
 
 
 def score(model, *, n: int = 64, device: str = "cpu", by_pairs=BY_PAIRS, by_gap=BY_GAP,

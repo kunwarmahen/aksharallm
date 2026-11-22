@@ -497,7 +497,9 @@ python -m aksharallm.longctx recall recall-hybrid --device cuda
 
 **How you know it worked:** recall far above 1/64 inside the window for all three, and the
 gap sweep shows which ones still find the pair once it is past position 512
-([doc 19](19-long-context.md) § "A task that is all retrieval").
+([doc 19](19-long-context.md) § "A task that is all retrieval"). Measured 2026-11-22: all
+three 100% inside; at 1,586 tokens dense 7%, hybrid and all-DeltaNet 100%. Compare arms
+with `longctx recall-compare a.json b.json`, which pairs them query by query.
 
 📖 [chapter 19 — long context](19-long-context.md)
 
@@ -538,7 +540,9 @@ The expensive routes. Each one is a real research direction rather than a switch
 
   **How you know it worked:** `tools compare` of the v2 model against the GRPO one on set v2,
   the four held-out rows above all ([doc 6](06-posttraining.md) § "GRPO with the tool in the
-  loop").
+  loop"). Measured 2026-11-21: read the probe first. It kept 27 of 480 problems, every one an
+  absolute difference, so that kind went 5 → 14 of 20 and nothing else moved (held-out 0 →
+  1/80). If the probe keeps one kind, the run can only teach one kind.
 
 - **Distillation** — train a small model to copy a big one's *probabilities*, not just its
   answers. Both models must share a tokenizer, so here it is between our own models. Start

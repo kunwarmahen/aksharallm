@@ -642,7 +642,8 @@ The panels, in plain terms:
   would change, from the checkpoint's header alone), then the measurements as one detached
   job at a time: the loss-by-position curve, a sweep of every scaling method, the
   needle-in-a-haystack grid, **Score recall** (associative recall for a model trained on
-  `data/recall`: how many pairs it holds and how far back it reaches) and the FlashAttention
+  `data/recall`: how many pairs it holds and how far back it reaches; open a result and
+  **pair against** another to compare them query by query) and the FlashAttention
   benchmark. See [doc 19](19-long-context.md).
 - **Diffusion** — the masked-diffusion model: watch a sentence denoise step by step, infill
   a gap, and measure the ELBO, with the warning that it is a bound and not comparable with

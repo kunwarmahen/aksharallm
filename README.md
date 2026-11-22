@@ -967,12 +967,22 @@ Not built yet, in the order they depend on each other or by value per GPU hour:
   of re-reading the prefix: 160 vs 30 tok/s at 500 tokens on the CPU, identical tokens.
   Whether that memory *retrieves* is asked by associative recall (`longctx recall`, dense vs
   hybrid vs all-DeltaNet, inside and past the window; [doc 19](docs/19-long-context.md)).
+  Measured 2026-11-22: it does. At 3× the window (1,586 tokens) the hybrid and the
+  all-DeltaNet model recall 100% of 1,024 queries and dense attention 7% (paired 952–0);
+  inside the window all three are perfect and their validation losses identical.
 - **Turning a trained autoregressive model into a diffusion one** instead of training from
   scratch, measured in tokens per forward pass.
 - **A small model for agents**: tool-use SFT ✅ built and run 2026-11-20 (120/120 on trained
   kinds, 0/20 on the held-out one; set v2, 20 trained kinds, still 0/80 on four held out,
   [doc 6](docs/06-posttraining.md)). GRPO with the tool run mid-completion and the answer
-  rewarded (`--reward tools`, twelve new kinds, the same four held out) is built (2026-11-21).
+  rewarded (`--reward tools`, twelve new kinds, the same four held out) ran 2026-11-21: the
+  probe kept 27 of 480 problems, all one kind (absolute difference), which went 5 → 14/20
+  (paired 9–0); the other eleven practice kinds stayed 0/220 and the held-out four 0 → 1/80.
+  GRPO sharpens what the model half-knows; it did not reach what it could not do at all.
+- **Making pictures and video** (planned 2026-11-22, `PLAN.md` § "Added 2026-11-22"): an
+  image tokenizer (the audio codec in 2-D), autoregressive images over its codes, pixel then
+  latent diffusion (DDPM, flow matching, a DiT), text-to-image from our own text model, and
+  short video of moving shapes. Everything is scored exactly on synthetic pictures we draw.
 - **A toy world model**: ✅ built 2026-11-20 ([doc 25](docs/25-world-model.md)); `world-sokoban`
   solved it: 100% exact next frames and 10-step rollouts. The harder world, `keys` (a key
   never drawn once carried, a floor that slips one move in ten), is built and scored on

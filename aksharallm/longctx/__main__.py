@@ -16,6 +16,7 @@
     # a task that is all retrieval (recall.py): dense vs hybrid vs all-DeltaNet
     python -m aksharallm.longctx recall-data                 # -> data/recall, CPU
     python -m aksharallm.longctx recall recall-hybrid --device cuda
+    python -m aksharallm.longctx recall-compare logs/longctx/recall-A.json logs/longctx/recall-B.json
 
 The portal's **Context** tab drives the same functions. This exists so the numbers are
 available over ssh, and because `sweep` is the one command that answers the question the
@@ -316,6 +317,22 @@ def cmd_recall(args) -> int:
     return 0
 
 
+def cmd_recall_compare(args) -> int:
+    from .recall import compare
+    a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
+    rows = compare(a, b)
+    print(f"a = {args.a}  ({a.get('kind')}, step {a.get('step')})")
+    print(f"b = {args.b}  ({b.get('kind')}, step {b.get('step')})")
+    print(f"{a['n_docs']} documents per shape, paired query by query\n")
+    print("    cell                 len       a       b   b only  a only        p")
+    for r in rows:
+        cell = (f"{r['pairs']:>3} pairs, gap {r['gap']:>4}")
+        p = "–" if r["p"] is None else f"{r['p']:.3g}"
+        print(f"    {cell:<20} {r['length']:>4}  {r['a'] * 100:5.1f}%  {r['b'] * 100:5.1f}%  "
+              f"{r['b_only']:>6}  {r['a_only']:>6}  {p:>8}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python -m aksharallm.longctx",
                                 description=__doc__.split("\n")[0])
@@ -393,6 +410,11 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--force-gpu", action="store_true",
                    help="use the GPU even while a run is training")
     q.set_defaults(fn=cmd_recall)
+
+    c = sub.add_parser("recall-compare", help="two recall results, paired query by query")
+    c.add_argument("a", help="logs/longctx/recall-*.json")
+    c.add_argument("b", help="logs/longctx/recall-*.json")
+    c.set_defaults(fn=cmd_recall_compare)
     return p
 
 

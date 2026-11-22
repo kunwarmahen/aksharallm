@@ -228,6 +228,7 @@ async function openResult(name) {
   try {
     const blob = await api(`/api/longctx/result?name=${encodeURIComponent(name)}`);
     lc.open = blob;
+    lc.openName = name;
     if (blob.rows) renderSweep(blob);
     else if (blob.grid) renderNeedle(blob);
     else if (blob.by_gap) renderRecall(blob);
@@ -347,7 +348,37 @@ function renderRecall(blob) {
     + '<table class="lc-table"><thead><tr><th>pairs (gap 32)</th><th>length</th><th>recalled</th><th></th></tr></thead><tbody>'
     + blob.by_pairs.map((x) => row(x, fmt.int(x.pairs), false)).join('') + '</tbody></table>'
     + '<table class="lc-table"><thead><tr><th>gap (16 pairs)</th><th>length</th><th>recalled</th><th></th></tr></thead><tbody>'
-    + blob.by_gap.map((x) => row(x, fmt.int(x.gap), x.length > blob.trained_window)).join('') + '</tbody></table>';
+    + blob.by_gap.map((x) => row(x, fmt.int(x.gap), x.length > blob.trained_window)).join('') + '</tbody></table>'
+    + recallPicker(blob);
+  const sel = $('#lc-recall-vs');
+  if (sel) sel.addEventListener('change', () => sel.value && renderRecallCompare(sel.value, lc.openName));
+}
+
+/* Pair this result against another, query by query (`longctx recall-compare`). Every model
+ * is scored on the same seeded documents, so the same queries line up; two percentages alone
+ * would hide which queries moved. Only offered for results that carry per-query records. */
+function recallPicker(blob) {
+  const others = lc.results.filter((r) => r.kind === 'recall' && r.name !== lc.openName);
+  if (!blob.by_gap.length || !('correct' in blob.by_gap[0]) || !others.length) return '';
+  return '<label class="field">pair against (same documents, query by query)'
+    + '<select id="lc-recall-vs"><option value="">—</option>'
+    + others.map((r) => `<option value="${escHtml(r.name)}">${escHtml(r.name)}</option>`).join('')
+    + '</select></label><div id="lc-recall-cmp"></div>';
+}
+
+async function renderRecallCompare(a, b) {
+  try {
+    const res = await api(`/api/longctx/recall-compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`);
+    const p = (x) => (x == null ? '–' : x < 0.001 ? x.toExponential(1) : fmt.num(x, 3));
+    $('#lc-recall-cmp').innerHTML = `<p class="hint">a = ${escHtml(a)}, b = this result. `
+      + '"b only" counts queries b got right and a got wrong; p is an exact sign test.</p>'
+      + '<div class="scroll-x"><table class="lc-table"><thead><tr><th>cell</th><th>a</th><th>b</th>'
+      + '<th>b only</th><th>a only</th><th>p</th></tr></thead><tbody>'
+      + res.rows.map((r) => `<tr><th>${r.pairs} pairs, gap ${r.gap}</th><td>${fmt.pct(r.a)}</td>`
+        + `<td><strong>${fmt.pct(r.b)}</strong></td><td>${r.b_only}</td><td>${r.a_only}</td>`
+        + `<td>${p(r.p)}</td></tr>`).join('')
+      + '</tbody></table></div>';
+  } catch (err) { flash(err.message, 'error'); }
 }
 
 function renderNeedle(blob) {

@@ -628,6 +628,9 @@ class Handler(BaseHTTPRequestHandler):
                 float((query.get("factor") or [4.0])[0])))
         if parts == ["longctx", "result"]:
             return self._json(self.longctx.result((query.get("name") or [""])[0]))
+        if parts == ["longctx", "recall-compare"]:
+            return self._json(self.longctx.recall_compare((query.get("a") or [""])[0],
+                                                          (query.get("b") or [""])[0]))
         # dictation: which recognisers exist, every evaluation so far, and the runs.
         if parts == ["dictate"]:
             return self._json(self.dictation.overview())

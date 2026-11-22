@@ -405,7 +405,12 @@ Loss by position, 32 windows of 1,024 tokens (twice the trained 512):
   this is fluency, not retrieval. A needle test would say whether it can *find* something
   past 512, but at 13.8M every model fails it. [Doc 19](19-long-context.md) § "A task that
   is all retrieval" is the version that can tell: associative recall, dense against hybrid
-  against all-DeltaNet, inside and past the window.
+  against all-DeltaNet, inside and past the window. **Measured 2026-11-22: it retrieves.**
+  With 16 pairs and 1,536 tokens of filler (a 1,586-token document, 3× the window), the
+  hybrid and the all-DeltaNet model recall **100%** of 1,024 queries; dense attention, 100%
+  inside its window, recalls **7%** (paired 952–0). After easy documents alone, the
+  all-DeltaNet model already recalled 98.6% at that distance, where dense recalled 0%. All
+  three end at the same validation loss (2.907): only the distance sweep tells them apart.
 
 ## Grouped-Query Attention (GQA)
 

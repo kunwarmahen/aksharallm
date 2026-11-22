@@ -1006,7 +1006,7 @@ the base model can write `a % b` on its own. Breadth alone does not fix that. Wh
 to try is reward on the result rather than imitation of the call, which is the next
 paragraph.
 
-### GRPO with the tool in the loop (built 2026-11-21, queued)
+### GRPO with the tool in the loop (built and run 2026-11-21)
 
 Imitation teaches the call that goes with each phrasing, and nothing makes a wrong call
 cost anything: the transcripts are always right. GRPO can make it cost something, if the
@@ -1061,6 +1061,44 @@ python -m aksharallm.tools compare logs/tools/small-code-py-tools-v2-setv2.json 
 The result to read is the four held-out rows of that comparison. The set-`rl` report says
 whether it learned the practice kinds at all (against the v2 model scored on the same set),
 and the twenty trained kinds of set v2 say whether it broke what it already did.
+
+#### Measured (2026-11-21): the filter left one kind, and that is all it learned
+
+**The probe decided the experiment.** 480 set-`rl` problems, 8 samples each at 0.8 (23 min):
+**450 never solved, 3 always solved, 27 kept** (0 < pass < 8). Every problem solved even once
+was an **absolute difference**; the v2 model could not get the other eleven kinds right once
+in eight tries. So "twelve practice kinds" became one, and 300 steps on 27 problems:
+
+| | step 0 | step 25 | steps 25–299 |
+|---|---|---|---|
+| training reward (= solved) | 0.56 | 1.00 | 0.97–1.00 |
+| `called` | 0.97 | 1.00 | 0.97–1.00 |
+| held-out `val_solved` (60 fresh set-`rl` problems) | 3/60 | – | 5/60 from step 50, never more |
+
+KL stayed 0.01–0.04 and the run took 54 min (5.5 s/step). `grpo_best.pt` is **step 50**, the
+first to reach 5/60. Paired against the v2 tool model on the same problems, greedy:
+
+| | v2 SFT | + GRPO | GRPO right, v2 wrong / reverse | sign test |
+|---|---|---|---|---|
+| set `rl`, all 320 | 6/320 | 15/320 | 9 / 0 | p 0.004 |
+| — absolute difference | 5/20 | **14/20** | 9 / 0 | |
+| — the other eleven practice kinds | 0/220 | 0/220 | 0 / 0 | |
+| set v2, all 480 | 390/480 | 390/480 | 2 / 2 | p 1 |
+| **set v2, the four held-out kinds** | **0/80** | **1/80** | 1 / 0 (one remainder) | p 1 |
+
+Forgetting: none. Never-seen Python 1.3300 → 1.3303 (`eval domains`), and on set v2 two
+problems gained (one of them the remainder) and two lost, out of 480.
+
+**Reading it.** Every gain is the one kind that survived the filter, and it moved exactly as
+far as GRPO can move a kind it already solves sometimes (5 → 14 of 20). The held-out question
+was never asked: a filter that keeps "solved sometimes" can only keep what the model already
+half-knows, and this model half-knew one thing. Rewarding the answer did not reach kinds it
+could not solve at all, because a group of eight zeros has no advantage to follow. Same lesson
+as round 4b (MBPP, ~3% pass) from the other side: **GRPO sharpens; it does not discover.**
+The levers that could reach the held-out kinds all change what the model sees, not the
+reward: SFT on more kinds whose code *differs* from its neighbours' (v2 taught templates), a
+larger sample per probe (k 32 would find kinds solved 1 time in 32), or a model that writes
+general code rather than matching phrasings.
 
 **Not built:** a second call in one completion (each problem here needs one), and calls in
 the middle of a prose answer rather than as their own turn.

@@ -325,7 +325,7 @@ from far away. **Scaling makes the positions legible; using them is a capability
 capabilities come from training** — which is why both numbers are published rather than only
 the good one.
 
-### A task that is all retrieval, so a small model can be asked (built 2026-11-21)
+### A task that is all retrieval, so a small model can be asked (built and run 2026-11-21)
 
 The needle cannot compare small architectures: at 13.8M every model is at chance, so it says
 nothing about whether a design *can* retrieve. And the position curve is fluency, not
@@ -353,17 +353,18 @@ flowchart LR
 ```
 
 Three configs one model key apart (`full_attn_every` absent / 3 / 7, where 7 > 6 layers means
-no block is attention), same data, same budget. The expectation worth testing: dense attention
+no block is attention), same data, same budget. The expectation going in: dense attention
 retrieves perfectly inside its window and falls off past it (the RoPE angles it never saw);
 an all-DeltaNet model has no positions, so distance should not matter to it, but its memory
 is a fixed 64 × 64 matrix per head, so the number of pairs should; the hybrid is both. The
-scorer is held to an oracle that looks keys up (100%) and a copier (0%), which pins the
+first two held and the third did not (measured below). The scorer is held to an oracle that looks keys up (100%) and a copier (0%), which pins the
 off-by-one that matters: the value at position `p` is read from the logits at `p − 1`.
 
 Retrieval is learned suddenly, when an induction circuit forms, and often late, and getting
 it to form at all took four tries on the CPU (a 2-layer d128 model, so the GPU runs are not
 spent finding out). Every pair is queried, so ~18% of tokens sit behind a lookup; the loss
-falls by about 0.74 nats when it forms, from the no-lookup floor of ~3.71 to ~2.69.
+falls by about 0.74 nats when it forms, from the no-lookup floor of ~3.71 to ~2.69 (an
+estimate; the GPU runs with every lookup right end at 2.907, see "Measured" below).
 
 | tried on the CPU | what happened |
 |---|---|
@@ -382,7 +383,67 @@ python -m aksharallm.longctx recall-data                    # data/recall (+ eas
 scripts/experiment.sh recall-hybrid-easy                    # stage 1: where the lookup forms
 scripts/experiment.sh recall-hybrid                         # stage 2: from its weights; same for -dense, -deltanet
 python -m aksharallm.longctx recall recall-hybrid --device cuda
+python -m aksharallm.longctx recall-compare logs/longctx/recall-recall-dense-step5999.json \
+    logs/longctx/recall-recall-hybrid-step5999.json         # paired, query by query, per cell
 ```
+
+#### Measured (2026-11-21/22): position-free memory reaches three times the window
+
+All six runs on the 3090 (`logs/queue/night-1122.sh`), 128 documents × 8 queries = **1,024
+queries per cell**, the same seeded documents for every model, so every comparison below is
+paired query by query (`longctx recall-compare`, also the Context tab's "pair against"
+picker). Scores are on the CPU in fp32 for all arms. Chance is 1.6% (any of 64 values), or
+1/pairs for a model that knows only that the answer is one of this document's values.
+
+| recall, % of 1,024 queries | dense (6 attention) | hybrid (4 DeltaNet + 2 attention) | all DeltaNet |
+|---|---|---|---|
+| **after stage 1** (easy documents only, `ckpt_last`, step 1,999) | | | |
+| 16 pairs, no gap | 63.2 | **100.0** | 99.9 |
+| 8 / 16 / 32 / 48 pairs, gap 32 | 2.0 / 1.9 / 2.5 / 2.7 | 99.7 / 96.9 / 91.7 / 79.2 | **99.7 / 99.5 / 96.6 / 88.7** |
+| 16 pairs, gap 128 / 384 (inside 512) | 0.2 / 0.8 | 83.4 / 65.0 | **99.1 / 98.7** |
+| 16 pairs, gap 768 / 1,536 (past 512) | 0.3 / 0.0 | 28.3 / 1.7 | **99.0 / 98.6** |
+| **after stage 2** (full range, step 5,999) | | | |
+| every by-pairs cell (8–48 pairs, gap 32) | 100 | 100 | 100 |
+| 16 pairs, gap 0 / 128 | 100 / 100 | 100 / 100 | 100 / 100 |
+| 16 pairs, gap 384 (length 434, inside) | **97.9** | 100 | 100 |
+| **16 pairs, gap 768 (length 818, past 512)** | **35.6** | **100** | **100** |
+| **16 pairs, gap 1,536 (length 1,586, 3× the window)** | **7.0** | **100** | **100** |
+
+Paired, stage 2, dense against either other arm: gap 384 22–0 (p 5e-7), gap 768 **659–0**,
+gap 1,536 **952–0** (p < 1e-280). Hybrid against all-DeltaNet: 0–0 in every cell.
+
+What it says:
+
+- **Dense attention retrieves perfectly and only where it trained.** 100% to length 178, a
+  first slip at 434, and past 512 it falls to 36% then 7%: the RoPE angles it never saw. The
+  same cliff [doc 4](04-model.md)'s loss-by-position showed, now as retrieval.
+- **The hybrid retrieves at three times its window**, with two RoPE attention blocks still in
+  it. The position-free DeltaNet blocks carry the lookup; whatever the attention blocks do
+  past 512 does not break it.
+- **The capacity limit I expected did not appear.** 48 pairs is 100% for every arm after
+  stage 2. Six layers × six heads of 64 × 64 memory is more room than 48 pairs need. Finding
+  the limit needs more pairs or a smaller head; the sweep stops at 48.
+- **Stage 1 is where the arms differ, and it is the most interesting row.** On easy documents
+  (no filler, ever), the all-DeltaNet model learned a rule that works at *any* gap: 98.6% at
+  1,536 tokens of filler it never saw. Dense attention learned one that works only with no
+  gap (63% at gap 0, 2% with 32 filler tokens). A plausible reading, not checked inside the
+  model: attention found a rule that leans on where things sit, which filler breaks, while
+  the delta rule can only store and read "the value under this key", which filler cannot
+  touch. Paired: 1,010–0 at gap 1,536. The hybrid is in between
+  (100% at gap 0, 28% at 768).
+- **Validation loss cannot tell the arms apart.** All three end at **2.907** on `val.bin`
+  (dense 2.9074, hybrid 2.9072, DeltaNet 2.9073), because validation is read in 512-token
+  windows of documents shaped like training ones, where dense attention is perfect too. With every lookup right, 2.907 is this data's floor; the ~2.69 estimated above
+  for "perfect lookup" was wrong about the rest of the document's entropy. Only the gap sweep
+  separates a model that will fail at 818 tokens from one that will not.
+- **Cost**, same 8,000 steps: stage 1 + 2 = 18 min dense, 25 min hybrid, 31 min all-DeltaNet
+  (plain PyTorch chunked DeltaNet, no kernel).
+
+A trap paid for while measuring: the easy stage's `ckpt_best.pt` is chosen on the full-range
+`val.bin`, which means nothing for a model that has only seen easy documents (val 6–9 nats).
+The queue scored those `ckpt_best` files (steps 500 and 1,000), which caught DeltaNet
+*before* its lookup formed (19.7% at 8 pairs, against 99.7% at step 1,999). The table uses
+`ckpt_last`, the weights stage 2 starts from.
 
 ---
 
