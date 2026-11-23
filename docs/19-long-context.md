@@ -469,8 +469,15 @@ asked of a smaller memory. `configs/recall-{hybrid,deltanet}-narrow{-easy,}.yaml
 arms with **one key changed**, `n_heads: 24` instead of 6, so each head is 16 wide and its
 memory 16 × 16 (a quarter of the state per layer, the same parameters; a test pins that
 nothing else differs). With more keys than dimensions, keys must overlap in each head, and
-recall should fall as the pairs grow. Queued for the 2026-11-23 night
-(`logs/queue/night-1123.sh`), each scored by both sweeps and paired with its wide arm.
+recall should fall as the pairs grow. Run on the 2026-11-22/23 queue (`logs/queue/night-1123.sh`).
+
+**Measured: it did not fall.** Both narrow arms recall **100%** of 1,024 queries at 32, 48, 56
+and 64 pairs, and 100% at every gap out to 1,536 tokens (3× the window), the same as their wide
+arms (paired: 0–0 everywhere but one query at 64 pairs, where the narrow hybrid was right and
+the wide one wrong). Sixty-four keys do not fill even 24 heads of 16 × 16 memory: each head can
+keep a different subset, and keys only need to stay distinguishable, not orthogonal. The limit
+is beyond what this vocabulary can ask. Finding it needs a bigger key vocabulary (a new corpus
+and model) or a memory with far fewer heads; neither is queued.
 
 #### Recall at a real size (built 2026-11-22)
 
@@ -494,7 +501,30 @@ The trials come from a seeded generator, so two models on the same tokenizer and
 the same haystacks, needles and candidates. `needle-compare` checks that rather than assuming
 it (every trial's length, depth, city and code must match) and prints b-only / a-only with a
 sign test per length. Plus `eval domains` and `--suite fast` for what the hybrid costs on
-ordinary text. Queued for the same nights, last, because it resumes.
+ordinary text. Run on the same queue (paused once by day for G3, resumed at 00:30).
+
+**Measured (2,000 steps each, 2026-11-23):**
+
+| | `small-student-muon` (dense) | `small-student-hybrid` (8 of 12 DeltaNet) |
+|---|---|---|
+| val loss | 3.2673 | **3.2361** |
+| prose / Python loss (`eval domains`) | 3.512 / 2.030 | **3.478** / 2.025 |
+| perplexity (`--suite fast`) | 26.64 | **25.87** |
+| ARC-Easy | **43.2%** | 39.6% (paired 23–41, p 0.03) |
+| PIQA | 58.0% | 58.2% (59–57, p 0.93) |
+| needle, no scaling (all lengths) | 66.7% | **76.7%** (19–7, p 0.03) |
+| needle at 2,048 = 2× the window | 36.7% | **70.0%** (11–1, p 0.006) |
+| needle, YaRN ×4 | 94.2% | 94.2% (3–3) |
+| time per step | 3.23 s | 5.27 s (1.6×) |
+
+The hybrid is **slightly better at predicting text** (−0.031 val, both domains) and **finds the
+needle twice as often at twice its window** with no scaling, because two thirds of its blocks
+have no positions to run out of; with YaRN the dense model catches up completely. It costs 1.6×
+the time per step (the DeltaNet kernel here is plain PyTorch) and scores **worse on ARC-Easy**
+(p 0.03), which nothing above explains; at 2,000 steps on one seed that is a flag, not a
+finding. The 13.8M recall result (DeltaNet holds a lookup far past the window where dense
+attention cannot) shows up at 101M as a long-context advantage that a training-free scaling
+method erases.
 
 ---
 

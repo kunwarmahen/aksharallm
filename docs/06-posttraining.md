@@ -1141,8 +1141,20 @@ python -m aksharallm.tools compare logs/tools/small-code-py-tools-v2-setv3.json 
 
 Both tool models are scored on the same 720 set-v3 problems (36 kinds × 20) and paired per
 problem. The four held-out rows are the result; the twelve rl rows say whether imitation
-taught what the reward could not. Queued for the 2026-11-23 night (`logs/queue/night-1123.sh`),
-with `eval domains` for forgetting. The Tools tab's problem-set picker has v3.
+taught what the reward could not. The Tools tab's problem-set picker has v3.
+
+**Measured (2026-11-22, `logs/queue/night-1123.sh`):** the v3 model gets **87.1%** of the 720
+problems right with the tool, against v2's 55.0% (paired 239–8, p 3e-60); called the tool on
+every problem. Every one of the twelve rl kinds went from 0 or 6 of 20 to 20 of 20 (absdiff,
+circle, cube, fahrenheit, hypot, median, minutes, perimeter, product, range, sum of squares,
+triangle), the kinds GRPO's probe never once solved. Of the four held out, **gcd went from 0 to
+5 of 20, the first held-out kind above zero in three sets**; remainder, digit sum and day of
+year stayed at 0. Two regressions: mean 10 → 3 of 20, percent 20 → 19. Python loss 1.3308
+(v2 1.330): no forgetting. Without the tool both are ~0%.
+
+So imitation taught what reward could not reach, as the probe predicted; and breadth (32 kinds
+instead of 20) moved the held-out rate off zero for the first time, but only for one kind. The
+habit of choosing code from the operation word is still mostly not there.
 
 ## The code, in reading order
 

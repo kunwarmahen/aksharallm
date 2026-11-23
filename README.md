@@ -997,6 +997,13 @@ Not built yet, in the order they depend on each other or by value per GPU hour:
   probe kept 27 of 480 problems, all one kind (absolute difference), which went 5 → 14/20
   (paired 9–0); the other eleven practice kinds stayed 0/220 and the held-out four 0 → 1/80.
   GRPO sharpens what the model half-knows; it did not reach what it could not do at all.
+- **The 2026-11-23 night, measured**: tool set v3 (32 kinds by SFT) gets 87.1% against v2's
+  55.0% (paired 239–8), every rl kind GRPO could not reach now 20/20, and the first held-out
+  kind above zero (gcd 5/20); the narrow recall arms (16-wide heads) still recall all 64 keys
+  at 3× the window, so the memory's limit is beyond this vocabulary; and the ~101M hybrid
+  (DeltaNet in 8 of 12 blocks) beats its Muon control on val (3.236 vs 3.267) and on the
+  needle at 2× the window (70% vs 37%, paired 11–1) but loses ARC-Easy (39.6 vs 43.2, p 0.03)
+  and is 1.6× slower per step; YaRN gives the dense model the same needle score.
 - **Synthesizing music** (planned 2026-11-22, `PLAN.md` § "Added 2026-11-22: synthesizing
   music"): symbolic music on rules we chose first (event tokens, a transformer, a synthesiser
   written from scratch, every note checkable against the key and beat asked for), then real

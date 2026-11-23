@@ -231,7 +231,7 @@ def compare(a: dict, b: dict) -> list[dict]:
     ta, tb = a.get("trials") or [], b.get("trials") or []
     if len(ta) != len(tb):
         raise ValueError(f"different trial counts: {len(ta)} vs {len(tb)}")
-    key = ("length", "depth", "city", "true")
+    key = ("length", "depth", "city", "code")
     for x, y in zip(ta, tb):
         if tuple(x[k] for k in key) != tuple(y[k] for k in key):
             raise ValueError("the two results were not scored on the same trials (different "

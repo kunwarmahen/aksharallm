@@ -563,12 +563,14 @@ def test_the_tab_lists_a_recall_result_and_starts_the_recall_command(tmp_path, m
 
 
 def test_two_needle_results_pair_trial_for_trial_and_refuse_different_trials():
-    from aksharallm.longctx.haystack import compare
+    from aksharallm.longctx.haystack import Trial, compare
 
+    # Built through the real record (`Trial`, as `run` saves it): a hand-written dict once
+    # named a field `true` that real results do not have, so compare crashed on every real
+    # pair of files while this test passed (2026-11-23).
     def res(hits, city="Lima"):
         return {"lengths": [512, 1024], "chance": 0.25,
-                "trials": [{"length": 512 if i < 2 else 1024, "depth": 0.5, "city": city,
-                            "true": f"c{i}", "correct": h, "margin": 0.0}
+                "trials": [Trial(512 if i < 2 else 1024, 0.5, city, f"c{i}", bool(h), 0.0).__dict__
                            for i, h in enumerate(hits)]}
     rows = compare(res([0, 1, 0, 1]), res([1, 1, 1, 0]))
     allrow = rows[-1]
