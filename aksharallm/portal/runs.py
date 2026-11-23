@@ -129,6 +129,8 @@ LAUNCHERS: dict[str, dict] = {
     "imggen-shapes64k-pos-long": {"script": "scripts/audio.sh", "args": ["imggen-shapes64k-pos-long"]},
     # G2, flow matching in pixels (docs/26): a `flow:` config, same launcher.
     "flow-shapes": {"script": "scripts/audio.sh", "args": ["flow-shapes"]},
+    # G3, the same flow in the tokenizer's latent (docs/26): `flow:` with `space: latent`.
+    "flow-latent-shapes": {"script": "scripts/audio.sh", "args": ["flow-latent-shapes"]},
     # The speech recogniser (Phase 7, docs/23): same launcher, an `asr:` config.
     "asr-synth": {"script": "scripts/audio.sh", "args": ["asr-synth"]},
     "asr-libri100": {"script": "scripts/audio.sh", "args": ["asr-libri100"]},
@@ -1074,11 +1076,14 @@ class RunStore:
             from ..pictures.train_flow import load_flow_config
             cfg = load_flow_config(str(path))
             f = cfg.flow
-            arch = (f"G2 flow matching in pixels: DiT d={f.d_model} L={f.n_layers} H={f.n_heads}, "
-                    f"{f.grid}x{f.grid} patches of {f.patch}px, {f.sample_steps} Euler steps, "
+            where = ("G3 flow matching in the tokenizer's latent" if f.space == "latent"
+                     else "G2 flow matching in pixels")
+            arch = (f"{where}: DiT d={f.d_model} L={f.n_layers} H={f.n_heads}, "
+                    f"{f.grid}x{f.grid} patches of {f.patch}, {f.sample_steps} Euler steps, "
                     f"caption dropped {f.cfg_drop:.0%} (guidance)")
             batch = f"{cfg.train.batch_size} pictures"
-            sources = [cfg.data.corpus]
+            sources = ([cfg.data.latents, f"decoded by {f.tokenizer}"] if f.space == "latent"
+                       else [cfg.data.corpus])
         else:
             from ..vision.train import load_vision_config
             cfg = load_vision_config(str(path))

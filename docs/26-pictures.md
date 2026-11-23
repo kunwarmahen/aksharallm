@@ -10,7 +10,7 @@ circles" and writes those integers:
 ```mermaid
 flowchart LR
     G0["G0 image tokenizer<br/>(built)"] --> G1["G1 a caption to<br/>the codes (built)"]
-    G0 --> G3["G3 latent diffusion"]
+    G0 --> G3["G3 flow in the<br/>latent (built)"]
     G2["G2 flow matching<br/>in pixels (built)"] --> G3
     G1 --> G4["G4 text to image"]
     G3 --> G4
@@ -434,6 +434,77 @@ The shapes corpus is now solved by G2. What it cannot show is detail, texture or
 captions; that is what G3 (the same thing in G0's latent, far cheaper per step) and G4 (real
 text, real pictures) are for.
 
+## G3: flow matching in the latent
+
+G2 works on 12,288 numbers a picture. Most of them are predictable from their neighbours (a
+pixel inside a red square is red), so every real image model, Stable Diffusion, Flux and Veo
+included, works in a smaller space and lets a decoder paint the pixels. G3 does exactly that
+with what this chapter already has: G0's encoder gives an **8×8×64 latent** (4,096 numbers),
+G2's flow model draws one of those instead of a picture, and G0's decoder paints it.
+
+```mermaid
+flowchart LR
+    N["noise<br/>8x8x64"] -->|"50 Euler steps,<br/>64 tokens each"| Z["latent"]
+    Z --> D["× std + mean<br/>(undo the normalising)"]
+    D --> S{"snap?"}
+    S -->|no| DEC["G0's decoder"]
+    S -->|yes| Q["re-quantize onto<br/>the codebooks"] --> DEC
+    DEC --> P["64x64 picture"] --> R["reader"]
+```
+
+Nothing new is trained except the flow model: `pictures/flow.py` with `space: latent`,
+`patch: 1`, `channels: 64` (one token per latent cell, 64 tokens against G2's 256), the same
+width, depth, steps, schedule and seed as G2 (`configs/flow-latent-shapes.yaml`, one block
+apart from `flow-shapes.yaml`).
+
+Three decisions in `pictures/latents.py`:
+
+| decision | why |
+|---|---|
+| the latent is `q`, the quantized sum at all 4 codebooks, not the encoder's raw `z` | the decoder only ever saw `q`; `z` is a point it was never trained to paint |
+| normalised per channel, statistics from the training split | flow matching starts from unit-variance noise; a latent whose channels range from 0.1 to 0.5 in scale would make the straight line mostly a change of scale. The mean and std go into every checkpoint |
+| optional **snap** before decoding | re-quantizing a drawn latent onto the codebooks removes small off-grid errors the decoder never saw; measured both ways |
+
+The round trip is checked before anything trains: the 300 val latents, mapped back and decoded,
+read 100% right (with or without snapping). Decoded **without** mapping them back, the same
+latents read 62% right, which is the silent bug lesson 32 plants.
+
+`pictures latents imgtok-shapes --corpus data/vision/shapes64k` writes the corpus (524 MB of
+float16, 5 minutes on the CPU); `scripts/audio.sh flow-latent-shapes` encodes it if missing.
+
+### Measured: G3 against G2 (2026-11-22)
+
+`flow-latent-shapes`, 14.5M parameters (the same transformer as G2), 30,000 steps, run on the
+card with the hybrid paused. **16 minutes**, 0.030–0.037 s/step against G2's 0.083 alone: 64
+tokens instead of 256 makes every step ~2.5× cheaper. Val (fixed noise, in normalised latent
+units, so not comparable with G2's pixel val) 0.110 → 0.0386, still falling at the end.
+
+32 drawings per caption, paired with G2 on the same captions and seed:
+
+| model | guidance | seen: count | seen: all three | held out: all three | copies |
+|---|---|---|---|---|---|
+| G2 (pixels) | 1 | 99.2% | **99.2%** | **100%** | 0% |
+| G3 (latent) | 1 | 87.7% | 87.6% | 79.7% | 0.7% |
+| G3, snapped | 1 | 87.7% | 87.6% | 78.9% | 0.8% |
+| G3 | 3 | 85.4% | 85.3% | 74.2% | 1.2% |
+
+Paired at guidance 1: G2 is right where G3 is wrong 216 times, the reverse 8 (p 1e-53); on the
+purple triangles 26 to 0 (p 3e-8). **Colour and shape survive the move to the latent (≥ 99.8%);
+count does not.** It is 96% for one shape and 80% for four, and the gallery shows why: G3 now
+and then puts two shapes **touching**, which no training picture does (the corpus spaces them on
+a grid), and the reader rightly sees one blob. Its count errors go both ways (one too many in
+159 drawings, one too few in 84). Snapping to the codebooks changes nothing; guidance 3 hurts.
+
+The likeliest reason is resolution: a latent cell covers 8×8 pixels, so G3 decides where a
+shape goes on a 64-cell grid, where G2 decides on 256 cells of 4×4 pixels, and a misplaced cell
+is a shape eight pixels out. The copies (0.7%) are all one-square captions, which have only
+about two hundred possible layouts; identical code grids there are coincidence, not memory.
+
+So the trade is the one latent models make, measured: **~2.5× cheaper per step for a loss in
+placement precision**, at the same number of steps. Still open, and cheap to answer: G3 at
+matched compute (about 2.5× the steps, the same wall clock as G2), and a finer latent (the
+16×16 tokenizer, `imgtok-shapes16`, which is already trained and lost nothing in G0).
+
 ## Traps to keep
 
 1. **A score that borrows a name it does not earn.** There is no FID here: FID needs a
@@ -463,8 +534,9 @@ text, real pictures) are for.
 | 10 | [`pictures/score.py`](../aksharallm/pictures/score.py) → `report`, `compare` | seen vs held-out captions, copies of training pictures, variety, per-drawing verdicts paired |
 | 11 | [`pictures/flow.py`](../aksharallm/pictures/flow.py) → `flow_loss`, `sample`, `FlowModel` | G2: the straight path and its velocity, Euler sampling with guidance, the transformer run bidirectionally over [time, words, patches] |
 | 12 | [`pictures/train_flow.py`](../aksharallm/pictures/train_flow.py) → `evaluate`, `main` | the trainer contract again; val on fixed pictures, noise and times |
-| 13 | [`pictures/drawer.py`](../aksharallm/pictures/drawer.py) → `load_drawer` | one door for G1 and G2: draw, score, copies through the tokenizer |
-| 14 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
+| 13 | [`pictures/latents.py`](../aksharallm/pictures/latents.py) → `picture_latent`, `encode_latents`, `decode_latent` | G3's corpus: the quantized latent, per-channel normalising from the training split, decoding with or without snapping |
+| 14 | [`pictures/drawer.py`](../aksharallm/pictures/drawer.py) → `load_drawer` | one door for G1, G2 and G3: draw, score, copies through the tokenizer |
+| 15 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
 
 Tests: `tests/test_pictures.py`. They cover the reader on every count × colour × shape, the
 reader seeing blur and recolouring, the codebook prefix ignoring later codebooks, batch
@@ -494,3 +566,11 @@ patch does (bidirectional); val loss is repeatable; and the drawing door and the
 G2 checkpoint. Six mutants were checked red: times one step late, the target's sign flipped,
 guidance halves swapped, a causal transformer, stepping backwards, and patches out of order.
 [Lesson 31](lessons/31-flow-matching.md) flips the velocity.
+
+G3 adds three tests: latents normalised on the training split decode back to the tokenizer's own
+`q` (float16 storage aside); an oracle that flows to a known normalised latent must produce the
+decoder's picture of the *denormalised* latent (and a latent model without its tokenizer is
+refused); and a G3 run carries its statistics into the checkpoint, draws through the door as
+G3, and refuses latents written by a different tokenizer. Four mutants were checked red: no
+denormalising, the latent clamped like pixels, no tokenizer check, statistics not saved.
+[Lesson 32](lessons/32-latent.md) skips the denormalising.

@@ -43,6 +43,9 @@ from .flow import FlowConfig, FlowModel, flow_loss
 @dataclass
 class FlowDataConfig:
     corpus: str = "data/vision/shapes64k"
+    #: G3: the same corpus as normalised tokenizer latents (`pictures latents`). Used when
+    #: `flow.space` is "latent"; the corpus above still supplies the captions.
+    latents: str = "data/pictures/latents-imgtok-shapes-64k"
     #: The same corpus as codes (`pictures codes`): only for the copy check when scoring.
     codes: str = "data/pictures/codes-imgtok-shapes-64k"
 
@@ -80,8 +83,9 @@ def load_flow_config(path, overrides=None) -> FlowRunConfig:
     return load_into(FlowRunConfig, path, overrides)
 
 
-def batch_of(ds: ImageCaptions, n: int, drop: float, rng) -> tuple[torch.Tensor, torch.Tensor]:
-    """Random training pictures and their caption ids, `drop` of captions replaced by NULL."""
+def batch_of(ds, n: int, drop: float, rng) -> tuple[torch.Tensor, torch.Tensor]:
+    """Random training examples (pictures, or G3 latents) and their caption ids, `drop` of
+    captions replaced by NULL. Both datasets' `batch` return `(float array, captions)`."""
     imgs, caps = ds.batch(n)
     words = np.asarray([word_ids(c) for c in caps], dtype=np.int64)
     if drop > 0:
@@ -89,8 +93,16 @@ def batch_of(ds: ImageCaptions, n: int, drop: float, rng) -> tuple[torch.Tensor,
     return torch.from_numpy(imgs), torch.from_numpy(words)
 
 
+def rows(ds, idx: list[int]) -> tuple[np.ndarray, list[str]]:
+    """Fixed examples by index, from either dataset."""
+    if hasattr(ds, "rows"):
+        return ds.rows(idx)
+    from ..vision.image import to_tensor
+    return to_tensor(np.asarray(ds.images[idx])), [ds.manifest.captions[j] for j in idx]
+
+
 @torch.no_grad()
-def evaluate(model, ds: ImageCaptions, device, batch_size, batches, amp) -> float:
+def evaluate(model, ds, device, batch_size, batches, amp) -> float:
     """Velocity MSE on the FIRST `batch_size * batches` val pictures, with noise and times
     from a fixed seed: a moving target would let "best" record the kindest noise."""
     was = model.training
@@ -99,9 +111,9 @@ def evaluate(model, ds: ImageCaptions, device, batch_size, batches, amp) -> floa
     total, n = 0.0, 0
     for b in range(batches):
         idx = [ds.index[i % len(ds)] for i in range(b * batch_size, (b + 1) * batch_size)]
-        from ..vision.image import to_tensor
-        x1 = torch.from_numpy(to_tensor(np.asarray(ds.images[idx]))).to(device)
-        words = torch.tensor([word_ids(ds.manifest.captions[j]) for j in idx], device=device)
+        x, caps = rows(ds, idx)
+        x1 = torch.from_numpy(x).to(device)
+        words = torch.tensor([word_ids(c) for c in caps], device=device)
         with amp():
             total += float(flow_loss(model, x1, words, gen))
         n += 1
@@ -125,17 +137,35 @@ def main(argv=None) -> int:
     amp = ((lambda: torch.autocast("cuda", dtype=torch.bfloat16)) if device == "cuda"
            else nullcontext)
 
-    train_ds = ImageCaptions(cfg.data.corpus, split="train", seed=cfg.train.seed)
-    val_ds = ImageCaptions(cfg.data.corpus, split="val", seed=cfg.train.seed + 1)
+    if fc.space == "latent":
+        # G3: the tokenizer's normalised latents. Their shape and statistics come from the
+        # data, and are written into the config so every checkpoint carries them.
+        from .latents import LatentDataset
+        train_ds = LatentDataset(cfg.data.latents, split="train", seed=cfg.train.seed)
+        val_ds = LatentDataset(cfg.data.latents, split="val", seed=cfg.train.seed + 1)
+        meta = train_ds.meta
+        if Path(meta["tokenizer"]).resolve() != Path(fc.tokenizer).resolve():
+            raise SystemExit(f"{cfg.data.latents} was encoded by {meta['tokenizer']}, but the "
+                             f"config names {fc.tokenizer}: the latents and the decoder must be "
+                             "the same tokenizer's")
+        fc.channels, fc.image_size = meta["shape"][0], meta["shape"][1]
+        fc.latent_mean, fc.latent_std = meta["mean"], meta["std"]
+    elif fc.space == "pixels":
+        train_ds = ImageCaptions(cfg.data.corpus, split="train", seed=cfg.train.seed)
+        val_ds = ImageCaptions(cfg.data.corpus, split="val", seed=cfg.train.seed + 1)
+    else:
+        raise SystemExit(f"flow.space is 'pixels' or 'latent', not {fc.space!r}")
     drop_rng = np.random.default_rng(cfg.train.seed + 2)
     model = FlowModel(fc).to(device)
 
     print(f"=== {cfg.name} ===")
     print(f"model      {model.n_params() / 1e6:.2f}M params, d {fc.d_model} x {fc.n_layers} "
-          f"layers, {fc.grid}x{fc.grid} patches of {fc.patch}px")
+          f"layers, {fc.space}: {fc.channels}x{fc.image_size}x{fc.image_size} as "
+          f"{fc.grid}x{fc.grid} patches of {fc.patch}")
     print(f"sequence   time + 3 words + {fc.grid * fc.grid} patches, bidirectional; caption "
           f"dropped {fc.cfg_drop:.0%} of the time (for guidance)")
-    print(f"corpus     {len(train_ds):,} train / {len(val_ds):,} val pictures ({cfg.data.corpus})")
+    src = cfg.data.latents if fc.space == "latent" else cfg.data.corpus
+    print(f"corpus     {len(train_ds):,} train / {len(val_ds):,} val pictures ({src})")
     print(f"device     {device}   (step 0 predicts zero velocity: loss ~ 1 + mean(x1^2))")
 
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.optim.lr,
@@ -207,7 +237,8 @@ def main(argv=None) -> int:
         caps = all_captions()
         k = cfg.train.sample_k
         pics = draw(model, [c for c in caps for _ in range(k)],
-                    guidance=cfg.train.sample_guidance, seed=0, device=device)
+                    guidance=cfg.train.sample_guidance, seed=0, device=device,
+                    tokenizer=tokenizer)
         seen = (train_code_set(CodesDataset(cfg.data.codes, books=fc.books, split="train"))
                 if Path(cfg.data.codes, "codes.npy").is_file() else set())
         r = judge_drawings(caps, k, pics, tokens_of(pics, tokenizer, fc.books, device), seen)

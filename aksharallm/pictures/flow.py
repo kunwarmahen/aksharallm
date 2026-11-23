@@ -32,6 +32,11 @@ new block; in-context conditioning needs none, which is the point of this repo's
 Guidance is the same line as G1's, applied to velocities instead of logits:
 `v = v_uncond + w * (v_cond - v_uncond)`.
 
+**G3 is this file too**, with `space: latent`: the same model draws the tokenizer's normalised
+8x8x64 latent (`patch: 1`, `channels: 64`, so 64 tokens instead of 256) and `draw` hands the
+result to the tokenizer's decoder (`latents.py`). Nothing else changes, which is the point:
+latent diffusion is pixel diffusion in a smaller space.
+
 Read with: docs/26-pictures.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
@@ -66,6 +71,17 @@ class FlowConfig:
     #: The tokenizer used only to SCORE drawings (copies, variety), never to make them.
     tokenizer: str = "checkpoints/imgtok-shapes/ckpt_best.pt"
     books: int = 2
+    #: "pixels" (G2) or "latent" (G3: the tokenizer's normalised 8x8x64 latent; the tokenizer
+    #: above then also DECODES every drawing, so it must be the one that wrote the latents).
+    space: str = "pixels"
+    #: Channels of what is being drawn: 3 for pixels, the tokenizer's latent_dim for latents.
+    channels: int = 3
+    #: G3: re-quantize a drawn latent onto the codebooks before decoding.
+    snap: bool = False
+    #: G3: the per-channel statistics the latents were normalised with (latents.py). Saved in
+    #: the config so a checkpoint can always map its drawings back.
+    latent_mean: list | None = None
+    latent_std: list | None = None
 
     @property
     def grid(self) -> int:
@@ -73,21 +89,21 @@ class FlowConfig:
 
     @property
     def patch_dim(self) -> int:
-        return 3 * self.patch * self.patch
+        return self.channels * self.patch * self.patch
 
 
 def patchify(x: torch.Tensor, p: int) -> torch.Tensor:
-    """`(B, 3, H, W)` -> `(B, (H/p)*(W/p), 3*p*p)`, rows of patches in raster order."""
+    """`(B, C, H, W)` -> `(B, (H/p)*(W/p), C*p*p)`, rows of patches in raster order."""
     B, C, H, W = x.shape
     x = x.reshape(B, C, H // p, p, W // p, p).permute(0, 2, 4, 1, 3, 5)
     return x.reshape(B, (H // p) * (W // p), C * p * p)
 
 
-def unpatchify(t: torch.Tensor, p: int, size: int) -> torch.Tensor:
+def unpatchify(t: torch.Tensor, p: int, size: int, channels: int = 3) -> torch.Tensor:
     B, N, D = t.shape
     g = size // p
-    x = t.reshape(B, g, g, 3, p, p).permute(0, 3, 1, 4, 2, 5)
-    return x.reshape(B, 3, size, size)
+    x = t.reshape(B, g, g, channels, p, p).permute(0, 3, 1, 4, 2, 5)
+    return x.reshape(B, channels, size, size)
 
 
 def time_features(t: torch.Tensor, dim: int) -> torch.Tensor:
@@ -132,7 +148,7 @@ class FlowModel(nn.Module):
         seq = torch.cat([te[:, None], cap, patches], dim=1)
         h, _ = self.lm(None, inputs_embeds=seq, return_hidden=True)
         v = self.out(h[:, 1 + CAPTION_LEN:])
-        return unpatchify(v, fc.patch, fc.image_size)
+        return unpatchify(v, fc.patch, fc.image_size, fc.channels)
 
     def n_params(self) -> int:
         return sum(p.numel() for p in self.parameters())
@@ -167,7 +183,7 @@ def sample(model, captions: list[str], *, steps: int | None = None, guidance: fl
     B = len(captions)
     words = torch.tensor([word_ids(c) for c in captions], dtype=torch.long, device=device)
     gen = torch.Generator(device="cpu").manual_seed(seed)
-    x = torch.randn((B, 3, fc.image_size, fc.image_size), generator=gen).to(device)
+    x = torch.randn((B, fc.channels, fc.image_size, fc.image_size), generator=gen).to(device)
     guide = guidance != 1.0
     null = torch.full_like(words, NULL)
     for i in range(steps):
@@ -179,18 +195,33 @@ def sample(model, captions: list[str], *, steps: int | None = None, guidance: fl
         else:
             v = model(x, t, words)
         x = x + v.float() / steps
-    return x.clamp(-1, 1)
+    # Pixels live in [-1, 1]; a latent has no such range, and clamping it would distort it.
+    return x.clamp(-1, 1) if fc.space == "pixels" else x
 
 
 @torch.no_grad()
 def draw(model, captions: list[str], *, guidance: float = 1.0, steps: int | None = None,
-         seed: int = 0, device: str = "cpu", batch: int = 64) -> np.ndarray:
-    """Captions -> `(B, 64, 64, 3)` uint8 pictures."""
+         seed: int = 0, device: str = "cpu", batch: int = 64, tokenizer=None,
+         snap: bool | None = None) -> np.ndarray:
+    """Captions -> `(B, 64, 64, 3)` uint8 pictures. A G3 model (`space: latent`) draws a
+    normalised latent, which is mapped back with the saved statistics and decoded by
+    `tokenizer`'s decoder (the tokenizer that wrote the latents)."""
     from ..vision.image import from_tensor
+    from .latents import decode_latent, denormalise, stats_tensors
     model.eval()
-    out = [from_tensor(sample(model, captions[i:i + batch], steps=steps, guidance=guidance,
-                              seed=seed + i, device=device).cpu().numpy())
-           for i in range(0, len(captions), batch)]
+    fc = model.fc
+    snap = fc.snap if snap is None else snap
+    out = []
+    for i in range(0, len(captions), batch):
+        x = sample(model, captions[i:i + batch], steps=steps, guidance=guidance,
+                   seed=seed + i, device=device)
+        if fc.space == "latent":
+            if tokenizer is None or fc.latent_mean is None:
+                raise ValueError("a latent (G3) model needs its tokenizer and saved statistics "
+                                 "to turn a drawing into pixels")
+            m, s = stats_tensors(fc.latent_mean, fc.latent_std, device)
+            x = decode_latent(tokenizer, denormalise(x, m, s), snap=snap).float().clamp(-1, 1)
+        out.append(from_tensor(x.cpu().numpy()))
     return np.concatenate(out)
 
 

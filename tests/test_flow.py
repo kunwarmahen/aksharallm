@@ -165,3 +165,94 @@ def test_the_drawing_door_and_the_portal_take_a_flow_model(tmp_path):
                   "n": 2, "guidance": 3})
     assert out["kind"] == "G2" and len(out["pictures"]) == 2
     assert np.asarray(r["_pictures"]).shape == (2, 64, 64, 3)
+
+
+# ---- G3: the same flow, in the tokenizer's latent ---------------------------------------
+
+def _tiny_tokenizer(root):
+    from aksharallm.pictures.tokenizer import PictureConfig, PictureTokenizer
+    torch.manual_seed(0)
+    pc = PictureConfig(image_size=16, channels=[8, 16], latent_dim=8, n_codebooks=2,
+                       codebook_size=16)
+    tok = PictureTokenizer(pc).eval()
+    (root / "checkpoints/tok").mkdir(parents=True, exist_ok=True)
+    torch.save({"model": tok.state_dict(), "picture": asdict(pc), "stage": "picture", "step": 1},
+               root / "checkpoints/tok/ckpt_best.pt")
+    return tok
+
+
+def test_latents_are_normalised_on_the_training_split_and_decode_back_exactly(tmp_path):
+    from aksharallm.pictures.latents import (LatentDataset, decode_latent, denormalise,
+                                             encode_latents, picture_latent, stats_tensors)
+    from aksharallm.vision.image import ImageCaptions, to_tensor
+    tok = _tiny_tokenizer(tmp_path)
+    synth_corpus(tmp_path / "c", n_images=40, size=16, progress=None)
+    meta = encode_latents(tmp_path / "checkpoints/tok/ckpt_best.pt", tmp_path / "c",
+                          tmp_path / "lat", progress=None)
+    assert meta["shape"] == [8, 4, 4]
+    ds = LatentDataset(tmp_path / "lat", split="train")
+    z, _ = ds.rows(ds.index)
+    assert abs(z.mean()) < 0.05 and abs(z.std() - 1) < 0.1      # unit scale, like the noise
+    pics = ImageCaptions(tmp_path / "c", split="val", val_frac=1.0)
+    x = torch.from_numpy(to_tensor(np.asarray(pics.images[:4])))
+    q = picture_latent(tok, x)
+    m, s = stats_tensors(meta["mean"], meta["std"])
+    back = denormalise(torch.from_numpy(np.load(tmp_path / "lat/latents.npy")[:4]).float(), m, s)
+    assert torch.allclose(back, q, atol=2e-2)                   # float16 storage, nothing else
+    assert torch.allclose(decode_latent(tok, q), tok.decoder(q))
+
+
+def test_a_latent_drawing_is_mapped_back_before_the_decoder_paints_it(tmp_path):
+    """An oracle that flows to a known normalised latent: the picture must be the decoder's
+    picture of the DENORMALISED latent. Without the mapping back, the decoder paints a latent
+    at the wrong scale (on the real tokenizer the reader then drops from 100% to 62%)."""
+    from aksharallm.pictures.flow import draw
+    from aksharallm.pictures.latents import denormalise, stats_tensors
+    from aksharallm.vision.image import from_tensor
+    tok = _tiny_tokenizer(tmp_path)
+    mean, std = [0.3] * 8, [2.0] * 8
+    z = torch.randn(1, 8, 4, 4)
+
+    class LatentOracle(Oracle):
+        def __init__(self):
+            super().__init__(z)
+            self.fc = FlowConfig(space="latent", channels=8, image_size=4, patch=1,
+                                 latent_mean=mean, latent_std=std, sample_steps=3)
+    got = draw(LatentOracle(), ["one red circle"], tokenizer=tok)
+    m, s = stats_tensors(mean, std)
+    want = from_tensor(tok.decoder(denormalise(z, m, s)).clamp(-1, 1).detach().numpy())
+    assert np.abs(got.astype(int) - want.astype(int)).max() <= 1
+    with pytest.raises(ValueError, match="tokenizer"):
+        draw(LatentOracle(), ["one red circle"])
+
+
+def test_g3_trains_from_latents_carries_their_statistics_and_draws_through_the_door(tmp_path):
+    from aksharallm.pictures.drawer import load_drawer
+    from aksharallm.pictures.flow import load_flow
+    from aksharallm.pictures.latents import encode_latents
+    from aksharallm.pictures.train_flow import main
+    _tiny_tokenizer(tmp_path)
+    synth_corpus(tmp_path / "c", n_images=40, size=16, progress=None)
+    tok = tmp_path / "checkpoints/tok/ckpt_best.pt"
+    meta = encode_latents(tok, tmp_path / "c", tmp_path / "lat", progress=None)
+    cfg = tmp_path / "g3.yaml"
+    body = f"""
+name: g3
+flow: {{space: latent, patch: 1, d_model: 32, n_layers: 1, n_heads: 2, sample_steps: 2,
+        tokenizer: {tok}, books: 2}}
+data: {{corpus: {tmp_path / 'c'}, latents: {tmp_path / 'lat'}, codes: {tmp_path / 'none'}}}
+optim: {{lr: 1.0e-3, warmup_steps: 1}}
+train: {{out_dir: {tmp_path / 'checkpoints/g3'}, batch_size: 4, max_steps: 2, eval_every: 1,
+         eval_batches: 1, sample_every: 0, sample_k: 0, ckpt_every: 0, log_every: 1}}
+"""
+    cfg.write_text(body)
+    assert main([str(cfg)]) == 0
+    _, fc, _ = load_flow(tmp_path / "checkpoints/g3/ckpt_last.pt")
+    assert (fc.channels, fc.image_size) == (8, 4) and fc.latent_mean == meta["mean"]
+    d = load_drawer(tmp_path / "checkpoints/g3/ckpt_last.pt", tmp_path)
+    assert d.kind == "G3"
+    assert d.draw(["two red circles"]).shape == (1, 16, 16, 3)
+    cfg.write_text(body.replace(f"tokenizer: {tok}", f"tokenizer: {tmp_path / 'other.pt'}")
+                   .replace("checkpoints/g3", "checkpoints/g3b"))
+    with pytest.raises(SystemExit, match="same tokenizer"):
+        main([str(cfg)])

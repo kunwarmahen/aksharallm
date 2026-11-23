@@ -756,6 +756,13 @@ python -m aksharallm.pictures gen-report flow-shapes --guidance 3 --k 32
 python -m aksharallm.pictures draw flow-shapes "three purple triangles"
 ```
 
+The fourth piece (**G3**) is G2 in the image tokenizer's 8×8×64 latent instead of pixels, the
+way every real image model works: 64 tokens instead of 256, and the tokenizer's decoder paints
+the result (`python -m aksharallm.pictures latents imgtok-shapes --corpus data/vision/shapes64k
+--out data/pictures/latents-imgtok-shapes-64k`, then `scripts/audio.sh flow-latent-shapes`).
+First run: 16 minutes instead of ~42, colour and shape kept, count down to 88% (it sometimes
+puts two shapes touching): cheaper, coarser.
+
 **How you know G2 worked:** first run, 56 minutes on the card: 99% of seen captions and 100% of
 the never-seen purple triangles drawn right, against 89% / 70% for the best G1, no copies.
 

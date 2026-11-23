@@ -210,6 +210,24 @@ if [ "$KIND" = picture ] || [ "$KIND" = flow ]; then
     echo "    $CORPUS/images.bin: $((sz / 1000000)) MB = $((sz / 12288)) pictures at 64x64"
     $PY -m aksharallm.pictures read --corpus "$CORPUS" --n 500 \
         || { echo "    the reader is not exact on the corpus -- every score would be wrong" >&2; exit 1; }
+    if [ "$KIND" = flow ]; then
+        # G3 (flow.space: latent) trains on the tokenizer's latents: encode them if missing.
+        read -r SPACE LAT TOK < <($PY - "$CFG" <<'EOF'
+import sys, yaml
+c = yaml.safe_load(open(sys.argv[1])) or {}
+f, d = c.get("flow") or {}, c.get("data") or {}
+print(f.get("space", "pixels"), d.get("latents", "-"), f.get("tokenizer", "-"))
+EOF
+)
+        if [ "$SPACE" = latent ]; then
+            [ -s "$TOK" ] || { echo "    ERROR: the tokenizer $TOK does not exist" >&2; exit 1; }
+            if [ ! -s "$LAT/latents.npy" ]; then
+                echo "    $LAT is missing. Encoding the corpus to latents with $TOK (CPU, ~5 min)..."
+                CUDA_VISIBLE_DEVICES= $PY -m aksharallm.pictures latents "$TOK" --corpus "$CORPUS" --out "$LAT" || exit 1
+            fi
+            echo "    latents: $LAT ($(du -h "$LAT/latents.npy" | cut -f1))"
+        fi
+    fi
     CORPORA=""
 fi
 if [ "$KIND" = picgen ]; then

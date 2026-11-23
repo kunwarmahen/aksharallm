@@ -1,5 +1,6 @@
-"""One door for every model that draws from a caption: G1 (codes, `stage: picgen`) and G2
-(flow matching in pixels, `stage: flow`). The CLI's `draw` / `gen-report` and the portal's
+"""One door for every model that draws from a caption: G1 (codes, `stage: picgen`), G2
+(flow matching in pixels, `stage: flow`) and G3 (the same in the tokenizer's latent,
+`stage: flow` with `space: latent`). The CLI's `draw` / `gen-report` and the portal's
 Draw panel all go through `load_drawer`, so a new drawing model is one more branch here and
 nothing else learns its name.
 
@@ -33,6 +34,8 @@ class Drawer:
     tokenizer: object
     root: Path
     device: str
+    #: G3 only: re-quantize a drawn latent before decoding (None = the checkpoint's choice).
+    snap: bool | None = None
 
     @property
     def step(self):
@@ -62,7 +65,7 @@ class Drawer:
             return pics, toks
         from .flow import draw
         pics = draw(self.model, captions, guidance=guidance, steps=steps, seed=seed,
-                    device=self.device)
+                    device=self.device, tokenizer=self.tokenizer, snap=self.snap)
         return pics, tokens_of(pics, self.tokenizer, self.books, self.device)
 
     def seen(self) -> set[bytes]:
@@ -109,9 +112,9 @@ def load_drawer(path: str | Path, root: str | Path, device: str = "cpu") -> Draw
     elif stage == "flow":
         from .flow import load_flow
         model, cfg, blob = load_flow(path, device)
-        kind = "G2"
+        kind = "G3" if cfg.space == "latent" else "G2"
     else:
-        raise ValueError(f"{path} is not a drawing model (G1 picgen or G2 flow checkpoint)")
+        raise ValueError(f"{path} is not a drawing model (a G1 picgen or a G2/G3 flow checkpoint)")
     tok = Path(cfg.tokenizer)
     tokenizer, _ = load_tokenizer(tok if tok.is_absolute() else root / tok, device)
     return Drawer(kind, path, model, cfg, blob, tokenizer, root, device)

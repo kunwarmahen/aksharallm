@@ -1,0 +1,54 @@
+# G3 of the picture line (docs/26 § "G3: flow matching in the latent"): G2's flow model moved
+# into the image tokenizer's latent space. It draws an 8x8x64 latent (64 tokens, against G2's
+# 256 patches of pixels) and imgtok-shapes's decoder paints it. Everything else, the corpus,
+# captions, schedule, steps and seed, is flow-shapes's, so the two pair drawing for drawing.
+#
+#   python -m aksharallm.pictures latents imgtok-shapes --corpus data/vision/shapes64k \
+#       --out data/pictures/latents-imgtok-shapes-64k
+#   scripts/audio.sh flow-latent-shapes
+#   python -m aksharallm.pictures gen-report flow-latent-shapes --guidance 1 --k 32 [--snap]
+
+name: flow-latent-shapes
+
+flow:
+  space: latent           # the tokenizer's latent, not pixels
+  image_size: 8           # set from the latents' shape at launch (8x8x64)
+  channels: 64
+  patch: 1                # one token per latent cell: 64 tokens
+  d_model: 384
+  n_layers: 8
+  n_heads: 6
+  dropout: 0.0
+  cfg_drop: 0.1
+  sample_steps: 50
+  tokenizer: checkpoints/imgtok-shapes/ckpt_best.pt   # wrote the latents, decodes the drawings
+  books: 2
+
+data:
+  corpus: data/vision/shapes64k
+  latents: data/pictures/latents-imgtok-shapes-64k
+  codes: data/pictures/codes-imgtok-shapes-64k
+
+optim:
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 1000
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.99
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/flow-latent-shapes
+  batch_size: 64
+  max_steps: 30000
+  eval_every: 1000
+  eval_batches: 8
+  sample_every: 5000
+  sample_k: 2
+  sample_guidance: 3.0
+  ckpt_every: 2000
+  log_every: 50
+  seed: 1337
+  resume: auto

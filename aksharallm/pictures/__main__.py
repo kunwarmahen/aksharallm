@@ -14,7 +14,9 @@ G1, a sentence to a picture:
     python -m aksharallm.pictures gen-compare A.json B.json  # two G1 reports, paired
 
 G2, flow matching in pixels: `draw` and `gen-report` take a G2 run the same way
-(`flow-shapes`), and `--steps` sets its number of Euler steps.
+(`flow-shapes`), and `--steps` sets its number of Euler steps. G3 is the same in the
+tokenizer's latent: `pictures latents imgtok-shapes` encodes the corpus, `flow-latent-shapes`
+trains on it, and `--snap` re-quantizes a drawn latent before the decoder paints it.
 
 Training is `scripts/audio.sh imgtok-shapes` (or `python -m aksharallm.pictures.train
 configs/imgtok-shapes.yaml`), `scripts/audio.sh imggen-shapes` for G1, and
@@ -173,10 +175,26 @@ def cmd_codes(args) -> int:
     return 0
 
 
-def _load_drawer(name: str, device: str):
+def _load_drawer(name: str, device: str, snap: bool = False):
     from .drawer import load_drawer
     root = _root()
-    return load_drawer(find_checkpoint(name, root), root, device)
+    d = load_drawer(find_checkpoint(name, root), root, device)
+    if snap:
+        d.snap = True
+    return d
+
+
+def cmd_latents(args) -> int:
+    from .latents import encode_latents
+    root = _root()
+    path = find_checkpoint(args.tokenizer, root)
+    out = args.out or f"data/pictures/latents-{path.parent.name}"
+    try:
+        rel = path.resolve().relative_to(root)
+    except ValueError:
+        rel = path
+    encode_latents(rel, args.corpus, root / out, books=args.books, device=_device(args.device))
+    return 0
 
 
 def cmd_draw(args) -> int:
@@ -185,7 +203,7 @@ def cmd_draw(args) -> int:
     from ..vision.image import write_png
     from .codes import fact_of
     from .reader import judge
-    d = _load_drawer(args.checkpoint, _device(args.device))
+    d = _load_drawer(args.checkpoint, _device(args.device), args.snap)
     pics = d.draw([args.caption] * args.n, guidance=args.guidance, temperature=args.temperature,
                   top_k=args.top_k, seed=args.seed, steps=args.steps)
     want = fact_of(args.caption)
@@ -208,7 +226,7 @@ def cmd_draw(args) -> int:
 def cmd_gen_report(args) -> int:
     from .score import gallery, public
     root = _root()
-    d = _load_drawer(args.checkpoint, _device(args.device))
+    d = _load_drawer(args.checkpoint, _device(args.device), args.snap)
     r = d.report(k=args.k, guidance=args.guidance, temperature=args.temperature,
                  top_k=args.top_k, seed=args.seed, steps=args.steps)
     run = d.path.parent.name
@@ -219,6 +237,8 @@ def cmd_gen_report(args) -> int:
         stem += f"-t{args.temperature:g}-k{args.top_k or 0}-s{args.seed}"
     if args.steps:
         stem += f"-n{args.steps}"
+    if args.snap:
+        stem += "-snap"
     names = gallery(r, root / RESULTS / stem)
     print(f"{d.path} ({d.kind}, step {d.step}): {args.k} pictures for each of "
           f"{len(r['captions'])} captions, guidance {args.guidance:g}, {r['seconds']}s\n")
@@ -294,10 +314,19 @@ def main(argv=None) -> int:
         s.add_argument("--guidance", type=float, default=3.0, help="1 = no guidance")
         s.add_argument("--temperature", type=float, default=1.0)
         s.add_argument("--top-k", type=int, default=None)
-        s.add_argument("--steps", type=int, default=None, help="G2: Euler steps (default: the config's)")
+        s.add_argument("--steps", type=int, default=None, help="G2/G3: Euler steps (default: the config's)")
+        s.add_argument("--snap", action="store_true",
+                       help="G3: re-quantize each drawn latent onto the codebooks before decoding")
         s.add_argument("--seed", type=int, default=0)
         s.add_argument("--device", default="cpu", help="cpu (default), cuda or auto")
         s.set_defaults(fn=fn)
+    s = sub.add_parser("latents", help="G3: encode a picture corpus to normalised tokenizer latents")
+    s.add_argument("tokenizer", help="a .pt, or a tokenizer run name")
+    s.add_argument("--corpus", default="data/vision/shapes64k")
+    s.add_argument("--books", type=int, default=None, help="codebooks summed into the latent (default: all)")
+    s.add_argument("--out", default=None, help="default: data/pictures/latents-<run>")
+    s.add_argument("--device", default="cpu")
+    s.set_defaults(fn=cmd_latents)
     s = sub.add_parser("gen-compare", help="G1: two gen-reports, paired per (caption, sample)")
     s.add_argument("a")
     s.add_argument("b")
