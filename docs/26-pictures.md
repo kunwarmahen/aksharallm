@@ -5,7 +5,18 @@ codes for speech, the 65 tokens of a game frame. To make it *draw*, a picture fi
 become such a sequence, and that sequence has to turn back into the picture. That is the
 **image tokenizer**, the first piece (G0) of the picture line planned in `PLAN.md`. The
 second (G1, [below](#from-a-sentence-to-a-picture-g1)) is a transformer that reads "two red
-circles" and writes those integers:
+circles" and writes those integers. The rest of the chapter goes the way real image models went:
+
+| step | what it is | best result on the shapes | section |
+|---|---|---|---|
+| G0 | image tokenizer (VQ) | every picture reads back right | [The tokenizer](#the-tokenizer) |
+| G1 | a transformer writes the codes | 89% (after more pictures fixed counting) | [G1](#from-a-sentence-to-a-picture-g1) |
+| G2 | flow matching in pixels | 99.2% | [G2](#g2-drawing-by-flow-matching) |
+| G3 / G3b | the same in a latent: a VQ latent, then a continuous one | 87.6% / **98.9% at a third of the cost** | [G3](#g3-flow-matching-in-the-latent) |
+| G4a | the caption read by our own frozen language model | 99.3%, 99.0% on a phrasing never seen | [G4a](#g4a-reading-a-sentence-2026-11-23) |
+
+Lessons 29–33 break one piece each: the judge, guidance, the velocity, the latent's scale, and
+a held-out phrasing.
 
 ```mermaid
 flowchart LR

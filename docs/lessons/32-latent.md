@@ -75,3 +75,6 @@ python -m aksharallm.pictures gen-compare logs/pictures/gen-flow-shapes-step2999
 ```
 
 Or open the **Pictures** tab: G3 models are listed beside G1 and G2 in the Draw panel.
+
+Next, [lesson 33](docs/lessons/33-held-out-phrasing.md): the same model reading a whole
+sentence through a frozen language model, and a held-out test that training must never see.
