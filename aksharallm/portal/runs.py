@@ -56,6 +56,7 @@ TRAINERS: tuple[str, ...] = (
     "aksharallm.pictures.train",
     "aksharallm.pictures.train_gen",
     "aksharallm.pictures.train_flow",
+    "aksharallm.pictures.train_ae",
 )
 
 #: Every shell script that pre-flights a run and publishes `launch.pid` / `launch.meta`.
@@ -133,6 +134,9 @@ LAUNCHERS: dict[str, dict] = {
     "flow-latent-shapes": {"script": "scripts/audio.sh", "args": ["flow-latent-shapes"]},
     "flow-latent16-shapes": {"script": "scripts/audio.sh", "args": ["flow-latent16-shapes"]},
     "flow-latent16p2-shapes": {"script": "scripts/audio.sh", "args": ["flow-latent16p2-shapes"]},
+    # G3b: a continuous autoencoder, and G3's flow on its latent (docs/26).
+    "ae-shapes": {"script": "scripts/audio.sh", "args": ["ae-shapes"]},
+    "flow-ae-shapes": {"script": "scripts/audio.sh", "args": ["flow-ae-shapes"]},
     # The speech recogniser (Phase 7, docs/23): same launcher, an `asr:` config.
     "asr-synth": {"script": "scripts/audio.sh", "args": ["asr-synth"]},
     "asr-libri100": {"script": "scripts/audio.sh", "args": ["asr-libri100"]},
@@ -225,7 +229,7 @@ def exec_cmdline(argv: list[str]) -> str:
 #: test for "this is a run and not a settings file". `model:` is a language model, `codec:`
 #: and `audiolm:` are docs/21, `vision:` is docs/22, `asr:` is docs/23. Deliberately not a
 #: YAML parse: `runs()` is called on every poll of every open page.
-_RUN_CONFIG_RE = re.compile(r"^(model|codec|audiolm|vision|asr|speaker|picture|picgen|flow):", re.MULTILINE)
+_RUN_CONFIG_RE = re.compile(r"^(model|codec|audiolm|vision|asr|speaker|picture|picgen|flow|autoencoder):", re.MULTILINE)
 
 
 def _is_run_config(path: Path) -> bool:
@@ -982,7 +986,7 @@ class RunStore:
         if not path.exists():
             return {}
         text = self._text(path, limit=1_000_000) or ""
-        kind = next((k for k in ("asr", "codec", "audiolm", "vision", "speaker", "picture", "picgen", "flow")
+        kind = next((k for k in ("asr", "codec", "audiolm", "vision", "speaker", "picture", "picgen", "flow", "autoencoder")
                      if re.search(rf"^{k}:", text, re.MULTILINE)), "model")
         try:
             if kind != "model":
@@ -1074,6 +1078,14 @@ class RunStore:
                     f"(guidance)")
             batch = f"{cfg.train.batch_size} pictures"
             sources = [cfg.data.codes, f"tokenizer: {g.tokenizer}"]
+        elif kind == "autoencoder":
+            from ..pictures.train_ae import load_ae_config
+            cfg = load_ae_config(str(path))
+            a = cfg.autoencoder
+            arch = (f"continuous picture autoencoder: {a.image_size}px -> {a.grid}x{a.grid}x"
+                    f"{a.latent_dim} latent, KL weight {a.kl_weight:g}")
+            batch = f"{cfg.train.batch_size} pictures"
+            sources = [cfg.data.corpus, f"held out: {cfg.data.holdout}"]
         elif kind == "flow":
             from ..pictures.train_flow import load_flow_config
             cfg = load_flow_config(str(path))

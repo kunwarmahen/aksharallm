@@ -1026,6 +1026,13 @@ Four files plus the original. The trade becomes something you hear rather than s
 read — and it is the same trade [quantization](11-quantization.md) makes silently in the
 weights.
 
+**Music is the obvious next use, and it is planned, not built** (`PLAN.md` § "Added 2026-11-22:
+synthesizing music"): symbolic music on rules we wrote first, then this chapter's codec and
+audio LM retrained on music at a wider band (the MusicGen recipe), then flow matching on music
+latents with the picture line's autoencoder ([chapter 26](26-pictures.md)). The scoring idea is
+the picture line's: transcribe the generated sound back to notes and check them against what
+was asked.
+
 ## The code, in reading order
 
 Read [doc 4](04-model.md) and [doc 5](05-pretraining.md) first if you have not: parts 3 and 4

@@ -36,6 +36,9 @@ class Drawer:
     device: str
     #: G3 only: re-quantize a drawn latent before decoding (None = the checkpoint's choice).
     snap: bool | None = None
+    #: The VQ tokenizer that scores copies and variety (the decoder's own, unless it is an
+    #: autoencoder with no codes).
+    scorer: object = None
 
     @property
     def step(self):
@@ -66,7 +69,7 @@ class Drawer:
         from .flow import draw
         pics = draw(self.model, captions, guidance=guidance, steps=steps, seed=seed,
                     device=self.device, tokenizer=self.tokenizer, snap=self.snap)
-        return pics, tokens_of(pics, self.tokenizer, self.books, self.device)
+        return pics, tokens_of(pics, self.scorer, self.books, self.device)
 
     def seen(self) -> set[bytes]:
         """The training pictures' codes, for the copy check (empty if the codes are absent)."""
@@ -102,7 +105,7 @@ def stage_of(path: str | Path) -> str | None:
 
 def load_drawer(path: str | Path, root: str | Path, device: str = "cpu") -> Drawer:
     """A G1 or G2 checkpoint, with the tokenizer it is scored (and, for G1, decoded) with."""
-    from .train import load_tokenizer
+    from .train import load_coder, load_tokenizer
     root, path = Path(root), Path(path)
     stage = stage_of(path)
     if stage == "picgen":
@@ -115,6 +118,11 @@ def load_drawer(path: str | Path, root: str | Path, device: str = "cpu") -> Draw
         kind = "G3" if cfg.space == "latent" else "G2"
     else:
         raise ValueError(f"{path} is not a drawing model (a G1 picgen or a G2/G3 flow checkpoint)")
-    tok = Path(cfg.tokenizer)
-    tokenizer, _ = load_tokenizer(tok if tok.is_absolute() else root / tok, device)
-    return Drawer(kind, path, model, cfg, blob, tokenizer, root, device)
+    def at(p):
+        p = Path(p)
+        return p if p.is_absolute() else root / p
+    tokenizer, _ = load_coder(at(cfg.tokenizer), device)
+    scorer = tokenizer
+    if getattr(cfg, "score_tokenizer", None):
+        scorer, _ = load_tokenizer(at(cfg.score_tokenizer), device)
+    return Drawer(kind, path, model, cfg, blob, tokenizer, root, device, scorer=scorer)

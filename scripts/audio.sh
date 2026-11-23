@@ -72,12 +72,16 @@ elif grep -qE '^picgen:' "$CFG"; then
     # G1 (docs/26): a transformer from a caption to the tokenizer's codes.
     TRAINER=aksharallm.pictures.train_gen
     KIND=picgen
+elif grep -qE '^autoencoder:' "$CFG"; then
+    # G3b (docs/26): the continuous picture autoencoder; reads a picture corpus.
+    TRAINER=aksharallm.pictures.train_ae
+    KIND=picture
 elif grep -qE '^flow:' "$CFG"; then
     # G2 (docs/26): flow matching in pixels. Reads a picture corpus like the tokenizer does.
     TRAINER=aksharallm.pictures.train_flow
     KIND=flow
 else
-    echo "$CFG has no 'codec:', 'audiolm:', 'asr:', 'speaker:', 'picture:', 'picgen:' or 'flow:' section -- not an audio run." >&2
+    echo "$CFG has no 'codec:', 'audiolm:', 'asr:', 'speaker:', 'picture:', 'picgen:', 'flow:' or 'autoencoder:' section -- not an audio run." >&2
     echo "For a language model over text, use scripts/phase2.sh or scripts/experiment.sh." >&2
     exit 2
 fi

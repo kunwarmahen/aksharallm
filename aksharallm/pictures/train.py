@@ -91,6 +91,16 @@ def load_tokenizer(path: str | Path, device: str = "cpu") -> tuple[PictureTokeni
     return model.to(device).eval(), blob
 
 
+def load_coder(path: str | Path, device: str = "cpu"):
+    """A picture tokenizer (VQ, `stage: picture`) or a continuous autoencoder
+    (`stage: autoencoder`): whatever turns pictures into the latent G3 draws, and back."""
+    stage = torch.load(path, map_location="cpu", weights_only=False, mmap=True).get("stage")
+    if stage == "autoencoder":
+        from .train_ae import load_autoencoder
+        return load_autoencoder(path, device)
+    return load_tokenizer(path, device)
+
+
 @torch.no_grad()
 def evaluate(model, ds, device, batch_size, batches) -> float:
     """Mean reconstruction loss on val pictures at the FULL codebook count (no dropout), so

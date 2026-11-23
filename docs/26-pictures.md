@@ -537,9 +537,45 @@ numbers do say:
 
 This is why real latent models do not use a plain VQ tokenizer's latent: Stable Diffusion's
 autoencoder is trained with a small KL penalty that keeps its latent smooth and roughly
-Gaussian, precisely so that a diffusion model can learn it. The next experiment that would
-answer this is a continuous autoencoder for G3 (no quantizer, a light KL term), which is also
-the planned first step of G4.
+Gaussian, precisely so that a diffusion model can learn it. The next section is that experiment.
+
+### A latent made to be learned: G3b (2026-11-22)
+
+`pictures/autoencoder.py` keeps the tokenizer's encoder and decoder and replaces the codebooks
+with a **Gaussian latent**: the encoder predicts a mean and a log variance per latent number,
+training decodes a sample (mean + spread × noise), and a small KL term (weight 1e-3) pulls every
+latent towards a unit Gaussian. The latent is **8×8×8 = 512 numbers**, against the VQ latents'
+4,096 and 16,384. For drawing, the latent is the encoder's mean.
+
+```mermaid
+flowchart LR
+    X["picture"] --> E["encoder<br/>(the tokenizer's)"] --> M["mean, log variance<br/>8x8x8"]
+    M -->|"training: mean + spread x noise<br/>drawing: the mean"| Z["latent"]
+    Z --> D["decoder<br/>(the tokenizer's)"] --> Y["picture"]
+    M -.->|"KL to N(0, 1), weight 1e-3"| K["keeps the latent smooth"]
+```
+
+`ae-shapes` trained in 16 minutes and reconstructs **100%** of the val pictures and of the
+held-out purple triangles (56 dB). Three of its eight channels carry almost nothing (spread
+0.02 against 0.4–0.7): the KL term turned them off, which the decoder ignores. Then G3's flow
+model, unchanged, on its latent (`flow-ae-shapes`, one block from `flow-latent-shapes`; copies
+are still checked with the VQ tokenizer's codes, `flow.score_tokenizer`):
+
+| model | what it draws | numbers | 30k steps | seen: all three | held out |
+|---|---|---|---|---|---|
+| G2 | pixels | 12,288 | ~42 min | 99.2% | 100% |
+| G3 | VQ latent, 8×8×64 | 4,096 | 16 min | 87.6% | 79.7% |
+| G3 | VQ latent, 16×16×64 | 16,384 | 16–44 min | ~51% | ~30% |
+| **G3b** | **continuous latent, 8×8×8** | **512** | **15.5 min** | **98.9%** | **97.7%** |
+
+G3b against G2, paired: 13 better, 18 worse on seen captions (**p 0.47, a tie**), 0–3 on the
+held-out ones (p 0.25); against G3: 220–17 (p 4e-46). Colour, shape and count are all ≥ 97.7%,
+no copies, every drawing different.
+
+**So the explanation holds**: the VQ latents were hard because of what they were, not how big.
+A smooth latent made for the purpose, a twenty-fourth the size of the picture, draws as well as
+the pixels at a third of the cost, which is the whole case for latent diffusion. This
+autoencoder is what G4 (real sentences and photos) will build on.
 
 ## Traps to keep
 
@@ -571,8 +607,9 @@ the planned first step of G4.
 | 11 | [`pictures/flow.py`](../aksharallm/pictures/flow.py) → `flow_loss`, `sample`, `FlowModel` | G2: the straight path and its velocity, Euler sampling with guidance, the transformer run bidirectionally over [time, words, patches] |
 | 12 | [`pictures/train_flow.py`](../aksharallm/pictures/train_flow.py) → `evaluate`, `main` | the trainer contract again; val on fixed pictures, noise and times |
 | 13 | [`pictures/latents.py`](../aksharallm/pictures/latents.py) → `picture_latent`, `encode_latents`, `decode_latent` | G3's corpus: the quantized latent, per-channel normalising from the training split, decoding with or without snapping |
-| 14 | [`pictures/drawer.py`](../aksharallm/pictures/drawer.py) → `load_drawer` | one door for G1, G2 and G3: draw, score, copies through the tokenizer |
-| 15 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
+| 14 | [`pictures/autoencoder.py`](../aksharallm/pictures/autoencoder.py) → `PictureAutoencoder` · [`train_ae.py`](../aksharallm/pictures/train_ae.py) | G3b's coder: the tokenizer's encoder and decoder around a Gaussian latent, the KL term, drawing from the mean; its trainer judges reconstructions with the reader |
+| 15 | [`pictures/drawer.py`](../aksharallm/pictures/drawer.py) → `load_drawer` | one door for G1, G2 and G3: draw, score, copies through the tokenizer |
+| 16 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
 
 Tests: `tests/test_pictures.py`. They cover the reader on every count × colour × shape, the
 reader seeing blur and recolouring, the codebook prefix ignoring later codebooks, batch
@@ -610,3 +647,9 @@ refused); and a G3 run carries its statistics into the checkpoint, draws through
 G3, and refuses latents written by a different tokenizer. Four mutants were checked red: no
 denormalising, the latent clamped like pixels, no tokenizer check, statistics not saved.
 [Lesson 32](lessons/32-latent.md) skips the denormalising.
+
+G3b adds three: the autoencoder draws from its mean in eval mode and its KL is zero at the prior;
+one loader opens either coder and G3's latents come from the autoencoder's mean (with nothing to
+snap to); and a G3b run scores copies with the VQ tokenizer, not the autoencoder. Three mutants
+were checked red: sampling in eval mode, ignoring the autoencoder's latent, and scoring with the
+autoencoder.

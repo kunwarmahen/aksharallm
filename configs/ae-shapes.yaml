@@ -1,0 +1,44 @@
+# G3b (docs/26 § "A latent made to be learned"): a continuous autoencoder for latent flow, the
+# Stable Diffusion recipe in miniature. The tokenizer's encoder and decoder, a Gaussian latent
+# in place of the codebooks, a light KL term to keep it smooth. 8x8x8 = 512 numbers a picture
+# (the VQ latents were 4,096 and 16,384). Then flow-ae-shapes draws in it.
+#
+#   scripts/audio.sh ae-shapes
+#   python -m aksharallm.pictures latents ae-shapes --corpus data/vision/shapes64k \
+#       --out data/pictures/latents-ae-shapes-64k
+#   scripts/audio.sh flow-ae-shapes
+
+name: ae-shapes
+
+autoencoder:
+  image_size: 64
+  channels: [64, 128, 256]
+  latent_dim: 8
+  kl_weight: 1.0e-3
+
+data:
+  corpus: data/vision/shapes64k
+  holdout: data/vision/shapes-holdout
+
+optim:
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 300
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.99
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/ae-shapes
+  batch_size: 64
+  max_steps: 20000
+  eval_every: 1000
+  eval_batches: 8
+  sample_every: 4000
+  sample_images: 256
+  ckpt_every: 2000
+  log_every: 100
+  seed: 1337
+  resume: auto

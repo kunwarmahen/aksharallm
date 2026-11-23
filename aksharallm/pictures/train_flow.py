@@ -225,15 +225,18 @@ def main(argv=None) -> int:
                     "drop_rng": drop_rng.bit_generator.state, **extra}, path)
 
     tokenizer = None
+    scorer = [None]
 
     def sample(step: int) -> dict:
         nonlocal tokenizer
         from .codes import all_captions
         from .flow import draw
         from .score import judge_drawings, tokens_of, train_code_set
-        from .train import load_tokenizer
+        from .train import load_coder, load_tokenizer
         if tokenizer is None:
-            tokenizer, _ = load_tokenizer(fc.tokenizer, device)
+            tokenizer, _ = load_coder(fc.tokenizer, device)
+            scorer[0] = (load_tokenizer(fc.score_tokenizer, device)[0] if fc.score_tokenizer
+                         else tokenizer)
         caps = all_captions()
         k = cfg.train.sample_k
         pics = draw(model, [c for c in caps for _ in range(k)],
@@ -241,7 +244,7 @@ def main(argv=None) -> int:
                     tokenizer=tokenizer)
         seen = (train_code_set(CodesDataset(cfg.data.codes, books=fc.books, split="train"))
                 if Path(cfg.data.codes, "codes.npy").is_file() else set())
-        r = judge_drawings(caps, k, pics, tokens_of(pics, tokenizer, fc.books, device), seen)
+        r = judge_drawings(caps, k, pics, tokens_of(pics, scorer[0], fc.books, device), seen)
         s = {"seen_all": r["seen"]["all"], "held_out_all": r["held_out"]["all"],
              "copies": r["seen"]["copies"], "variety": r["variety"],
              "guidance": cfg.train.sample_guidance}

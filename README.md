@@ -143,7 +143,9 @@ aksharallm/
 │   ├── imgtok-shapes.yaml  the image tokenizer: 64x64 shapes -> 8x8 x 4 codes (docs/26)
 │   ├── imggen-shapes.yaml  G1: "two red circles" -> those codes, with guidance (docs/26)
 │   ├── flow-shapes.yaml  G2: noise -> picture by flow matching, in pixels (docs/26)
-│   └── flow-latent-shapes.yaml  G3: the same in the tokenizer's 8x8x64 latent (docs/26)
+│   ├── flow-latent-shapes.yaml  G3: the same in the tokenizer's 8x8x64 latent (docs/26)
+│   ├── ae-shapes.yaml    G3b: the continuous autoencoder (docs/26)
+│   └── flow-ae-shapes.yaml  G3b: flow matching in its 8x8x8 latent (docs/26)
 ├── aksharallm/
 │   ├── config.py         dataclass config loading + CLI overrides
 │   ├── tokenizer/        byte-level BPE training and the chat template
@@ -207,6 +209,7 @@ aksharallm/
 │   │   ├── score.py          drawings judged: 60 captions, held-out ones, copies, variety
 │   │   ├── flow.py           G2/G3: flow matching in pixels or in the latent, over patches
 │   │   ├── latents.py        G3's corpus: the tokenizer's latent, normalised; decoding back
+│   │   ├── autoencoder.py    G3b: a continuous latent with a KL term (no codebooks)
 │   │   └── drawer.py         one door for G1 and G2: draw, score, report
 │   ├── quant/            int8/int4/NF4 from scratch — see docs/11
 │   ├── lora/             LoRA + QLoRA adapters from scratch — see docs/12
@@ -994,6 +997,12 @@ Not built yet, in the order they depend on each other or by value per GPU hour:
   probe kept 27 of 480 problems, all one kind (absolute difference), which went 5 → 14/20
   (paired 9–0); the other eleven practice kinds stayed 0/220 and the held-out four 0 → 1/80.
   GRPO sharpens what the model half-knows; it did not reach what it could not do at all.
+- **Synthesizing music** (planned 2026-11-22, `PLAN.md` § "Added 2026-11-22: synthesizing
+  music"): symbolic music on rules we chose first (event tokens, a transformer, a synthesiser
+  written from scratch, every note checkable against the key and beat asked for), then real
+  MIDI (MAESTRO), then music as audio with the codec and audio LM (the MusicGen recipe), flow
+  matching on music latents (the Stable Audio recipe) and text-to-music. Scored by rule, and by
+  transcribing generated audio back to notes, the way the picture line reads its drawings back.
 - **Making pictures and video** (planned 2026-11-22, `PLAN.md` § "Added 2026-11-22"): an
   image tokenizer (the audio codec in 2-D), autoregressive images over its codes, pixel then
   latent diffusion (DDPM, flow matching, a DiT), text-to-image from our own text model, and
@@ -1019,7 +1028,9 @@ the same flow in the tokenizer's 8×8×64 latent**, trains in 16 minutes instead
 colour and shape, but draws 87.6% of seen captions right (G2 99.2%, paired 216–8): placing
 shapes on an 8×8 grid of latent cells, it sometimes puts two touching. A finer 16×16 latent
 does *worse* (~50%, at 64 or 256 tokens alike): a latent that decodes perfectly is not
-necessarily one a generator can learn.
+necessarily one a generator can learn. **G3b fixes it the Stable Diffusion way**: a continuous
+autoencoder with a light KL term (8×8×8 = 512 numbers) under the same flow model draws 98.9%
+right, a tie with G2 (paired p 0.47), in 15.5 minutes instead of ~42.
 - **The next four, built 2026-11-22 and queued for the 11-23 night**: recall capacity (the
   wide models hold all 64 keys the vocabulary has; narrow arms with 16-wide heads ask where a
   DeltaNet memory runs out, docs/19); the hybrid at ~101M against small-student-muon, with the

@@ -1,0 +1,55 @@
+# G3b (docs/26 § "A latent made to be learned"): G3's flow model on the continuous
+# autoencoder's 8x8x8 latent (ae-shapes: no codebooks, a light KL term), instead of the VQ
+# tokenizer's 8x8x64. One block apart from flow-latent-shapes: the coder, its latents, and the
+# latent's channel count. Copies are still checked with the VQ tokenizer's codes.
+#
+#   scripts/audio.sh ae-shapes
+#   python -m aksharallm.pictures latents ae-shapes --corpus data/vision/shapes64k \
+#       --out data/pictures/latents-ae-shapes-64k
+#   scripts/audio.sh flow-ae-shapes
+
+name: flow-ae-shapes
+
+flow:
+  space: latent           # the tokenizer's latent, not pixels
+  image_size: 8           # set from the latents' shape at launch (8x8x8)
+  channels: 8
+  patch: 1                # one token per latent cell: 64 tokens
+  d_model: 384
+  n_layers: 8
+  n_heads: 6
+  dropout: 0.0
+  cfg_drop: 0.1
+  sample_steps: 50
+  tokenizer: checkpoints/ae-shapes/ckpt_best.pt       # the continuous autoencoder: wrote the latents, decodes
+  score_tokenizer: checkpoints/imgtok-shapes/ckpt_best.pt   # VQ codes for the copy check only
+  books: 2
+
+data:
+  corpus: data/vision/shapes64k
+  latents: data/pictures/latents-ae-shapes-64k
+  codes: data/pictures/codes-imgtok-shapes-64k
+
+optim:
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 1000
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.99
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/flow-ae-shapes
+  batch_size: 64
+  max_steps: 30000
+  eval_every: 1000
+  eval_batches: 8
+  sample_every: 5000
+  sample_k: 2
+  sample_guidance: 3.0
+  ckpt_every: 2000
+  log_every: 50
+  seed: 1337
+  resume: auto

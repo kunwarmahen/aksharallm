@@ -762,7 +762,9 @@ the result (`python -m aksharallm.pictures latents imgtok-shapes --corpus data/v
 --out data/pictures/latents-imgtok-shapes-64k`, then `scripts/audio.sh flow-latent-shapes`).
 First run: 16 minutes instead of ~42, colour and shape kept, count down to 88% (it sometimes
 puts two shapes touching): cheaper, coarser. The finer 16×16 latent scores ~50%: reconstructing
-perfectly does not make a latent easy to generate (chapter 26).
+perfectly does not make a latent easy to generate (chapter 26). A continuous autoencoder with a
+light KL term (`scripts/audio.sh ae-shapes`, then `flow-ae-shapes`) fixes it: 98.9%, level
+with G2, in 15 minutes.
 
 **How you know G2 worked:** first run, 56 minutes on the card: 99% of seen captions and 100% of
 the never-seen purple triangles drawn right, against 89% / 70% for the best G1, no copies.

@@ -256,3 +256,74 @@ train: {{out_dir: {tmp_path / 'checkpoints/g3'}, batch_size: 4, max_steps: 2, ev
                    .replace("checkpoints/g3", "checkpoints/g3b"))
     with pytest.raises(SystemExit, match="same tokenizer"):
         main([str(cfg)])
+
+
+# ---- G3b: a continuous autoencoder's latent ---------------------------------------------
+
+def _tiny_ae(root):
+    from aksharallm.pictures.autoencoder import AEConfig, PictureAutoencoder
+    torch.manual_seed(0)
+    ac = AEConfig(image_size=16, channels=[8, 16], latent_dim=4)
+    ae = PictureAutoencoder(ac).eval()
+    (root / "checkpoints/ae").mkdir(parents=True, exist_ok=True)
+    torch.save({"model": ae.state_dict(), "autoencoder": asdict(ac), "stage": "autoencoder",
+                "step": 1}, root / "checkpoints/ae/ckpt_best.pt")
+    return ae
+
+
+def test_the_autoencoder_draws_from_its_mean_and_its_kl_is_zero_at_the_prior(tmp_path):
+    ae = _tiny_ae(tmp_path)
+    x = torch.rand(2, 3, 16, 16) * 2 - 1
+    mean, logvar = ae.moments(x)
+    assert mean.shape == (2, 4, 4, 4) and torch.equal(ae.latent(x), mean)
+    r1, _ = ae(x)
+    r2, _ = ae(x)
+    assert torch.equal(r1, r2)                      # eval: the mean, no sampling
+    assert torch.equal(r1, ae.decoder(mean))
+
+    class Prior(type(ae)):
+        def moments(self, x):
+            return torch.zeros(2, 4, 4, 4), torch.zeros(2, 4, 4, 4)
+    p = Prior(ae.cfg)
+    assert float(p(x)[1]) == 0.0                    # KL(N(0,1) || N(0,1)) = 0
+
+
+def test_one_loader_opens_either_coder_and_latents_use_the_autoencoders_mean(tmp_path):
+    from aksharallm.pictures.latents import decode_latent, picture_latent
+    from aksharallm.pictures.train import load_coder
+    ae = _tiny_ae(tmp_path)
+    _tiny_tokenizer(tmp_path)
+    a, _ = load_coder(tmp_path / "checkpoints/ae/ckpt_best.pt")
+    t, _ = load_coder(tmp_path / "checkpoints/tok/ckpt_best.pt")
+    assert hasattr(a, "latent") and not hasattr(t, "latent")
+    x = torch.rand(1, 3, 16, 16) * 2 - 1
+    assert torch.equal(picture_latent(a, x), ae.latent(x))
+    z = picture_latent(a, x)
+    assert torch.equal(decode_latent(a, z, snap=True), a.decoder(z))   # nothing to snap to
+
+
+def test_g3b_scores_copies_with_the_vq_tokenizer_not_the_autoencoder(tmp_path):
+    from aksharallm.pictures.drawer import load_drawer
+    from aksharallm.pictures.latents import encode_latents
+    from aksharallm.pictures.train_flow import main
+    _tiny_ae(tmp_path)
+    _tiny_tokenizer(tmp_path)
+    synth_corpus(tmp_path / "c", n_images=40, size=16, progress=None)
+    ae_path = tmp_path / "checkpoints/ae/ckpt_best.pt"
+    encode_latents(ae_path, tmp_path / "c", tmp_path / "lat", progress=None)
+    cfg = tmp_path / "g3b.yaml"
+    cfg.write_text(f"""
+name: g3b
+flow: {{space: latent, patch: 1, d_model: 32, n_layers: 1, n_heads: 2, sample_steps: 2,
+        tokenizer: {ae_path}, score_tokenizer: {tmp_path / 'checkpoints/tok/ckpt_best.pt'},
+        books: 2}}
+data: {{corpus: {tmp_path / 'c'}, latents: {tmp_path / 'lat'}, codes: {tmp_path / 'none'}}}
+optim: {{lr: 1.0e-3, warmup_steps: 1}}
+train: {{out_dir: {tmp_path / 'checkpoints/g3b'}, batch_size: 4, max_steps: 2, eval_every: 0,
+         sample_every: 0, sample_k: 0, ckpt_every: 0, log_every: 1}}
+""")
+    assert main([str(cfg)]) == 0
+    d = load_drawer(tmp_path / "checkpoints/g3b/ckpt_last.pt", tmp_path)
+    assert d.kind == "G3" and hasattr(d.tokenizer, "latent") and not hasattr(d.scorer, "latent")
+    r = d.report(k=1, captions=["one red circle"])
+    assert r["seen"]["n"] == 1 and len(r["per_caption"]) == 1

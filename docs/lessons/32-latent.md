@@ -59,7 +59,9 @@ cells rather than a 16×16 grid of patches (docs/26 § Measured: G3 against G2).
 step, coarser in where things go: the trade every latent model makes. A finer latent (the 16×16
 tokenizer's, which reconstructs just as perfectly) made it *worse*, about 50%, whatever the
 number of tokens: a latent can decode perfectly and still be hard to generate, which is why
-Stable Diffusion's autoencoder is trained to keep its latent smooth.
+Stable Diffusion's autoencoder is trained to keep its latent smooth. Doing exactly that here (a
+continuous autoencoder with a light KL term, 8×8×8 = 512 numbers) brought latent flow up to
+98.9%, level with the pixel model, in a third of the time.
 
 ## Run it yourself
 

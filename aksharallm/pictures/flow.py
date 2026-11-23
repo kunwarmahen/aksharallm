@@ -78,6 +78,9 @@ class FlowConfig:
     channels: int = 3
     #: G3: re-quantize a drawn latent onto the codebooks before decoding.
     snap: bool = False
+    #: The VQ tokenizer used to SCORE drawings (copies, variety) when `tokenizer` is a
+    #: continuous autoencoder, which has no codes to compare. None = `tokenizer`.
+    score_tokenizer: str | None = None
     #: G3: the per-channel statistics the latents were normalised with (latents.py). Saved in
     #: the config so a checkpoint can always map its drawings back.
     latent_mean: list | None = None

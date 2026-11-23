@@ -39,7 +39,10 @@ from ..vision.image import ImageCaptions, ImageManifest, to_tensor
 
 @torch.no_grad()
 def picture_latent(tokenizer, x: torch.Tensor, books: int | None = None) -> torch.Tensor:
-    """Pictures `(B, 3, H, W)` in [-1, 1] -> the quantized latent `q` `(B, D, h, w)`."""
+    """Pictures `(B, 3, H, W)` in [-1, 1] -> the latent G3 draws: the quantized `q` for a VQ
+    tokenizer, the encoder's mean for a continuous autoencoder (autoencoder.py)."""
+    if hasattr(tokenizer, "latent"):
+        return tokenizer.latent(x)
     q, _, _, _ = tokenizer._quantize(tokenizer.encoder(x), books or tokenizer.cfg.n_codebooks)
     return q
 
@@ -49,7 +52,7 @@ def decode_latent(tokenizer, q: torch.Tensor, *, snap: bool = False,
                   books: int | None = None) -> torch.Tensor:
     """A latent `(B, D, h, w)` -> pictures `(B, 3, H, W)`. `snap` re-quantizes it first, so the
     decoder sees only sums of codebook vectors, as it did in training."""
-    if snap:
+    if snap and not hasattr(tokenizer, "latent"):     # an autoencoder has nothing to snap to
         q, _, _, _ = tokenizer._quantize(q, books or tokenizer.cfg.n_codebooks)
     return tokenizer.decoder(q)
 
@@ -74,9 +77,9 @@ def encode_latents(tokenizer_path: str | Path, corpus: str | Path, out_dir: str 
                    val_frac: float = 0.05, progress=print) -> dict:
     """Encode every picture of `corpus` to its normalised latent. Statistics come from the
     TRAINING split only (the last `val_frac` are val, as everywhere else in this package)."""
-    from .train import load_tokenizer
-    model, blob = load_tokenizer(tokenizer_path, device)
-    books = books or model.cfg.n_codebooks
+    from .train import load_coder
+    model, blob = load_coder(tokenizer_path, device)
+    books = books or getattr(model.cfg, "n_codebooks", None)
     ds = ImageCaptions(corpus, split="val", val_frac=1.0)           # every picture, in order
     n = ds.manifest.n_images
     parts = []
