@@ -51,3 +51,7 @@
 }
 .pc-free { flex: 1 1 100%; }
 .pc-free input { width: 100%; }
+
+/* Notes print run names and checkpoint paths: a long unbroken path must wrap, or it sets a
+   floor under the whole page on a phone (docs/09 "On a phone"). */
+#pc-gen-note, #pc-clip-note { overflow-wrap: anywhere; }

@@ -37,20 +37,25 @@ class TextEncoder:
         self.tok = Tokenizer(str(tokenizer))
         self.max_len, self.device = max_len, device
         self.dim = self.model.cfg.d_model
-        self.cache: dict[str, torch.Tensor] = {}
+        self.cache: dict[str, tuple[torch.Tensor, int]] = {}
 
     @torch.no_grad()
-    def _one(self, caption: str) -> torch.Tensor:
+    def _one(self, caption: str) -> tuple[torch.Tensor, int]:
         ids = self.tok.encode(caption)[: self.max_len]
         out = torch.zeros(self.max_len, self.dim)
         if ids:
             h, _ = self.model(torch.tensor([ids], device=self.device), return_hidden=True)
             out[: len(ids)] = h[0].float().cpu()
-        return out
+        return out, len(ids)
 
-    def encode(self, captions: list[str]) -> torch.Tensor:
-        """Captions -> `(B, max_len, dim)` vectors (zeros past the caption's length)."""
+    def encode(self, captions: list[str], with_mask: bool = False):
+        """Captions -> `(B, max_len, dim)` vectors (zeros past the caption's length). With
+        `with_mask`, also the `(B, max_len)` bool mask of real tokens (G4b pools over it)."""
         for c in captions:
             if c not in self.cache:
                 self.cache[c] = self._one(c)
-        return torch.stack([self.cache[c] for c in captions])
+        vecs = torch.stack([self.cache[c][0] for c in captions])
+        if not with_mask:
+            return vecs
+        lens = torch.tensor([self.cache[c][1] for c in captions])
+        return vecs, torch.arange(self.max_len)[None] < lens[:, None]

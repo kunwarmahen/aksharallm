@@ -28,14 +28,14 @@ from pathlib import Path
 import numpy as np
 
 from .codes import all_captions, fact_of
-from .reader import judge
+from .reader import ATTRS, judge
+from .scenes import held_out as held_out_name
 
 HELD_OUT = ("purple", "triangle")
 
 
 def is_held_out(caption: str) -> bool:
-    f = fact_of(caption)
-    return (f["colour"], f["shape"]) == HELD_OUT
+    return held_out_name(fact_of(caption)) is not None
 
 
 def train_code_set(ds) -> set[bytes]:
@@ -84,18 +84,20 @@ def judge_drawings(captions: list[str], k: int, pics: np.ndarray, toks: np.ndarr
     caption) are what the reader checks; without them they are read off the three-word
     caption. G4a passes them, because its captions are sentences and are never parsed."""
     facts = facts or [fact_of(c) for c in captions]
-    held_fact = [(f["colour"], f["shape"]) == HELD_OUT for f in facts]
+    held_by = [held_out_name(f) for f in facts]
+    held_fact = [h is not None for h in held_by]
     asked = [c for c in captions for _ in range(k)]
     asked_facts = [f for f in facts for _ in range(k)]
     verdicts = [judge(p, f) for p, f in zip(pics, asked_facts, strict=True)]
     copies = [t.astype(np.int64).tobytes() in seen for t in toks]
+    #: the attributes these facts name: count/colour/shape, plus size/where for scenes
+    keys = [a for a in ATTRS if all(a in f for f in facts)] + ["all"]
 
     def group(sel: list[int]) -> dict:
         if not sel:
             return {"n": 0}
         n = len(sel)
-        out = {key: sum(verdicts[i][key] for i in sel) / n
-               for key in ("count", "colour", "shape", "all")}
+        out = {key: sum(verdicts[i][key] for i in sel) / n for key in keys}
         out["n"] = n
         out["copies"] = sum(copies[i] for i in sel) / n
         out["correct"] = "".join("1" if verdicts[i]["all"] else "0" for i in sel)
@@ -107,13 +109,19 @@ def judge_drawings(captions: list[str], k: int, pics: np.ndarray, toks: np.ndarr
     for j, c in enumerate(captions):
         sel = list(range(j * k, (j + 1) * k))
         distinct = len({toks[i].tobytes() for i in sel})
-        per_caption.append({"caption": c, "held_out": held_fact[j], "fact": facts[j],
+        per_caption.append({"caption": c, "held_out": held_fact[j], "held_out_as": held_by[j],
+                            "fact": facts[j],
                             "all": sum(verdicts[i]["all"] for i in sel) / k,
                             "distinct": distinct, "copies": sum(copies[i] for i in sel),
                             "reads": [verdicts[i]["read"] for i in sel]})
-    return {"k": k, "captions": captions, "seen": group(rest), "held_out": group(held),
-            "variety": float(np.mean([p["distinct"] / k for p in per_caption])),
-            "per_caption": per_caption, "_pictures": pics}
+    out = {"k": k, "captions": captions, "seen": group(rest), "held_out": group(held),
+           "variety": float(np.mean([p["distinct"] / k for p in per_caption])),
+           "per_caption": per_caption, "attributes": keys[:-1], "_pictures": pics}
+    names = sorted({h for h in held_by if h})
+    if len(names) > 1:          # scenes: each held-out combination on its own as well
+        out["held_out_by"] = {name: group([i for i in held if held_by[i // k] == name])
+                              for name in names}
+    return out
 
 
 def gallery(result: dict, out_dir: str | Path, per_row: int = 8) -> list[str]:

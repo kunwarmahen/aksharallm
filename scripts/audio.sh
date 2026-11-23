@@ -76,12 +76,16 @@ elif grep -qE '^autoencoder:' "$CFG"; then
     # G3b (docs/26): the continuous picture autoencoder; reads a picture corpus.
     TRAINER=aksharallm.pictures.train_ae
     KIND=picture
+elif grep -qE '^clip:' "$CFG"; then
+    # G4b (docs/26): our own contrastive picture-caption model; reads several picture corpora.
+    TRAINER=aksharallm.pictures.train_clip
+    KIND=clip
 elif grep -qE '^flow:' "$CFG"; then
     # G2 (docs/26): flow matching in pixels. Reads a picture corpus like the tokenizer does.
     TRAINER=aksharallm.pictures.train_flow
     KIND=flow
 else
-    echo "$CFG has no 'codec:', 'audiolm:', 'asr:', 'speaker:', 'picture:', 'picgen:', 'flow:' or 'autoencoder:' section -- not an audio run." >&2
+    echo "$CFG has no 'codec:', 'audiolm:', 'asr:', 'speaker:', 'picture:', 'picgen:', 'flow:' or 'autoencoder:' section (or 'clip:') -- not an audio run." >&2
     echo "For a language model over text, use scripts/phase2.sh or scripts/experiment.sh." >&2
     exit 2
 fi
@@ -188,6 +192,8 @@ cfg = yaml.safe_load(open(sys.argv[1])) or {}
 d = cfg.get("data") or {}
 if "speaker" in cfg:        # a speaker model reads its training corpora and one unseen corpus
     corpora = list(d.get("train") or []) + [d.get("eval", "data/asr/dev-clean")]
+elif "clip" in cfg:         # G4b reads every picture corpus it names
+    corpora = list(d.get("corpora") or [])
 else:
     corpora = [s["corpus"] for s in d.get("sources") or []] or [d.get("corpus", "")]
 for c in corpora:
@@ -195,25 +201,38 @@ for c in corpora:
 EOF
 )
 CORPUS=$(echo "$CORPORA" | head -1)
-if [ "$KIND" = picture ] || [ "$KIND" = flow ]; then
-    # A picture corpus is images.bin + manifest.json (vision/image.py), and the held-out
-    # combination is scored on every sample, so both are made here if missing (seconds).
-    if [ ! -s "$CORPUS/images.bin" ]; then
-        if [ "$CORPUS" = "data/vision/shapes" ]; then
-            echo "    $CORPUS is missing. Rendering the shapes corpus (~10 s)..."
+# A picture corpus is images.bin + manifest.json (vision/image.py), and the held-out
+# combination is scored on every sample, so both are made here if missing (seconds).
+picture_corpus() {
+    local c=$1
+    if [ ! -s "$c/images.bin" ]; then
+        if [ "$c" = "data/vision/shapes" ]; then
+            echo "    $c is missing. Rendering the shapes corpus (~10 s)..."
             $PY -m aksharallm.vision corpus
-        elif [ "$CORPUS" = "data/vision/shapes64k" ]; then
-            echo "    $CORPUS is missing. Rendering 64,000 shapes pictures (~15 s)..."
-            $PY -m aksharallm.vision corpus --out "$CORPUS" --images 64000 && rm -rf "$CORPUS-holdout"
+        elif [ "$c" = "data/vision/shapes64k" ]; then
+            echo "    $c is missing. Rendering 64,000 shapes pictures (~15 s)..."
+            $PY -m aksharallm.vision corpus --out "$c" --images 64000 && rm -rf "$c-holdout"
+        elif [ "$c" = "data/vision/scenes64k" ]; then
+            echo "    $c is missing. Rendering 64,000 scenes (size and place, ~20 s)..."
+            $PY -m aksharallm.pictures scenes --out "$c"
         else
-            echo "    ERROR: $CORPUS/images.bin does not exist." >&2
+            echo "    ERROR: $c/images.bin does not exist." >&2
             exit 1
         fi
     fi
-    sz=$(stat -c%s "$CORPUS/images.bin")
-    echo "    $CORPUS/images.bin: $((sz / 1000000)) MB = $((sz / 12288)) pictures at 64x64"
-    $PY -m aksharallm.pictures read --corpus "$CORPUS" --n 500 \
+    sz=$(stat -c%s "$c/images.bin")
+    echo "    $c/images.bin: $((sz / 1000000)) MB = $((sz / 12288)) pictures at 64x64"
+    $PY -m aksharallm.pictures read --corpus "$c" --n 500 \
         || { echo "    the reader is not exact on the corpus -- every score would be wrong" >&2; exit 1; }
+}
+if [ "$KIND" = clip ]; then
+    for c in $CORPORA; do picture_corpus "$c"; done
+    [ -s data/tinystories/tokenizer.json ] && [ -s checkpoints/tiny/ckpt_best.pt ] \
+        || { echo "    ERROR: the frozen text model (checkpoints/tiny) or its tokenizer is missing" >&2; exit 1; }
+    CORPORA=""
+fi
+if [ "$KIND" = picture ] || [ "$KIND" = flow ]; then
+    picture_corpus "$CORPUS"
     if [ "$KIND" = flow ]; then
         # G3 (flow.space: latent) trains on the tokenizer's latents: encode them if missing.
         read -r SPACE LAT TOK < <($PY - "$CFG" <<'EOF'
@@ -301,6 +320,7 @@ else
     [ "$KIND" = picture ] && SMOKE_EXTRA=(-o train.sample_every=0 -o train.sample_images=0)
     [ "$KIND" = picgen ] && SMOKE_EXTRA=(-o train.sample_every=0 -o train.sample_k=0)
     [ "$KIND" = flow ] && SMOKE_EXTRA=(-o train.sample_every=0 -o train.sample_k=0)
+    [ "$KIND" = clip ] && SMOKE_EXTRA=(-o train.eval_pictures=64)
     $PY -m $TRAINER "$CFG" \
         -o train.max_steps=30 -o train.out_dir=/tmp/aksharallm_audio_smoke \
         -o train.resume=null -o train.eval_every=0 "${SMOKE_EXTRA[@]}" \
@@ -374,6 +394,8 @@ elif [ "$KIND" = asr ]; then
     echo "    measure: $PY -m aksharallm.asr eval $(basename "$RUN_DIR") --corpus data/asr/test-clean"
 elif [ "$KIND" = picture ]; then
     echo "    measure: $PY -m aksharallm.pictures report $(basename "$RUN_DIR")"
+elif [ "$KIND" = clip ]; then
+    echo "    measure: $PY -m aksharallm.pictures clip-report $(basename "$RUN_DIR")"
 elif [ "$KIND" = picgen ] || [ "$KIND" = flow ]; then
     echo "    measure: $PY -m aksharallm.pictures gen-report $(basename "$RUN_DIR") --guidance 3"
     echo "    draw:    $PY -m aksharallm.pictures draw $(basename "$RUN_DIR") \"two red circles\""

@@ -14,7 +14,13 @@ flowchart LR
     F --> L["connected blobs<br/>(4-neighbour), big ones only"]
     L --> N["count = how many"]
     L --> S["shape = fill of the<br/>bounding box: square ~1,<br/>circle ~0.79, triangle ~0.5"]
+    L --> Z["size = bounding box<br/>across: small ~9, big ~15"]
+    L --> W["where = the column every<br/>blob's centre is in"]
 ```
+
+G4b's scenes (`scenes.py`) add size and place. The reader always reads all five; `judge`
+checks only the attributes the fact names, so a shapes-corpus fact (no size, no place) is
+judged exactly as before.
 
 The positive control is the point: on the corpus itself the reader must be right on every
 picture (`tests/test_pictures.py` checks all of them on a fresh render), so whatever it gets
@@ -45,6 +51,10 @@ FOREGROUND = 70
 MIN_AREA = 20
 #: Fill-ratio boundaries between the shapes: square 1.0 > 0.90 > circle 0.79 > 0.64 > triangle 0.5.
 SQUARE_ABOVE, CIRCLE_ABOVE = 0.90, 0.64
+#: A blob wider (or taller) than this is big: small shapes are ~9-10 px across, big ~15.
+BIG_ABOVE = 12
+#: The attributes a fact can name, in the order they are reported.
+ATTRS = ("count", "size", "colour", "shape", "where")
 
 _PALETTE = np.array(list(COLOURS.values()), dtype=np.float32)
 _NAMES = list(COLOURS)
@@ -85,34 +95,56 @@ def shape_of(pts: np.ndarray) -> str:
     return "square" if fill > SQUARE_ABOVE else "circle" if fill > CIRCLE_ABOVE else "triangle"
 
 
+def size_of(pts: np.ndarray) -> str:
+    """Small or big, from the larger side of the blob's bounding box."""
+    hgt = pts[:, 0].max() - pts[:, 0].min() + 1
+    wid = pts[:, 1].max() - pts[:, 1].min() + 1
+    return "big" if max(hgt, wid) > BIG_ABOVE else "small"
+
+
+def where_of(blobs_: list[np.ndarray], width: int) -> str:
+    """The column (left / middle / right third) every blob's centre is in, or "spread"."""
+    cols = {min(2, int(b[:, 1].mean() * 3 // width)) for b in blobs_}
+    return ("left", "middle", "right")[cols.pop()] if len(cols) == 1 else "spread"
+
+
 def read(img: np.ndarray) -> dict:
-    """`(h, w, 3)` uint8 -> `{count, colour, shape}`. A picture with no shape in it reads as
-    count 0 and colour/shape None, which never equals any description."""
+    """`(h, w, 3)` uint8 -> `{count, size, colour, shape, where}`. A picture with no shape in
+    it reads as count 0 and None for the rest, which never equals any description."""
     mask = foreground(img)
     big = [b for b in blobs(mask) if len(b) >= MIN_AREA]
     if not big:
-        return {"count": 0, "colour": None, "shape": None}
+        return {"count": 0, "size": None, "colour": None, "shape": None, "where": None}
     px = img[mask].astype(np.float32)
     nearest = ((px[:, None, :] - _PALETTE[None]) ** 2).sum(-1).argmin(1)
     colour = _NAMES[int(np.bincount(nearest, minlength=len(_NAMES)).argmax())]
     kinds = [shape_of(b) for b in big]
     shape = max(SHAPES, key=kinds.count)
-    return {"count": len(big), "colour": colour, "shape": shape}
+    sizes = [size_of(b) for b in big]
+    size = max(("small", "big"), key=sizes.count)
+    return {"count": len(big), "size": size, "colour": colour, "shape": shape,
+            "where": where_of(big, img.shape[1])}
 
 
 def judge(img: np.ndarray, fact: dict) -> dict:
-    """Did this picture say `fact`? One boolean per attribute, and `all` for the three."""
+    """Did this picture say `fact`? One boolean per attribute the fact names (count, colour
+    and shape always; size and where for a scene), and `all` for all of them."""
     got = read(img)
-    out = {k: got[k] == fact[k] for k in ("count", "colour", "shape")}
+    out = {k: got[k] == fact[k] for k in ATTRS if k in fact}
     out["all"] = all(out.values())
     out["read"] = got
     return out
 
 
 def caption(fact: dict) -> str:
-    """`{count, colour, shape}` -> "three red circles" (the corpus's own wording)."""
+    """`{count, colour, shape}` -> "three red circles" (the corpus's own wording); a fact with
+    size and where adds them ("three big red circles on the left")."""
     if not fact.get("count"):
         return "nothing"
     plural = "" if fact["count"] == 1 else "s"
     n = NUMBERS[fact["count"] - 1] if fact["count"] <= len(NUMBERS) else str(fact["count"])
-    return f"{n} {fact['colour']} {fact['shape']}{plural}"
+    size = f"{fact['size']} " if fact.get("size") else ""
+    where = fact.get("where")
+    place = {"left": " on the left", "middle": " in the middle",
+             "right": " on the right"}.get(where, f" ({where})" if where else "")
+    return f"{n} {size}{fact['colour']} {fact['shape']}{plural}{place}"

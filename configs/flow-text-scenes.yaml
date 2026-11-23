@@ -1,0 +1,58 @@
+# G4b (docs/26 § "Captions that say more"): G4a's recipe on the scenes corpus, where a caption
+# also says how big and where ("two big red circles on the left"). Its own autoencoder
+# (ae-scenes), the same frozen text model, ten training phrasings, two held-out phrasings and
+# two held-out combinations: purple triangles, and circles on the right (the new attribute).
+# Judged by the reader on all five attributes and by our contrastive model (clip-shapes).
+# One block apart from flow-text-shapes: the corpus, its latents and the autoencoder.
+#
+#   scripts/audio.sh flow-text-scenes
+#   python -m aksharallm.pictures gen-report flow-text-scenes --guidance 1 --k 8 --clip clip-shapes
+
+name: flow-text-scenes
+
+flow:
+  space: latent
+  image_size: 8           # set from the latents' shape at launch (8x8x8)
+  channels: 8
+  patch: 1
+  d_model: 384
+  n_layers: 8
+  n_heads: 6
+  dropout: 0.0
+  cfg_drop: 0.1
+  sample_steps: 50
+  tokenizer: checkpoints/ae-scenes/ckpt_best.pt       # the scenes autoencoder: wrote the latents, decodes
+  score_tokenizer: checkpoints/imgtok-shapes/ckpt_best.pt   # VQ codes for variety only (no scenes codes: no copy check)
+  books: 2
+  text: checkpoints/tiny/ckpt_best.pt
+  text_tokenizer: data/tinystories/tokenizer.json
+  text_len: 16                                     # the longest scene phrasing is 14 tokens
+
+data:
+  corpus: data/vision/scenes64k
+  latents: data/pictures/latents-ae-scenes-64k
+  codes: data/pictures/codes-imgtok-shapes-scenes64k   # absent on purpose: copies are not checked
+
+optim:
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 1000
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.99
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/flow-text-scenes
+  batch_size: 64
+  max_steps: 30000
+  eval_every: 1000
+  eval_batches: 8
+  sample_every: 5000
+  sample_k: 2
+  sample_guidance: 3.0
+  ckpt_every: 2000
+  log_every: 50
+  seed: 1337
+  resume: auto

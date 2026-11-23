@@ -1,0 +1,52 @@
+# G4b (docs/26 § "G4b: a judge that learned"): our own contrastive picture-caption model.
+# docs/22's vision tower over the picture; the frozen `tiny` (G4a's text model) plus a small
+# trainable head over the caption; every caption of the same fact in a batch counts as a match.
+# Trained on the shapes corpus AND the scenes corpus (size and place), in all ten training
+# phrasings; scored against the rule-based reader on drawings (gen-report --clip).
+# Small enough for the CPU (`CUDA_VISIBLE_DEVICES=`).
+#
+#   scripts/audio.sh clip-shapes
+#   python -m aksharallm.pictures clip-report clip-shapes
+#   python -m aksharallm.pictures gen-report <drawing model> --clip clip-shapes
+
+name: clip-shapes
+
+clip:
+  image_size: 64
+  patch: 8
+  d_vision: 192
+  n_layers: 4
+  n_heads: 4
+  d_text: 192
+  text_layers: 1
+  d_embed: 128
+  temperature: 0.07
+  text: checkpoints/tiny/ckpt_best.pt
+  text_tokenizer: data/tinystories/tokenizer.json
+  text_len: 20            # the longest scene phrasing is ~16 tokens
+
+data:
+  corpora: [data/vision/shapes64k, data/vision/scenes64k]
+  holdouts: [data/vision/shapes-holdout, data/vision/scenes64k-holdout]
+
+optim:
+  lr: 5.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 200
+  weight_decay: 0.05
+  beta1: 0.9
+  beta2: 0.98
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/clip-shapes
+  batch_size: 128
+  max_steps: 3000
+  eval_every: 250
+  eval_batches: 4
+  eval_pictures: 512
+  ckpt_every: 500
+  log_every: 50
+  seed: 1337
+  resume: auto

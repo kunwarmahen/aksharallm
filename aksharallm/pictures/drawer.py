@@ -80,26 +80,45 @@ class Drawer:
             return set()
         return train_code_set(CodesDataset(self.root / codes, books=self.books, split="train"))
 
+    def corpus_kind(self) -> str:
+        """"shapes" or "scenes" (G4b): the kind of corpus this model trained on, read from the
+        corpus's manifest, so a report asks it for the facts it can say."""
+        corpus = (self.blob.get("config") or {}).get("data", {}).get("corpus")
+        m = self.root / str(corpus) / "manifest.json" if corpus else None
+        if m is None or not m.is_file():
+            return "shapes"
+        import json
+        return json.loads(m.read_text()).get("kind", "shapes")
+
     def report(self, *, k: int = 8, guidance: float = 1.0, seed: int = 0,
                temperature: float = 1.0, top_k: int | None = None, steps: int | None = None,
-               captions: list[str] | None = None, phrasing: str | None = None) -> dict:
-        """Draw `k` per caption and judge them. `phrasing` (G4a) says every one of the 60 facts
-        in that phrasing (phrases.py) instead of the three-word caption; facts, not captions,
-        are what the reader checks."""
-        from .codes import all_captions
+               captions: list[str] | None = None, phrasing: str | None = None,
+               clip=None) -> dict:
+        """Draw `k` per caption and judge them. `phrasing` (G4a) says every fact (60 shapes,
+        or 270 scenes) in that phrasing (phrases.py) instead of the canonical caption; facts,
+        not captions, are what the reader checks. `clip` (G4b: `(model, checkpoint)`) also
+        scores every picture with our contrastive model, beside the reader (`own_clip`)."""
+        from .phrases import all_facts, phrase
         from .score import judge_drawings
+        kind = self.corpus_kind()
         facts = None
-        if phrasing:
-            from .phrases import all_facts, phrase
-            facts = all_facts()
-            captions = [phrase(f, phrasing) for f in facts]
-        captions = captions or all_captions()
+        if phrasing or kind != "shapes" or clip is not None:
+            facts = all_facts(kind)
+            captions = [phrase(f, phrasing or "canonical") for f in facts]
+        if captions is None:
+            from .codes import all_captions
+            captions = all_captions()
         t0 = time.time()
         pics, toks = self.draw_with_tokens([c for c in captions for _ in range(k)],
                                            guidance=guidance, seed=seed,
                                            temperature=temperature, top_k=top_k, steps=steps)
         out = judge_drawings(captions, k, pics, toks, self.seen(), facts)
-        return out | {"model": self.kind, "phrasing": phrasing, "guidance": guidance, "temperature": temperature,
+        if clip is not None:
+            from .clip import score_drawings
+            out["own_clip"] = score_drawings(clip[0], out, all_facts(kind), device=self.device,
+                                             checkpoint=str(clip[1]))
+        return out | {"model": self.kind, "corpus_kind": kind, "phrasing": phrasing,
+                      "guidance": guidance, "temperature": temperature,
                       "top_k": top_k, "steps": steps, "seed": seed,
                       "seconds": round(time.time() - t0, 1)}
 

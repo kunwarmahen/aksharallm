@@ -13,6 +13,12 @@ G1, a sentence to a picture:
     python -m aksharallm.pictures gen-report imggen-shapes --guidance 3   # all 60 captions, judged
     python -m aksharallm.pictures gen-compare A.json B.json  # two G1 reports, paired
 
+G4b, our own contrastive model as a second judge:
+
+    python -m aksharallm.pictures scenes                     # the scenes corpus: size and place too
+    python -m aksharallm.pictures clip-report clip-shapes    # beside the reader, on known pictures
+    python -m aksharallm.pictures gen-report <model> --clip clip-shapes
+
 G2, flow matching in pixels: `draw` and `gen-report` take a G2 run the same way
 (`flow-shapes`), and `--steps` sets its number of Euler steps. G3 is the same in the
 tokenizer's latent: `pictures latents imgtok-shapes` encodes the corpus, `flow-latent-shapes`
@@ -63,6 +69,16 @@ def cmd_read(args) -> int:
         print(f"  #{i}: drawn {ds.manifest.facts[i]}, read "
               f"{judge(np.asarray(ds.images[i]), ds.manifest.facts[i])['read']}")
     return 0 if not wrong else 1
+
+
+def cmd_scenes(args) -> int:
+    from .scenes import holdout_corpus, scenes_corpus
+    out = Path(args.out)
+    scenes_corpus(out, n_images=args.n, seed=args.seed)
+    held = Path(str(out) + "-holdout")
+    holdout_corpus(held)
+    print(f"held-out combinations, 64 of each -> {held}/")
+    return 0
 
 
 def cmd_report(args) -> int:
@@ -202,18 +218,26 @@ def cmd_draw(args) -> int:
 
     from ..vision.image import write_png
     from .codes import fact_of
-    from .reader import judge
+    from .reader import caption, judge
     d = _load_drawer(args.checkpoint, _device(args.device), args.snap)
     pics = d.draw([args.caption] * args.n, guidance=args.guidance, temperature=args.temperature,
                   top_k=args.top_k, seed=args.seed, steps=args.steps)
-    want = fact_of(args.caption)
+    try:
+        want = fact_of(args.caption)
+    except ValueError:                       # a G4 sentence: judged if the words are there
+        from .phrases import fact_from_text
+        want = fact_from_text(args.caption)
+    if want is None:
+        raise SystemExit("no count, colour and shape found in the sentence; nothing to judge")
+    if d.corpus_kind() == "shapes":       # a shapes model never drew size or place
+        want = {k: want[k] for k in ("count", "colour", "shape")}
     verdicts = [judge(p, want) for p in pics]
     ok = sum(v["all"] for v in verdicts)
     print(f"{d.path} ({d.kind}, step {d.step}): {args.n} x {args.caption!r} at guidance "
           f"{args.guidance:g}: the reader agrees on {ok} of {args.n}")
     for i, v in enumerate(verdicts):
         r = v["read"]
-        print(f"  #{i}: {'ok   ' if v['all'] else 'WRONG'} read {r['count']} {r['colour']} {r['shape']}")
+        print(f"  #{i}: {'ok   ' if v['all'] else 'WRONG'} read {caption(r)}")
     gap = np.full((64, 3, 3), 255, dtype=np.uint8)
     row = np.concatenate(sum(([t, gap] for t in pics), [])[:-1], axis=1)
     out = Path(args.out or _root() / RESULTS / "draw" / (args.caption.replace(" ", "-") + ".png"))
@@ -227,8 +251,14 @@ def cmd_gen_report(args) -> int:
     from .score import gallery, public
     root = _root()
     d = _load_drawer(args.checkpoint, _device(args.device), args.snap)
+    clip = None
+    if args.clip:
+        from .clip import load_clip
+        cp = find_checkpoint(args.clip, root)
+        clip = (load_clip(cp, d.device, root)[0], cp)
     r = d.report(k=args.k, guidance=args.guidance, temperature=args.temperature,
-                 top_k=args.top_k, seed=args.seed, steps=args.steps, phrasing=args.phrasing)
+                 top_k=args.top_k, seed=args.seed, steps=args.steps, phrasing=args.phrasing,
+                 clip=clip)
     run = d.path.parent.name
     stem = f"gen-{run}-step{d.step}-g{args.guidance:g}"
     if args.k != 8:                       # never overwrite the default k=8 report
@@ -241,16 +271,31 @@ def cmd_gen_report(args) -> int:
         stem += "-snap"
     if args.phrasing:
         stem += f"-p{args.phrasing}"
+    if args.clip:
+        stem += "-clip"
     names = gallery(r, root / RESULTS / stem)
     print(f"{d.path} ({d.kind}, step {d.step}): {args.k} pictures for each of "
           f"{len(r['captions'])} captions, guidance {args.guidance:g}, {r['seconds']}s\n")
-    print("               n    count  colour   shape     all  copies")
-    for label, key in (("seen", "seen"), ("held out", "held_out")):
-        g = r[key]
+    attrs = r.get("attributes") or ["count", "colour", "shape"]
+    print("                    n " + "".join(f"{a:>8}" for a in attrs) + "     all  copies")
+    groups = [("seen", r["seen"]), ("held out", r["held_out"])]
+    groups += [(f"  {name}", g) for name, g in (r.get("held_out_by") or {}).items()]
+    for label, g in groups:
         if g.get("n"):
-            print(f"  {label:<10} {g['n']:>4} " + " ".join(
-                f"{g[c] * 100:>6.1f}%" for c in ("count", "colour", "shape", "all"))
-                  + f" {g['copies'] * 100:>6.1f}%")
+            print(f"  {label:<16} {g['n']:>5} " + " ".join(
+                f"{g[c] * 100:>6.1f}%" for c in [*attrs, "all"]) + f" {g['copies'] * 100:>6.1f}%")
+    oc = r.get("own_clip")
+    if oc:
+        print(f"\n  our contrastive model ({oc['checkpoint']}): the asked caption is the closest of "
+              f"{oc['candidates']}")
+        for label, key in (("seen", "seen"), ("held out", "held_out")):
+            g = oc[key]
+            if g.get("n"):
+                a = g["agreement"]
+                kappa = "–" if a["kappa"] is None else f"{a['kappa']:.2f}"
+                print(f"  {label:<10} top-1 {g['top1'] * 100:5.1f}%  agrees with the reader on "
+                      f"{a['agree'] * 100:5.1f}% (kappa {kappa}; model only {a['model_only']}, "
+                      f"reader only {a['reader_only']})")
     print(f"\n  variety: {r['variety'] * 100:.0f}% of the {args.k} pictures per caption are distinct")
     print("  held-out captions: " + "  ".join(
         f"{p['caption']} {p['all'] * 100:.0f}%" for p in r["per_caption"] if p["held_out"]))
@@ -259,6 +304,81 @@ def cmd_gen_report(args) -> int:
     f = root / RESULTS / f"{stem}.json"
     f.write_text(json.dumps(out, indent=1))
     print(f"\nwrote {f}  (gallery: one PNG per caption)")
+    return 0
+
+
+def cmd_clip_report(args) -> int:
+    """G4b: our contrastive model on pictures whose facts are known, beside the reader."""
+    import numpy as np
+
+    from ..vision.image import ImageCaptions
+    from .clip import agreement, load_clip, rank
+    from .phrases import all_facts
+    from .reader import ATTRS, judge
+    root = _root()
+    device = _device(args.device)
+    path = find_checkpoint(args.checkpoint, root)
+    model, blob = load_clip(path, device, root)
+    data = (blob.get("config") or {}).get("data") or {}
+    coder = None
+    if args.through:
+        from .train import load_coder
+        from .latents import decode_latent, picture_latent
+        coder, _ = load_coder(find_checkpoint(args.through, root), device)
+    sets = [(c, "val", 0.05) for c in data.get("corpora") or []]
+    sets += [(h, "held out", 1.0) for h in data.get("holdouts") or []
+             if (root / h / "manifest.json").is_file()]
+    run = path.parent.name
+    out = {"checkpoint": str(path), "run": run, "step": blob.get("step"),
+           "through": args.through, "sets": []}
+    print(f"{path} (step {blob.get('step')}): is each picture's own caption the closest of every "
+          "caption its corpus can say?" + (f"  Pictures passed through {args.through} first."
+                                           if coder else ""))
+    print(f"\n  {'pictures':<36} {'n':>5} {'reader':>7} {'model':>7} {'show_me':>8} "
+          f"{'agree':>7} {'kappa':>6}  model's misses differ in")
+    for corpus, split, frac in sets:
+        ds = ImageCaptions(root / corpus, split="val", val_frac=frac)
+        idx = ds.index[: args.n]
+        pics = np.asarray(ds.images[idx])
+        if coder is not None:
+            import torch
+
+            from ..vision.image import from_tensor, to_tensor
+            x = torch.from_numpy(to_tensor(pics)).to(device)
+            with torch.no_grad():
+                pics = from_tensor(decode_latent(coder, picture_latent(coder, x)).cpu().numpy())
+        facts = [ds.manifest.facts[int(i)] for i in idx]
+        kind = getattr(ds.manifest, "kind", "shapes")
+        cands = all_facts(kind)
+        r = rank(model, pics, facts, cands, device=device)
+        rs = rank(model, pics, facts, cands, phrasing="show_me", device=device)
+        reader_ok = [judge(p, f)["all"] for p, f in zip(pics, facts, strict=True)]
+        a = agreement(r["top1"], reader_ok)
+        miss = {}
+        for ok, b, f in zip(r["top1"], r["best"], facts, strict=True):
+            if not ok:
+                for attr in ATTRS:
+                    if attr in f and cands[b][attr] != f[attr]:
+                        miss[attr] = miss.get(attr, 0) + 1
+        row = {"pictures": corpus, "split": split, "kind": kind, "n": len(idx),
+               "reader": float(np.mean(reader_ok)), "top1": float(np.mean(r["top1"])),
+               "show_me": float(np.mean(rs["top1"])), "cos": float(np.mean(r["cos"])),
+               "agreement": a, "misses_by_attribute": miss,
+               "correct": "".join("1" if t else "0" for t in r["top1"]),
+               "reader_correct": "".join("1" if t else "0" for t in reader_ok)}
+        out["sets"].append(row)
+        kappa = "–" if a["kappa"] is None else f"{a['kappa']:.2f}"
+        print(f"  {corpus + ' (' + split + ')':<36} {len(idx):>5} {row['reader'] * 100:>6.1f}% "
+              f"{row['top1'] * 100:>6.1f}% {row['show_me'] * 100:>7.1f}% {a['agree'] * 100:>6.1f}% "
+              f"{kappa:>6}  " + (", ".join(f"{k} {v}" for k, v in miss.items()) or "–"))
+    stem = f"clip-{run}-step{blob.get('step')}" + (f"-through-{Path(args.through).stem if args.through.endswith('.pt') else args.through}"
+                                                  if args.through else "")
+    f = root / RESULTS / f"{stem}.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(out, indent=1))
+    print(f"\nwrote {f}\n  reader = the rule-based reader on the same pictures (100% on originals: "
+          "the positive control);\n  model = our contrastive model's closest caption is the right "
+          "one; agree/kappa = the two verdicts per picture.")
     return 0
 
 
@@ -281,6 +401,11 @@ def main(argv=None) -> int:
     s.add_argument("--corpus", default="data/vision/shapes")
     s.add_argument("--n", type=int, default=0, help="first N pictures (0 = all)")
     s.set_defaults(fn=cmd_read)
+    s = sub.add_parser("scenes", help="G4b: render the scenes corpus (size and place as well)")
+    s.add_argument("--out", default="data/vision/scenes64k")
+    s.add_argument("--n", type=int, default=64000)
+    s.add_argument("--seed", type=int, default=0)
+    s.set_defaults(fn=cmd_scenes)
     s = sub.add_parser("report", help="reconstruct val pictures at each codebook count and judge them")
     s.add_argument("checkpoint", help="a .pt, or a run name (checkpoints/<run>/ckpt_best.pt)")
     s.add_argument("--n", type=int, default=256, help="pictures to judge")
@@ -325,7 +450,19 @@ def main(argv=None) -> int:
                        help="G3: re-quantize each drawn latent onto the codebooks before decoding")
         s.add_argument("--seed", type=int, default=0)
         s.add_argument("--device", default="cpu", help="cpu (default), cuda or auto")
+        if name == "gen-report":
+            s.add_argument("--clip", default=None,
+                           help="G4b: also score every picture with our contrastive model "
+                                "(a .pt or run name, e.g. clip-shapes), beside the reader")
         s.set_defaults(fn=fn)
+    s = sub.add_parser("clip-report", help="G4b: our contrastive model on known pictures, beside the reader")
+    s.add_argument("checkpoint", help="a .pt, or a run name (clip-shapes)")
+    s.add_argument("--n", type=int, default=512, help="pictures per set")
+    s.add_argument("--through", default=None,
+                   help="pass every picture through this coder first (e.g. ae-shapes): damaged "
+                        "pictures, where the reader is not 100%%")
+    s.add_argument("--device", default="cpu")
+    s.set_defaults(fn=cmd_clip_report)
     s = sub.add_parser("latents", help="G3: encode a picture corpus to normalised tokenizer latents")
     s.add_argument("tokenizer", help="a .pt, or a tokenizer run name")
     s.add_argument("--corpus", default="data/vision/shapes64k")

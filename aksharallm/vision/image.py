@@ -66,6 +66,8 @@ class ImageManifest:
     captions: list[str]
     facts: list[dict] = field(default_factory=list)  # the description each image was made from
     built: str = ""
+    #: "shapes" (this file) or "scenes" (pictures/scenes.py: size and place as well).
+    kind: str = "shapes"
 
     @property
     def n_images(self) -> int:

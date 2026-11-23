@@ -175,6 +175,10 @@ falling back to a *seen* pair for the third.
   them, from the same shapes corpus: an image tokenizer, then a transformer that draws
   "two red circles", judged by a rule-based reader (not this model, whose own errors would
   mix with the drawing's).
+- **The same tower, as a judge.** G4b ([chapter 26](26-pictures.md) § G4b) reuses
+  `VisionEncoder` unchanged as the picture half of a contrastive model of our own, trained to
+  match pictures to captions instead of to describe them, and checked against that rule-based
+  reader before it is trusted.
 
 ## The code, in reading order
 

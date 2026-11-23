@@ -62,9 +62,19 @@ def word_ids(caption: str) -> list[int]:
 
 
 def fact_of(caption: str) -> dict:
-    """The `{count, colour, shape}` a caption asks for, which is what the reader checks."""
-    n, colour, shape = caption.lower().split()
-    return {"count": NUMBERS.index(n) + 1, "colour": colour, "shape": shape.rstrip("s")}
+    """The `{count, colour, shape}` a canonical caption asks for, which is what the reader
+    checks. A scene's canonical caption (G4b, `scenes.caption_of`: "two big red circles on
+    the left") gives `size` and `where` as well. Only canonical captions: a phrasing is never
+    parsed (phrases.py)."""
+    words = caption.lower().split()
+    if len(words) == 3:
+        n, colour, shape = words
+        return {"count": NUMBERS.index(n) + 1, "colour": colour, "shape": shape.rstrip("s")}
+    if len(words) == 7 and words[4] in ("on", "in"):
+        n, size, colour, shape, _, _, where = words
+        return {"count": NUMBERS.index(n) + 1, "size": size, "colour": colour,
+                "shape": shape.rstrip("s"), "where": where}
+    raise ValueError(f"not a canonical caption: {caption!r}")
 
 
 def all_captions() -> list[str]:

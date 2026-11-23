@@ -13,6 +13,10 @@
   ~5M transformer, a second or two) and returns each picture with what the reader saw in it;
   `gen-*.json` reports (all 60 captions, seen and held-out) list, open and pair like the
   tokenizer's; `pictures codes` and `pictures gen-report` are jobs.
+* **G4b, a judge that learned** — our own contrastive model (`stage: clip`): its
+  `clip-*.json` reports (the model beside the reader on known pictures, and on pictures damaged
+  by a coder), `pictures clip-report` and `pictures scenes` as jobs, and `--clip` on a
+  gen-report, whose `own_clip` block the G1 report view shows.
 
 Read with: docs/26-pictures.md -- the chapter this implements; it ends with the order to read
 these files in.
@@ -31,7 +35,7 @@ from ..audio.ttsreports import finite
 from .jobs import CliJobs, JobError
 
 RESULTS = Path("logs/pictures")
-_NAME = re.compile(r"^(report|gen)-[A-Za-z0-9_.-]+\.json$")
+_NAME = re.compile(r"^(report|gen|clip)-[A-Za-z0-9_.-]+\.json$")
 
 
 class PicturesError(RuntimeError):
@@ -80,6 +84,49 @@ class Pictures:
                         "best_val": blob.get("best_val"), "mtime": path.stat().st_mtime})
         return sorted(out, key=lambda r: r["mtime"], reverse=True)
 
+    def clips(self) -> list[dict]:
+        """G4b contrastive models, recognised by `stage == "clip"`."""
+        out = []
+        for path in sorted(self.root.glob("checkpoints/*/ckpt_*.pt")):
+            try:
+                blob = torch.load(path, map_location="cpu", weights_only=False, mmap=True)
+            except Exception:
+                continue
+            if blob.get("stage") != "clip":
+                continue
+            out.append({"rel": str(path.relative_to(self.root)), "step": blob.get("step"),
+                        "best_val": blob.get("best_val"), "mtime": path.stat().st_mtime})
+        # newest run first, and within a run its best checkpoint before its last
+        return sorted(out, key=lambda r: (-r["mtime"] // 3600, "ckpt_best" not in r["rel"]))
+
+    def coders(self) -> list[dict]:
+        """Tokenizers and autoencoders a clip-report can pass pictures through (damage)."""
+        out = list(self.checkpoints())
+        for path in sorted(self.root.glob("checkpoints/*/ckpt_best.pt")):
+            try:
+                blob = torch.load(path, map_location="cpu", weights_only=False, mmap=True)
+            except Exception:
+                continue
+            if blob.get("stage") == "autoencoder":
+                out.append({"rel": str(path.relative_to(self.root)), "step": blob.get("step")})
+        return out
+
+    def clip_reports(self) -> list[dict]:
+        out = []
+        for p in sorted((self.root / RESULTS).glob("clip-*.json"),
+                        key=lambda p: p.stat().st_mtime, reverse=True):
+            try:
+                d = json.loads(p.read_text())
+                out.append({"name": p.name, "run": d.get("run"), "step": d.get("step"),
+                            "through": d.get("through"),
+                            "sets": [{k: x.get(k) for k in ("pictures", "split", "kind", "n",
+                                                            "reader", "top1", "show_me",
+                                                            "agreement", "misses_by_attribute")}
+                                     for x in d.get("sets") or []]})
+            except (OSError, ValueError, KeyError):
+                continue
+        return out
+
     def gen_reports(self) -> list[dict]:
         out = []
         for p in sorted((self.root / RESULTS).glob("gen-*.json"),
@@ -90,7 +137,9 @@ class Pictures:
                             "k": d.get("k"), "guidance": d.get("guidance"),
                             "seen_all": d["seen"]["all"],
                             "held_out_all": (d.get("held_out") or {}).get("all"),
-                            "copies": d["seen"].get("copies"), "variety": d.get("variety")})
+                            "copies": d["seen"].get("copies"), "variety": d.get("variety"),
+                            "corpus_kind": d.get("corpus_kind", "shapes"),
+                            "own_clip": ((d.get("own_clip") or {}).get("seen") or {}).get("top1")})
             except (OSError, ValueError, KeyError):
                 continue
         return out
@@ -120,13 +169,16 @@ class Pictures:
         except (OSError, ValueError):
             n = None
         return {"ready": True, "dir": "data/vision/shapes", "pictures": n,
-                "holdout": (self.root / "data/vision/shapes-holdout/manifest.json").is_file()}
+                "holdout": (self.root / "data/vision/shapes-holdout/manifest.json").is_file(),
+                "scenes": (self.root / "data/vision/scenes64k/manifest.json").is_file()}
 
     def overview(self) -> dict:
         codes = sorted(str(p.parent.relative_to(self.root))
                        for p in self.root.glob("data/pictures/*/meta.json"))
         return finite({"checkpoints": self.checkpoints(), "reports": self.reports(),
                        "generators": self.generators(), "gen_reports": self.gen_reports(),
+                       "clips": self.clips(), "clip_reports": self.clip_reports(),
+                       "coders": [c["rel"] for c in self.coders()],
                        "codes": codes, "corpus": self.corpus(), "jobs": self.jobs.status()})
 
     def _load(self, name: str) -> dict:
@@ -190,6 +242,7 @@ class Pictures:
 
         from ..pictures.codes import fact_of, word_ids
         from ..pictures.reader import judge
+        from ..pictures.scenes import held_out
         rel = str(spec.get("checkpoint") or "")
         if rel not in {g["rel"] for g in self.generators()}:
             raise PicturesError(f"not a drawing model (G1 or G2): {rel!r}")
@@ -218,6 +271,9 @@ class Pictures:
         pics = d.draw([caption] * n, guidance=guidance, seed=seed)
         from ..pictures.phrases import fact_from_text
         want = fact_from_text(caption) if kind == "G4" else fact_of(caption)
+        if want and d.corpus_kind() == "shapes":
+            # a shapes model never drew size or place: judge it on what it can say
+            want = {k: want[k] for k in ("count", "colour", "shape")}
         out = []
         for img in pics:
             buf = io.BytesIO()
@@ -234,7 +290,7 @@ class Pictures:
         return finite({"caption": caption, "step": d.step, "kind": d.kind, "pictures": out,
                        "agree": (sum(bool(p["ok"]) for p in out) if want else None),
                        "judged_as": want,
-                       "held_out": bool(want) and (want["colour"], want["shape"]) == ("purple", "triangle"),
+                       "held_out": bool(want) and held_out(want) is not None,
                        "command": f'python -m aksharallm.pictures draw {rel} "{caption}" '
                                   f"--n {n} --guidance {g} --seed {seed}"})
 
@@ -248,9 +304,30 @@ class Pictures:
             guidance = float(spec.get("guidance") if spec.get("guidance") is not None else 3.0)
             if not 1 <= k <= 32 or not 0 <= guidance <= 10:
                 raise JobError("pictures per caption 1–32, guidance 0–10")
-            return self.jobs.start(["gen-report", rel, "--k", str(k), "--guidance", f"{guidance:g}",
-                                    "--device", "cpu"],
-                                   f"G1 report on {rel}, {k} per caption, guidance {guidance:g}")
+            argv = ["gen-report", rel, "--k", str(k), "--guidance", f"{guidance:g}",
+                    "--device", "cpu"]
+            clip = str(spec.get("clip") or "")
+            if clip:
+                if clip not in {c["rel"] for c in self.clips()}:
+                    raise JobError(f"not a contrastive model checkpoint: {clip!r}")
+                argv += ["--clip", clip]
+            return self.jobs.start(argv, f"G1 report on {rel}, {k} per caption, guidance {guidance:g}"
+                                   + (", scored by our contrastive model too" if clip else ""))
+        if kind == "clip-report":
+            rel = str(spec.get("checkpoint") or "")
+            if rel not in {c["rel"] for c in self.clips()}:
+                raise JobError(f"not a contrastive model checkpoint: {rel!r}")
+            argv = ["clip-report", rel, "--device", "cpu"]
+            through = str(spec.get("through") or "")
+            if through:
+                coders = {c["rel"] for c in self.coders()}
+                if through not in coders:
+                    raise JobError(f"not a picture coder: {through!r}")
+                argv += ["--through", through]
+            return self.jobs.start(argv, f"our contrastive model {rel} beside the reader"
+                                   + (f", pictures through {through}" if through else ""))
+        if kind == "scenes":
+            return self.jobs.start(["scenes"], "render the scenes corpus (size and place, ~20 s)")
         if kind == "codes":
             rel = str(spec.get("checkpoint") or "")
             if rel not in {c["rel"] for c in self.checkpoints()}:

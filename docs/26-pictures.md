@@ -177,6 +177,15 @@ scripts/audio.sh imggen-shapes                                  # train (encodes
 python -m aksharallm.pictures draw imggen-shapes "two red circles" --guidance 3
 python -m aksharallm.pictures gen-report imggen-shapes --guidance 3   # all 60 captions, judged
 python -m aksharallm.pictures gen-compare A.json B.json               # paired per drawing
+
+# G4b, our own contrastive model, and captions that say size and place
+python -m aksharallm.pictures scenes                            # data/vision/scenes64k (+ -holdout)
+scripts/audio.sh clip-shapes                                    # small: CPU is fine (CUDA_VISIBLE_DEVICES=)
+python -m aksharallm.pictures clip-report clip-shapes           # beside the reader, originals
+python -m aksharallm.pictures clip-report clip-shapes --through ae-shapes   # damaged pictures
+python -m aksharallm.pictures gen-report imggen-shapes-gpu --clip clip-shapes
+scripts/audio.sh ae-scenes && scripts/audio.sh flow-text-scenes
+python -m aksharallm.pictures gen-report flow-text-scenes --guidance 1 --clip clip-shapes
 ```
 
 `scripts/audio.sh` is the launcher for every run whose config is not a text model; it reads
@@ -641,6 +650,99 @@ What this does **not** show yet: understanding beyond these three attributes. Ev
 here still names exactly one count, one colour and one shape. G4b (our own CLIP-style scorer)
 and G4c (real photos and captions) are where that gets tested.
 
+## G4b: a judge that learned (2026-11-23)
+
+Everything above was scored by the reader, which is exact only because we drew the pictures.
+Photos (G4c) have no such judge. Real image models are scored by a **contrastive** model that
+has learned which captions go with which pictures: OpenAI's CLIP, and the scores built on it.
+G4b trains one of our own, and earns it trust the only way a learned judge can: by agreeing
+with the exact one, picture by picture, where both apply.
+
+```mermaid
+flowchart LR
+    P["picture"] --> V["ViT (docs/22)<br/>mean of 64 patches"] --> A["128 numbers,<br/>unit length"]
+    C["caption"] --> T["tiny, frozen"] --> H["one masked layer,<br/>masked mean"] --> B["128 numbers,<br/>unit length"]
+    A --> S["cosine"]
+    B --> S
+    S --> Q["which caption, of all<br/>the corpus can say,<br/>is this picture's?"]
+    Q --> K["compared with the reader:<br/>agreement and kappa"]
+```
+
+**The loss counts every caption of the same fact as a match.** CLIP's loss is a cross-entropy
+over the batch in both directions, with picture *i* matching caption *i* only. With 60 shapes
+facts (or 270 scene facts) a batch of 128 repeats facts, often in different phrasings, and the
+diagonal would push two pictures of "two red circles" apart. `clip.clip_loss` spreads each
+row's target over every row with the same fact; with one match per row it is CLIP's loss
+exactly. [Lesson 34](lessons/34-contrastive.md) puts the diagonal back.
+
+**The score it gives** (`own_clip` in a report, `pictures gen-report --clip clip-shapes`): a
+drawing counts as right when, of every caption its corpus can say in canonical wording (60 or
+270), the one it was drawn for is the closest. Beside it, per picture, the reader's verdict, and
+how often the two agree, with Cohen's kappa (agreement beyond what their two rates would give by
+chance: 1 always, 0 a coin). It is our feature space, so it is not CLIPScore and not FID.
+
+### Captions that say more: scenes
+
+The second half of G4b is a corpus whose captions say two more things, the two that real
+text-to-image models are known to get wrong (`pictures/scenes.py`, `pictures scenes`):
+
+    two big red circles on the left
+    one small blue square in the middle
+
+1–3 shapes in one column of the same 3×3 grid, small (half-size 4.8 px) or big (7 px). The reader
+gained two readings (`size_of`: the blob's bounding box across, 12 px between the two;
+`where_of`: the column every blob's centre is in, else "spread") and is exact on 10,800 renders
+of all 270 facts; `judge` checks only what a fact names, so shapes facts are judged exactly as
+before. **Two combinations are never drawn in training**: purple triangles, and **circles on
+the right**, the held-out combination of the new attribute (circles everywhere else, other
+shapes on the right). The ten phrasings say size with the shape word and the place at the end
+("two big circles, all red, on the left"); for a shapes fact they give exactly G4a's strings.
+
+`ae-shapes`, trained only on shapes, reads scenes back right 91% of the time (small circles
+come back square-ish), so the scenes flow model gets its own autoencoder, `ae-scenes`, then
+`flow-text-scenes` (G4a's recipe on it, `text_len` 16).
+
+### Measured: our judge against the reader (2026-11-23, CPU)
+
+`clip-shapes`: 2.4M trainable parameters (ViT 192×4, a one-layer text head over frozen `tiny`),
+batch 128, 3,000 steps, **19 minutes on the CPU** (~2 s/step while the text cache filled, then
+0.3–1 s). Best checkpoint at step 2,750. Its closest caption is the picture's own on:
+
+| pictures (known facts) | n | reader | our model | agree | kappa |
+|---|---|---|---|---|---|
+| shapes, val originals | 512 | 100% | **100%** | 100% | – |
+| scenes, val originals | 512 | 100% | **100%** | 100% | – |
+| purple triangles (never in training) | 64 | 100% | **100%** | 100% | – |
+| scenes held out: purple triangles, circles on the right | 128 | 100% | **100%** | 100% | – |
+| G1 `imggen-shapes-gpu` drawings (8 per caption, all 60 captions) | 480 | 60.4% | 63.7% | **95.4%** | **0.90** |
+| G1 `imggen-shapes64k-pos-long` drawings | 480 | 88.5% | 90.8% | **97.7%** | **0.88** |
+| G4a `flow-text-shapes` drawings | 480 | 99.8% | 100% | 99.8% | (one disagreement) |
+| scenes through `ae-shapes` (damaged) | 512 | 91.4% | 97.3% | 90.2% | **0.10** |
+
+On a held-out phrasing ("show me …") it is 99.4–100% on originals, so it reads sentences the way
+G4a does. Kappa is blank where every verdict is "right": with no wrong pictures there is
+nothing to agree about beyond chance.
+
+**Where they disagree, it is almost always the model accepting what the reader rejects** (19
+against 3, 10 against 0, 1 against 0 on the three drawing sets), and every one of those on the G1
+drawings is **five or six shapes drawn for "four"**. That is not a slip; it is what a
+closed-set judge is. It answers "which of these captions fits best?", and no caption it is
+offered says "five", so "four" is the best fit. It cannot say "none of these". CLIP-style
+scoring has the same limit, which is why a count it was never offered is the place to distrust
+it.
+
+**On damaged scenes the two judges part ways (kappa 0.10)**, and looking at the pictures shows
+why: `ae-shapes` repaints small squares with rounded tops (the reader, by bounding-box fill,
+calls them circles; the model still calls them squares) and small circles as bell shapes (the
+reader still says circle; the model says triangle). Neither judge is right about a shape that
+is half one thing and half another; they are simply strict in different places. So the learned
+judge is trustworthy on clean pictures and on the mistakes generators actually make (wrong
+count, wrong colour), and not a substitute for the reader on borderline shapes.
+
+The scenes drawing model (`ae-scenes`, then `flow-text-scenes`) runs in the night queue
+(`logs/queue/night-1124.sh`): every one of the 270 facts drawn 8 times, judged by both, in the
+canonical wording, both held-out phrasings and guidance 3.
+
 ## Traps to keep
 
 1. **A score that borrows a name it does not earn.** There is no FID here: FID needs a
@@ -653,6 +755,13 @@ and G4c (real photos and captions) are where that gets tested.
    as one split (`split="val", val_frac=1.0`).
 4. **A report started from the browser runs on the CPU**: a button must never put work on a
    card someone else is using. The night queue passes `--device cuda` itself.
+5. **A learned judge is trusted only where it agrees with an exact one.** G4b's contrastive
+   model is checked against the reader on pictures whose facts are known, originals and damaged,
+   before its number is read on its own. Its score is `own_clip`: our feature space, not
+   CLIPScore.
+6. **A contrastive loss must know which pictures say the same thing.** With 60 or 270 facts, a
+   batch repeats facts; CLIP's diagonal would count those as mismatches and train anyway
+   (lesson 34).
 
 ## The code, in reading order
 
@@ -673,8 +782,10 @@ and G4c (real photos and captions) are where that gets tested.
 | 13 | [`pictures/latents.py`](../aksharallm/pictures/latents.py) → `picture_latent`, `encode_latents`, `decode_latent` | G3's corpus: the quantized latent, per-channel normalising from the training split, decoding with or without snapping |
 | 14 | [`pictures/autoencoder.py`](../aksharallm/pictures/autoencoder.py) → `PictureAutoencoder` · [`train_ae.py`](../aksharallm/pictures/train_ae.py) | G3b's coder: the tokenizer's encoder and decoder around a Gaussian latent, the KL term, drawing from the mean; its trainer judges reconstructions with the reader |
 | 15 | [`pictures/phrases.py`](../aksharallm/pictures/phrases.py) · [`pictures/text.py`](../aksharallm/pictures/text.py) | G4a: ten training phrasings and two held out, facts recovered only for the portal's free text; the frozen text model, zero padding and its cache |
-| 16 | [`pictures/drawer.py`](../aksharallm/pictures/drawer.py) → `load_drawer` | one door for G1, G2 and G3: draw, score, copies through the tokenizer |
-| 17 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
+| 16 | [`pictures/drawer.py`](../aksharallm/pictures/drawer.py) → `load_drawer` | one door for G1, G2 and G3: draw, score, copies through the tokenizer; `corpus_kind` picks 60 shapes or 270 scene facts |
+| 17 | [`pictures/scenes.py`](../aksharallm/pictures/scenes.py) → `render`, `HELD_OUT` | G4b's second corpus: size and place in one column, two held-out combinations; the reader's `size_of` and `where_of` read them back |
+| 18 | [`pictures/clip.py`](../aksharallm/pictures/clip.py) → `clip_loss`, `ClipModel`, `rank`, `agreement` · [`train_clip.py`](../aksharallm/pictures/train_clip.py) | G4b: every same-fact caption a match, padding masked out of the text head, a picture's closest caption among every caption its corpus can say, Cohen's kappa against the reader |
+| 19 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
 
 Tests: `tests/test_pictures.py`. They cover the reader on every count × colour × shape, the
 reader seeing blur and recolouring, the codebook prefix ignoring later codebooks, batch

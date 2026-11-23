@@ -1,0 +1,43 @@
+# G4b (docs/26 § "Captions that say more"): ae-shapes's recipe on the scenes corpus (size and
+# place as well). ae-shapes, trained on shapes alone, reads scenes back right only 91% of the
+# time (small shapes lose their shape), so the scenes flow model gets its own latent.
+#
+#   scripts/audio.sh ae-scenes
+#   python -m aksharallm.pictures latents ae-scenes --corpus data/vision/scenes64k \
+#       --out data/pictures/latents-ae-scenes-64k
+#   scripts/audio.sh flow-text-scenes
+
+name: ae-scenes
+
+autoencoder:
+  image_size: 64
+  channels: [64, 128, 256]
+  latent_dim: 8
+  kl_weight: 1.0e-3
+
+data:
+  corpus: data/vision/scenes64k
+  holdout: data/vision/scenes64k-holdout
+
+optim:
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 300
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.99
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/ae-scenes
+  batch_size: 64
+  max_steps: 20000
+  eval_every: 1000
+  eval_batches: 8
+  sample_every: 4000
+  sample_images: 256
+  ckpt_every: 2000
+  log_every: 100
+  seed: 1337
+  resume: auto

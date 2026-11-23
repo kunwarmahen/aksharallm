@@ -118,8 +118,10 @@
     <div class="panel">
       <h3>Every caption, judged</h3>
       <p class="panel-note">
-        A report draws several pictures for each of the 60 captions the words can make and
-        reads every one back. <strong>Copies</strong> counts drawings identical, code for
+        A report draws several pictures for each caption the words can make (60 for shapes, 270
+        for scenes, which also say size and place) and reads every one back. With a contrastive
+        model chosen under Run it from here, the report also says what our learned judge thinks
+        of every picture, and how often it agrees with the reader. <strong>Copies</strong> counts drawings identical, code for
         code, to a training picture (memorising rather than drawing). <strong>Variety</strong>
         is the share of a caption's pictures that differ from each other.
       </p>
@@ -139,6 +141,42 @@
       </div>
       <div class="scroll-x"><table id="pc-gcmp" class="grid"></table></div>
       <pre id="pc-gcmp-cmd" class="au-cmd" hidden></pre>
+    </div>
+
+    <div class="panel">
+      <h3>A judge that learned (G4b)</h3>
+      <p class="panel-note">
+        Every score above comes from the rule-based reader, which only works because we drew the
+        pictures ourselves. Real image models are judged by a <strong>contrastive model</strong>
+        that has learned which captions go with which pictures. This is ours, trained here on
+        our own pictures and captions: a picture counts as right when, of every caption its
+        corpus can say, the one it was drawn for is the closest. It is trusted only where it
+        <strong>agrees with the reader</strong> (kappa 1 = always, 0 = no better than chance),
+        which is the point of checking it on pictures whose facts are known. It is our own
+        feature space, so this is not CLIPScore and not FID.
+      </p>
+      <p class="panel-note">
+        <strong>Scenes</strong> are the second corpus: captions that also say size and place
+        (“two big red circles on the left”), with two combinations never drawn in training:
+        purple triangles, and circles on the right. <span id="pc-scenes-note"></span>
+      </p>
+      <div class="row">
+        <label class="field">Report <select id="pc-clip-report"></select></label>
+      </div>
+      <div class="scroll-x"><table id="pc-clip-table" class="grid"></table></div>
+      <p id="pc-clip-note" class="panel-note"></p>
+      <div class="row">
+        <label class="field">Contrastive model <select id="pc-clip-ckpt"></select></label>
+        <label class="field">Pictures <select id="pc-clip-through"></select></label>
+        <button id="pc-clip-run" type="button">Make a contrastive report</button>
+        <button id="pc-scenes" class="ghost" type="button">Render the scenes corpus</button>
+      </div>
+      <p class="panel-note">
+        “Through” a coder sends every picture through a tokenizer or autoencoder first, so some
+        come back damaged and the reader is no longer 100%: that is where agreement means
+        something. Train the model with the dashboard's <strong>Start</strong>
+        (<code>clip-shapes</code>, small enough for the CPU).
+      </p>
     </div>
 
     <div class="panel">
@@ -167,6 +205,7 @@
         <label class="field">G1 model <select id="pc-gen-job"></select></label>
         <label class="field">Per caption <input id="pc-k" type="number" min="1" max="32" value="8"></label>
         <label class="field">Guidance <input id="pc-gen-g" type="number" min="0" max="10" step="0.5" value="3"></label>
+        <label class="field">Also judged by <select id="pc-gen-clip"></select></label>
         <button id="pc-gen-run" type="button">Make a G1 report</button>
       </div>
       <div id="pc-job"></div>

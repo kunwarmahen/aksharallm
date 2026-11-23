@@ -57,6 +57,7 @@ TRAINERS: tuple[str, ...] = (
     "aksharallm.pictures.train_gen",
     "aksharallm.pictures.train_flow",
     "aksharallm.pictures.train_ae",
+    "aksharallm.pictures.train_clip",
 )
 
 #: Every shell script that pre-flights a run and publishes `launch.pid` / `launch.meta`.
@@ -139,6 +140,11 @@ LAUNCHERS: dict[str, dict] = {
     "flow-ae-shapes": {"script": "scripts/audio.sh", "args": ["flow-ae-shapes"]},
     # G4a: G3b's flow, the caption read by a frozen text model (docs/26).
     "flow-text-shapes": {"script": "scripts/audio.sh", "args": ["flow-text-shapes"]},
+    # G4b: our own contrastive picture-caption model, and captions that say size and place
+    # (the scenes corpus: its own autoencoder, then G4a's flow on it).
+    "clip-shapes": {"script": "scripts/audio.sh", "args": ["clip-shapes"]},
+    "ae-scenes": {"script": "scripts/audio.sh", "args": ["ae-scenes"]},
+    "flow-text-scenes": {"script": "scripts/audio.sh", "args": ["flow-text-scenes"]},
     # The speech recogniser (Phase 7, docs/23): same launcher, an `asr:` config.
     "asr-synth": {"script": "scripts/audio.sh", "args": ["asr-synth"]},
     "asr-libri100": {"script": "scripts/audio.sh", "args": ["asr-libri100"]},
@@ -231,7 +237,7 @@ def exec_cmdline(argv: list[str]) -> str:
 #: test for "this is a run and not a settings file". `model:` is a language model, `codec:`
 #: and `audiolm:` are docs/21, `vision:` is docs/22, `asr:` is docs/23. Deliberately not a
 #: YAML parse: `runs()` is called on every poll of every open page.
-_RUN_CONFIG_RE = re.compile(r"^(model|codec|audiolm|vision|asr|speaker|picture|picgen|flow|autoencoder):", re.MULTILINE)
+_RUN_CONFIG_RE = re.compile(r"^(model|codec|audiolm|vision|asr|speaker|picture|picgen|flow|autoencoder|clip):", re.MULTILINE)
 
 
 def _is_run_config(path: Path) -> bool:
@@ -988,7 +994,7 @@ class RunStore:
         if not path.exists():
             return {}
         text = self._text(path, limit=1_000_000) or ""
-        kind = next((k for k in ("asr", "codec", "audiolm", "vision", "speaker", "picture", "picgen", "flow", "autoencoder")
+        kind = next((k for k in ("asr", "codec", "audiolm", "vision", "speaker", "picture", "picgen", "flow", "autoencoder", "clip")
                      if re.search(rf"^{k}:", text, re.MULTILINE)), "model")
         try:
             if kind != "model":
@@ -1080,6 +1086,14 @@ class RunStore:
                     f"(guidance)")
             batch = f"{cfg.train.batch_size} pictures"
             sources = [cfg.data.codes, f"tokenizer: {g.tokenizer}"]
+        elif kind == "clip":
+            from ..pictures.train_clip import load_clip_config
+            cfg = load_clip_config(str(path))
+            c = cfg.clip
+            arch = (f"G4b contrastive picture-caption model: ViT d={c.d_vision} L={c.n_layers}, "
+                    f"text head d={c.d_text} over {c.text} (frozen), {c.d_embed}-d embeddings")
+            batch = f"{cfg.train.batch_size} pictures"
+            sources = list(cfg.data.corpora)
         elif kind == "autoencoder":
             from ..pictures.train_ae import load_ae_config
             cfg = load_ae_config(str(path))

@@ -42,7 +42,7 @@ It fails in the safe direction: someone who did the work and reverted before pre
 button simply presses it once more. And red is deliberately *not* styled as an error — it is
 the middle of the exercise, and the panel says so.
 
-## The thirty-three lessons
+## The thirty-four lessons
 
 Filename order is the curriculum; the prereq graph is the constraint.
 
@@ -81,6 +81,7 @@ Filename order is the curriculum; the prereq graph is the constraint.
 | 31 | **flow-matching** | drawing by moving noise to a picture along a straight line, and the subtraction that decides which way | reverse the direction |
 | 32 | **latent** | the same flow in the image tokenizer's smaller space, and the normalising that has to be undone | forget to map it back |
 | 33 | **held-out-phrasing** | a caption read by a frozen language model, and a held-out test that training must never see | let the held-out phrasings leak |
+| 34 | **contrastive** | our own contrastive picture-caption model, a learned judge checked against the exact one | give its loss CLIP's diagonal, so pictures of the same fact count as mismatches |
 
 Most of the exercises are **real bugs from this repo** — they are in `PLAN.md`'s "Bugs found
 and fixed" list. `is_causal` during single-token decode masks away the entire KV cache: the
@@ -139,7 +140,7 @@ python -m aksharallm.learn reset [id]       # do one properly again
 same `learning/progress.json`, so the terminal and the browser never disagree about what you
 have done.
 
-The tab opens on the first unfinished unlocked lesson rather than a list of thirty-three, locked
+The tab opens on the first unfinished unlocked lesson rather than a list of thirty-four, locked
 lessons say what is missing rather than being merely greyed out, and three buttons hand off to
 the rest of the portal: **read the doc** (Docs tab), **open the file** (Code tab, where a
 local model will explain the lines before you break them), and **try it** (Playground, on the
@@ -149,7 +150,7 @@ probe the lesson is about).
 
 | # | file | what to look for |
 |---|---|---|
-| 1 | [`docs/lessons/01-data.md`](lessons/01-data.md) | one lesson, and the shape of all thirty-three: frontmatter (`doc`, `files`, `verify`, `prereqs`, `minutes`), explanation, exercise. The `files:` list is this chapter's version of every other chapter's reading order |
+| 1 | [`docs/lessons/01-data.md`](lessons/01-data.md) | one lesson, and the shape of all thirty-four: frontmatter (`doc`, `files`, `verify`, `prereqs`, `minutes`), explanation, exercise. The `files:` list is this chapter's version of every other chapter's reading order |
 | 2 | [`learn/lessons.py`](../aksharallm/learn/lessons.py) | `Lesson`, the frontmatter parser, the prereq graph, and `validate()` — every referenced doc and file exists, ids unique, no cycle |
 | 3 | [`learn/progress.py`](../aksharallm/learn/progress.py) | `learning/progress.json`, and the red-then-green state machine: a lesson completes only after its check has been seen failing *and* then passing |
 | 4 | [`learn/check.py`](../aksharallm/learn/check.py) | running one pytest node id and turning its output into something worth reading |

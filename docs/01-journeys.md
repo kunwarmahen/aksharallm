@@ -771,6 +771,23 @@ turns the caption into vectors that the flow model reads (`scripts/audio.sh flow
 First run: 99.3% on the plain captions, 99.0% on a phrasing it never saw, and the Draw panel
 takes any sentence ("could you paint three yellow squares please": 4 of 4 right).
 
+The sixth (**G4b**) is a judge that learned: our own contrastive picture-caption model, the
+kind real image models are scored with, trained on the CPU in about twenty minutes and trusted
+only where it agrees with the reader. It also brings captions that say size and place
+("two big red circles on the left"), with circles on the right held out:
+
+```bash
+python -m aksharallm.pictures scenes                     # the scenes corpus (seconds)
+scripts/audio.sh clip-shapes                             # the contrastive model
+python -m aksharallm.pictures clip-report clip-shapes    # beside the reader, on known pictures
+python -m aksharallm.pictures gen-report imggen-shapes-gpu --clip clip-shapes
+scripts/audio.sh ae-scenes                               # then flow-text-scenes: drawing scenes
+```
+
+**How you know G4b worked:** the model picks every original's own caption (100%, held-out
+combinations included), and on real drawing mistakes it agrees with the reader 95–98% of the
+time (kappa ~0.9). Where it does not, read why (it cannot say "five" if no caption does).
+
 **How you know G2 worked:** first run, 56 minutes on the card: 99% of seen captions and 100% of
 the never-seen purple triangles drawn right, against 89% / 70% for the best G1, no copies.
 

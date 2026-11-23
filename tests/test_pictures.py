@@ -65,7 +65,7 @@ def test_the_reader_sees_the_damage_a_tokenizer_does():
     assert judge(recoloured, fact)["colour"] is False
     # an empty picture says nothing
     blank = np.full_like(img, BACKGROUND)
-    assert read(blank) == {"count": 0, "colour": None, "shape": None}
+    assert read(blank) == {"count": 0, "size": None, "colour": None, "shape": None, "where": None}
     assert judge(blank, fact)["all"] is False
 
 
