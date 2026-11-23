@@ -12,7 +12,7 @@ flowchart LR
     G0["G0 image tokenizer<br/>(built)"] --> G1["G1 a caption to<br/>the codes (built)"]
     G0 --> G3["G3 flow in the<br/>latent (built)"]
     G2["G2 flow matching<br/>in pixels (built)"] --> G3
-    G1 --> G4["G4 text to image"]
+    G1 --> G4["G4 text to image<br/>(G4a built)"]
     G3 --> G4
     G4 --> G5["G5 short videos<br/>of moving shapes"]
 ```
@@ -577,6 +577,59 @@ A smooth latent made for the purpose, a twenty-fourth the size of the picture, d
 the pixels at a third of the cost, which is the whole case for latent diffusion. This
 autoencoder is what G4 (real sentences and photos) will build on.
 
+## G4a: reading a sentence (2026-11-23)
+
+Every model so far read exactly three words from a vocabulary of fifteen. A text-to-image
+model reads a sentence. G4a keeps G3b (the flow model on the continuous latent) and changes
+only how the caption gets in: a **frozen language model of our own** reads it, the way Imagen
+reads its prompt with T5 and Stable Diffusion with CLIP's text model.
+
+```mermaid
+flowchart LR
+    S["'a picture of two red circles'"] --> TOK["tiny's tokenizer"] --> LM["tiny, 13.8M<br/>(frozen, never trained here)"]
+    LM --> H["12 vectors of 384<br/>(final hidden states, zero-padded)"]
+    H --> P["linear projection"] --> F["G3b's flow model:<br/>[time] [12 caption vectors] [64 latent cells]"]
+    F --> D["the autoencoder's decoder"] --> PIC["picture"]
+```
+
+`tiny` is the TinyStories model of Phase 1. It has never seen these pictures, and nothing in
+it is trained: `pictures/text.py` runs it once per distinct sentence and caches the vectors.
+The flow model learns a projection from its 384-wide vectors to its own width, and nothing
+else changes (`configs/flow-text-shapes.yaml` is `flow-ae-shapes.yaml` plus four text keys).
+
+**The sentences** (`pictures/phrases.py`) are ten phrasings of every caption, used in
+training at random ("a picture of two red circles", "2 red circles", "two circles, all red",
+"red circles, two of them", "there are two red circles", "two circles coloured red", "an image
+showing …", "… on a dark background", "draw …"), and **two phrasings never used in training**:
+"show me two red circles" and "two circles in red". That is a second held-out axis beside the
+purple triangles. Reports pass the facts each sentence was made from, so the reader is never
+checked against a parsed caption (`gen-report --phrasing NAME`; two phrasings are paired with
+`gen-compare --by-fact`).
+
+**Measured** (`flow-text-shapes`, 30,000 steps, 16 minutes on the card; 32 drawings per fact,
+guidance 1, the same seed throughout):
+
+| caption said as | seen: all three | held out (purple triangles) |
+|---|---|---|
+| G3b, three fixed words | 98.9% | 97.7% |
+| **G4a**, the same three words | **99.3%** (vs G3b 19–12, p 0.28) | 97.7% |
+| G4a, "a picture of …" (trained) | 99.5% | 98.4% |
+| G4a, "… , N of them" (trained) | 99.2% | 98.4% |
+| G4a, digits "2 red circles" (trained) | 99.5% | 98.4% |
+| G4a, "two circles in red" (**never trained**) | 99.0% (vs three words 8–14, p 0.29) | 99.2% |
+| G4a, "show me two red circles" (**never trained**) | 97.4% (8–42, p 1e-6) | 95.3% |
+
+Reading through a frozen language model costs nothing against three fixed words; every
+training phrasing scores the same; one new phrasing scores the same and the other loses two
+points, a real but small cost of an imperative it never saw. In the portal a G4 model takes
+any sentence: "could you paint three yellow squares please", a phrasing nowhere in training,
+drew 4 of 4 right. A sentence with no count, colour or shape in it ("a happy dog") is drawn
+(as shapes, which is all it knows) and shown unjudged.
+
+What this does **not** show yet: understanding beyond these three attributes. Every sentence
+here still names exactly one count, one colour and one shape. G4b (our own CLIP-style scorer)
+and G4c (real photos and captions) are where that gets tested.
+
 ## Traps to keep
 
 1. **A score that borrows a name it does not earn.** There is no FID here: FID needs a
@@ -608,8 +661,9 @@ autoencoder is what G4 (real sentences and photos) will build on.
 | 12 | [`pictures/train_flow.py`](../aksharallm/pictures/train_flow.py) → `evaluate`, `main` | the trainer contract again; val on fixed pictures, noise and times |
 | 13 | [`pictures/latents.py`](../aksharallm/pictures/latents.py) → `picture_latent`, `encode_latents`, `decode_latent` | G3's corpus: the quantized latent, per-channel normalising from the training split, decoding with or without snapping |
 | 14 | [`pictures/autoencoder.py`](../aksharallm/pictures/autoencoder.py) → `PictureAutoencoder` · [`train_ae.py`](../aksharallm/pictures/train_ae.py) | G3b's coder: the tokenizer's encoder and decoder around a Gaussian latent, the KL term, drawing from the mean; its trainer judges reconstructions with the reader |
-| 15 | [`pictures/drawer.py`](../aksharallm/pictures/drawer.py) → `load_drawer` | one door for G1, G2 and G3: draw, score, copies through the tokenizer |
-| 16 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
+| 15 | [`pictures/phrases.py`](../aksharallm/pictures/phrases.py) · [`pictures/text.py`](../aksharallm/pictures/text.py) | G4a: ten training phrasings and two held out, facts recovered only for the portal's free text; the frozen text model, zero padding and its cache |
+| 16 | [`pictures/drawer.py`](../aksharallm/pictures/drawer.py) → `load_drawer` | one door for G1, G2 and G3: draw, score, copies through the tokenizer |
+| 17 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
 
 Tests: `tests/test_pictures.py`. They cover the reader on every count × colour × shape, the
 reader seeing blur and recolouring, the codebook prefix ignoring later codebooks, batch
@@ -653,3 +707,10 @@ one loader opens either coder and G3's latents come from the autoencoder's mean 
 snap to); and a G3b run scores copies with the VQ tokenizer, not the autoencoder. Three mutants
 were checked red: sampling in eval mode, ignoring the autoencoder's latent, and scoring with the
 autoencoder.
+
+G4a adds five: every phrasing says its facts and the held-out phrasings are never drawn for
+training; a text model reads vectors and its empty caption is zeros; the text encoder pads with
+zeros, truncates and caches; sentences are judged against their facts, not parsed; and two
+phrasings pair by fact but refuse to pair by accident. Four mutants were checked red: held-out
+phrasings in training, a NULL id for the empty caption, captions parsed instead of facts, and
+the padding filled. [Lesson 33](lessons/33-held-out-phrasing.md) leaks the held-out phrasings.

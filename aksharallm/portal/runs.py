@@ -137,6 +137,8 @@ LAUNCHERS: dict[str, dict] = {
     # G3b: a continuous autoencoder, and G3's flow on its latent (docs/26).
     "ae-shapes": {"script": "scripts/audio.sh", "args": ["ae-shapes"]},
     "flow-ae-shapes": {"script": "scripts/audio.sh", "args": ["flow-ae-shapes"]},
+    # G4a: G3b's flow, the caption read by a frozen text model (docs/26).
+    "flow-text-shapes": {"script": "scripts/audio.sh", "args": ["flow-text-shapes"]},
     # The speech recogniser (Phase 7, docs/23): same launcher, an `asr:` config.
     "asr-synth": {"script": "scripts/audio.sh", "args": ["asr-synth"]},
     "asr-libri100": {"script": "scripts/audio.sh", "args": ["asr-libri100"]},
@@ -1090,7 +1092,8 @@ class RunStore:
             from ..pictures.train_flow import load_flow_config
             cfg = load_flow_config(str(path))
             f = cfg.flow
-            where = ("G3 flow matching in the tokenizer's latent" if f.space == "latent"
+            where = ("G4a flow matching, caption read by " + str(f.text) if f.text
+                     else "G3 flow matching in the tokenizer's latent" if f.space == "latent"
                      else "G2 flow matching in pixels")
             arch = (f"{where}: DiT d={f.d_model} L={f.n_layers} H={f.n_heads}, "
                     f"{f.grid}x{f.grid} patches of {f.patch}, {f.sample_steps} Euler steps, "

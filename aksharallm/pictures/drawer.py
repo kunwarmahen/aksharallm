@@ -82,16 +82,24 @@ class Drawer:
 
     def report(self, *, k: int = 8, guidance: float = 1.0, seed: int = 0,
                temperature: float = 1.0, top_k: int | None = None, steps: int | None = None,
-               captions: list[str] | None = None) -> dict:
+               captions: list[str] | None = None, phrasing: str | None = None) -> dict:
+        """Draw `k` per caption and judge them. `phrasing` (G4a) says every one of the 60 facts
+        in that phrasing (phrases.py) instead of the three-word caption; facts, not captions,
+        are what the reader checks."""
         from .codes import all_captions
         from .score import judge_drawings
+        facts = None
+        if phrasing:
+            from .phrases import all_facts, phrase
+            facts = all_facts()
+            captions = [phrase(f, phrasing) for f in facts]
         captions = captions or all_captions()
         t0 = time.time()
         pics, toks = self.draw_with_tokens([c for c in captions for _ in range(k)],
                                            guidance=guidance, seed=seed,
                                            temperature=temperature, top_k=top_k, steps=steps)
-        out = judge_drawings(captions, k, pics, toks, self.seen())
-        return out | {"model": self.kind, "guidance": guidance, "temperature": temperature,
+        out = judge_drawings(captions, k, pics, toks, self.seen(), facts)
+        return out | {"model": self.kind, "phrasing": phrasing, "guidance": guidance, "temperature": temperature,
                       "top_k": top_k, "steps": steps, "seed": seed,
                       "seconds": round(time.time() - t0, 1)}
 
@@ -114,8 +122,8 @@ def load_drawer(path: str | Path, root: str | Path, device: str = "cpu") -> Draw
         kind = "G1"
     elif stage == "flow":
         from .flow import load_flow
-        model, cfg, blob = load_flow(path, device)
-        kind = "G3" if cfg.space == "latent" else "G2"
+        model, cfg, blob = load_flow(path, device, root=root)
+        kind = "G4" if cfg.text else ("G3" if cfg.space == "latent" else "G2")
     else:
         raise ValueError(f"{path} is not a drawing model (a G1 picgen or a G2/G3 flow checkpoint)")
     def at(p):

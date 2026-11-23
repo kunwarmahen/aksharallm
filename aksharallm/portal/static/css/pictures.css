@@ -49,3 +49,5 @@
   gap: 0.6rem;
   margin-top: 0.5rem;
 }
+.pc-free { flex: 1 1 100%; }
+.pc-free input { width: 100%; }

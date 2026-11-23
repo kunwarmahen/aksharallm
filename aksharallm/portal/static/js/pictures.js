@@ -17,7 +17,19 @@ const COUNTS = ['one', 'two', 'three', 'four'];
 const COLOURS = ['red', 'green', 'blue', 'yellow', 'purple'];
 const SHAPES = ['circle', 'square', 'triangle'];
 
+function genKind() {
+  const g = (pc.gens || []).find((x) => x.rel === $('#pc-gen').value);
+  return g ? g.kind : 'G1';
+}
+
+function syncDrawInputs() {
+  const free = genKind() === 'G4';
+  $('#pc-free-row').hidden = !free;
+  for (const id of ['#pc-w-count', '#pc-w-colour', '#pc-w-shape']) $(id).closest('label').hidden = free;
+}
+
 function caption() {
+  if (genKind() === 'G4') return $('#pc-free').value.trim();
   const n = $('#pc-w-count').value;
   const shape = $('#pc-w-shape').value + (n === 'one' ? '' : 's');
   return `${n} ${$('#pc-w-colour').value} ${shape}`;
@@ -72,12 +84,15 @@ async function draw() {
       n: Number($('#pc-draw-n').value) || 8, guidance: Number($('#pc-guidance').value),
       seed: Number($('#pc-seed').value) || 0,
     });
-    $('#pc-draw-note').innerHTML = `“${escHtml(r.caption)}”: the reader agrees with <b>${r.agree} of `
-      + `${r.pictures.length}</b> pictures (${escHtml(r.kind || 'G1')}, step ${fmt.int(r.step)})`
+    $('#pc-draw-note').innerHTML = (r.agree == null
+      ? `“${escHtml(r.caption)}”: no count, colour and shape found in the sentence, so the `
+        + 'pictures are shown with what the reader sees in them, not judged'
+      : `“${escHtml(r.caption)}”: the reader agrees with <b>${r.agree} of ${r.pictures.length}</b> pictures`)
+      + ` (${escHtml(r.kind || 'G1')}, step ${fmt.int(r.step)})`
       + (r.held_out ? ' — <b>a held-out combination</b>: no training picture shows it' : '');
-    $('#pc-drawn').innerHTML = r.pictures.map((p, i) => `<figure class="${p.ok ? 'ok' : 'bad'}">`
+    $('#pc-drawn').innerHTML = r.pictures.map((p, i) => `<figure class="${p.ok == null ? '' : (p.ok ? 'ok' : 'bad')}">`
       + `<img src="${p.png}" alt="drawing ${i + 1} of ${escHtml(r.caption)}">`
-      + `<figcaption>${p.ok ? '✓' : '✗'} ${p.read.count} ${escHtml(String(p.read.colour))} `
+      + `<figcaption>${p.ok == null ? '' : (p.ok ? '✓' : '✗')} ${p.read.count} ${escHtml(String(p.read.colour))} `
       + `${escHtml(String(p.read.shape))}</figcaption></figure>`).join('');
     $('#pc-draw-cmd').hidden = false;
     $('#pc-draw-cmd').textContent = r.command;
@@ -159,6 +174,7 @@ async function load() {
   await showGenReport($('#pc-gen-report').value || null);
   $('#pc-gcompare').disabled = pc.genReports.length < 2;
   const gens = res.generators || [];
+  pc.gens = gens;
   const genOpts = gens.map((g) => `<option value="${escHtml(g.rel)}">${escHtml(g.kind || 'G1')} · `
     + `${escHtml(g.rel)} — step ${fmt.int(g.step)}</option>`).join('');
   for (const id of ['#pc-gen', '#pc-gen-job']) {
@@ -167,6 +183,7 @@ async function load() {
     if (keep && gens.some((g) => g.rel === keep)) $(id).value = keep;
   }
   $('#pc-draw').disabled = !gens.length;
+  syncDrawInputs();
   $('#pc-gen-run').disabled = !gens.length;
   $('#pc-codes').disabled = !cks.length;
   if (!gens.length) {
@@ -211,6 +228,7 @@ registerTab('pictures', {
       fill('#pc-w-shape', SHAPES, 'circle');
     }
     $('#pc-draw').onclick = draw;
+    $('#pc-gen').onchange = syncDrawInputs;
     $('#pc-gen-report').onchange = (e) => showGenReport(e.target.value);
     $('#pc-gcompare').onclick = genCompare;
     await load().catch((e) => flash(`pictures: ${e.message}`, 'error'));

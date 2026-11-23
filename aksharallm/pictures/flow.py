@@ -85,6 +85,13 @@ class FlowConfig:
     #: the config so a checkpoint can always map its drawings back.
     latent_mean: list | None = None
     latent_std: list | None = None
+    #: G4a: read the caption with this FROZEN text model (a checkpoint) instead of the three
+    #: word tokens. None = the three words (G1–G3). Its tokenizer and how many of its tokens
+    #: to keep; `text_dim` is filled in from the model when it is loaded.
+    text: str | None = None
+    text_tokenizer: str | None = None
+    text_len: int = 16
+    text_dim: int = 0
 
     @property
     def grid(self) -> int:
@@ -124,7 +131,8 @@ class FlowModel(nn.Module):
         super().__init__()
         self.fc = fc
         d = fc.d_model
-        n_tokens = 1 + CAPTION_LEN + fc.grid * fc.grid
+        self.n_cap = fc.text_len if fc.text else CAPTION_LEN
+        n_tokens = 1 + self.n_cap + fc.grid * fc.grid
         self.cfg = ModelConfig(vocab_size=1, d_model=d, n_layers=fc.n_layers,
                                n_heads=fc.n_heads, dropout=fc.dropout, causal=False, embeds_only=True,
                                max_seq_len=n_tokens)
@@ -133,7 +141,11 @@ class FlowModel(nn.Module):
         self.row_emb = nn.Embedding(fc.grid, d)
         self.col_emb = nn.Embedding(fc.grid, d)
         self.word_emb = nn.Embedding(WORD0 + len(WORDS), d)       # ids as in codes.py
-        self.slot_emb = nn.Embedding(CAPTION_LEN, d)               # count / colour / shape slot
+        self.slot_emb = nn.Embedding(self.n_cap, d)                # caption position
+        # G4a: the frozen text model's vectors, projected to this width. The encoder itself is
+        # not a submodule (it is frozen and never saved here): `attach_text` hands it over.
+        self.text_proj = nn.Linear(fc.text_dim, d) if fc.text else None
+        self._text = []
         self.time_mlp = nn.Sequential(nn.Linear(d, d), nn.SiLU(), nn.Linear(d, d))
         self.out = nn.Linear(d, fc.patch_dim)
         for e in (self.row_emb, self.col_emb, self.word_emb, self.slot_emb):
@@ -147,11 +159,30 @@ class FlowModel(nn.Module):
         pos = (self.row_emb(g)[:, None] + self.col_emb(g)[None]).reshape(fc.grid * fc.grid, -1)
         te = self.time_mlp(time_features(t, fc.d_model))                    # (B, d)
         patches = self.patch_in(patchify(x_t, fc.patch)) + pos[None] + te[:, None]
-        cap = self.word_emb(words) + self.slot_emb.weight[None]             # (B, 3, d)
+        if self.text_proj is not None:      # (B, text_len, text_dim) vectors from text.py
+            cap = self.text_proj(words.to(patches.dtype)) + self.slot_emb.weight[None]
+        else:                               # (B, 3) word ids
+            cap = self.word_emb(words) + self.slot_emb.weight[None]
         seq = torch.cat([te[:, None], cap, patches], dim=1)
         h, _ = self.lm(None, inputs_embeds=seq, return_hidden=True)
-        v = self.out(h[:, 1 + CAPTION_LEN:])
+        v = self.out(h[:, 1 + self.n_cap:])
         return unpatchify(v, fc.patch, fc.image_size, fc.channels)
+
+    def attach_text(self, encoder) -> None:
+        self._text = [encoder]
+
+    def condition(self, captions: list[str], device="cpu") -> torch.Tensor:
+        """Captions -> what `forward` takes as `words`: ids for G1–G3's three words, the frozen
+        text model's vectors for G4a."""
+        if self.text_proj is None:
+            return torch.tensor([word_ids(c) for c in captions], dtype=torch.long, device=device)
+        if not self._text:
+            raise ValueError("a G4a model needs its text encoder attached (attach_text)")
+        return self._text[0].encode(captions).to(device)
+
+    def null_condition(self, cond: torch.Tensor) -> torch.Tensor:
+        """The empty caption guidance subtracts: NULL ids, or all-zero text vectors."""
+        return torch.zeros_like(cond) if self.text_proj is not None else torch.full_like(cond, NULL)
 
     def n_params(self) -> int:
         return sum(p.numel() for p in self.parameters())
@@ -184,11 +215,13 @@ def sample(model, captions: list[str], *, steps: int | None = None, guidance: fl
     fc = model.fc
     steps = steps or fc.sample_steps
     B = len(captions)
-    words = torch.tensor([word_ids(c) for c in captions], dtype=torch.long, device=device)
+    words = (model.condition(captions, device) if hasattr(model, "condition") else
+             torch.tensor([word_ids(c) for c in captions], dtype=torch.long, device=device))
     gen = torch.Generator(device="cpu").manual_seed(seed)
     x = torch.randn((B, fc.channels, fc.image_size, fc.image_size), generator=gen).to(device)
     guide = guidance != 1.0
-    null = torch.full_like(words, NULL)
+    null = (model.null_condition(words) if hasattr(model, "null_condition")
+            else torch.full_like(words, NULL))
     for i in range(steps):
         t = torch.full((B,), i / steps, device=device)
         if guide:
@@ -228,7 +261,7 @@ def draw(model, captions: list[str], *, guidance: float = 1.0, steps: int | None
     return np.concatenate(out)
 
 
-def load_flow(path: str | Path, device: str = "cpu"):
+def load_flow(path: str | Path, device: str = "cpu", root: str | Path | None = None):
     """A trained G2 checkpoint -> `(model, FlowConfig, blob)` in eval mode."""
     blob = torch.load(path, map_location="cpu", weights_only=False)
     if blob.get("stage") != "flow":
@@ -236,7 +269,19 @@ def load_flow(path: str | Path, device: str = "cpu"):
     fc = FlowConfig(**blob["flow"])
     model = FlowModel(fc)
     model.load_state_dict(blob["model"])
+    if fc.text:
+        model.attach_text(TextEncoder_for(fc, device, root))
     return model.to(device).eval(), fc, blob
+
+
+def TextEncoder_for(fc: FlowConfig, device: str = "cpu", root: str | Path | None = None):
+    """The frozen text model a G4a config names (paths relative to `root` if given)."""
+    from .text import TextEncoder
+
+    def at(p):
+        p = Path(p)
+        return p if p.is_absolute() or root is None else Path(root) / p
+    return TextEncoder(at(fc.text), at(fc.text_tokenizer), fc.text_len, device)
 
 
 def public_config(fc: FlowConfig) -> dict:

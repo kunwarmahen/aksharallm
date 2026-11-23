@@ -83,10 +83,28 @@ def load_flow_config(path, overrides=None) -> FlowRunConfig:
     return load_into(FlowRunConfig, path, overrides)
 
 
-def batch_of(ds, n: int, drop: float, rng) -> tuple[torch.Tensor, torch.Tensor]:
-    """Random training examples (pictures, or G3 latents) and their caption ids, `drop` of
-    captions replaced by NULL. Both datasets' `batch` return `(float array, captions)`."""
+def phrased(captions: list[str], rng=None, offset: int = 0) -> list[str]:
+    """G4a: each canonical caption said in one of the TRAINING phrasings (phrases.py), at
+    random when `rng` is given, else cycling deterministically (for val)."""
+    from .codes import fact_of
+    from .phrases import TRAIN, phrase
+    names = list(TRAIN)
+    pick = ((lambda i: names[int(rng.integers(len(names)))]) if rng is not None
+            else (lambda i: names[(offset + i) % len(names)]))
+    return [phrase(fact_of(c), pick(i)) for i, c in enumerate(captions)]
+
+
+def batch_of(ds, n: int, drop: float, rng, model=None) -> tuple[torch.Tensor, torch.Tensor]:
+    """Random training examples (pictures, or G3 latents) and their captions as the model
+    reads them, `drop` of captions replaced by the empty caption. Both datasets' `batch`
+    return `(float array, captions)`. A G4a model reads a random training phrasing through
+    its frozen text model; G1–G3's read the three word ids."""
     imgs, caps = ds.batch(n)
+    if model is not None and getattr(model, "text_proj", None) is not None:
+        cond = model.condition(phrased(caps, rng))
+        if drop > 0:
+            cond[torch.from_numpy(rng.random(n) < drop)] = 0.0
+        return torch.from_numpy(imgs), cond
     words = np.asarray([word_ids(c) for c in caps], dtype=np.int64)
     if drop > 0:
         words[rng.random(n) < drop] = NULL
@@ -113,7 +131,10 @@ def evaluate(model, ds, device, batch_size, batches, amp) -> float:
         idx = [ds.index[i % len(ds)] for i in range(b * batch_size, (b + 1) * batch_size)]
         x, caps = rows(ds, idx)
         x1 = torch.from_numpy(x).to(device)
-        words = torch.tensor([word_ids(c) for c in caps], device=device)
+        if getattr(model, "text_proj", None) is not None:
+            words = model.condition(phrased(caps, offset=b), device)
+        else:
+            words = torch.tensor([word_ids(c) for c in caps], device=device)
         with amp():
             total += float(flow_loss(model, x1, words, gen))
         n += 1
@@ -156,13 +177,24 @@ def main(argv=None) -> int:
     else:
         raise SystemExit(f"flow.space is 'pixels' or 'latent', not {fc.space!r}")
     drop_rng = np.random.default_rng(cfg.train.seed + 2)
+    encoder = None
+    if fc.text:
+        # G4a: the frozen text model (on the CPU: it reads a few hundred distinct sentences
+        # once each, and its vectors are cached).
+        from .flow import TextEncoder_for
+        encoder = TextEncoder_for(fc, "cpu")
+        fc.text_dim = encoder.dim
     model = FlowModel(fc).to(device)
+    if encoder is not None:
+        model.attach_text(encoder)
 
     print(f"=== {cfg.name} ===")
     print(f"model      {model.n_params() / 1e6:.2f}M params, d {fc.d_model} x {fc.n_layers} "
           f"layers, {fc.space}: {fc.channels}x{fc.image_size}x{fc.image_size} as "
           f"{fc.grid}x{fc.grid} patches of {fc.patch}")
-    print(f"sequence   time + 3 words + {fc.grid * fc.grid} patches, bidirectional; caption "
+    reads = (f"{fc.text_len} vectors from {fc.text} (frozen, any of {len(__import__('aksharallm.pictures.phrases', fromlist=['TRAIN']).TRAIN)} phrasings)"
+             if fc.text else "3 words")
+    print(f"sequence   time + {reads} + {fc.grid * fc.grid} patches, bidirectional; caption "
           f"dropped {fc.cfg_drop:.0%} of the time (for guidance)")
     src = cfg.data.latents if fc.space == "latent" else cfg.data.corpus
     print(f"corpus     {len(train_ds):,} train / {len(val_ds):,} val pictures ({src})")
@@ -263,7 +295,7 @@ def main(argv=None) -> int:
                     schedule=cfg.optim.schedule)
         for g in opt.param_groups:
             g["lr"] = lr
-        x1, words = batch_of(train_ds, cfg.train.batch_size, fc.cfg_drop, drop_rng)
+        x1, words = batch_of(train_ds, cfg.train.batch_size, fc.cfg_drop, drop_rng, model)
         with amp():
             loss = flow_loss(model, x1.to(device), words.to(device))
         opt.zero_grad(set_to_none=True)

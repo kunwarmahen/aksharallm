@@ -76,9 +76,11 @@
         a training picture: it is drawn fresh each time, and the reader checks it.
         <strong>Guidance</strong> pushes the drawing towards the caption (1 = none; 3 is the
         usual setting): higher obeys the words more and varies less.
-        Two kinds of model can draw here: <strong>G1</strong> writes the code numbers one at a
-        time, <strong>G2</strong> starts from pure noise and clears the whole picture in 50
-        small steps (flow matching, the way Stable Diffusion 3 works).
+        Several kinds of model can draw here: <strong>G1</strong> writes the code numbers one at
+        a time, <strong>G2</strong> starts from pure noise and clears the whole picture in 50
+        small steps (flow matching, the way Stable Diffusion 3 works), <strong>G3</strong> does
+        that in the tokenizer's smaller latent space, and <strong>G4</strong> reads a whole
+        sentence with our own frozen language model, so you can type it in your own words.
         <strong>Purple triangles</strong> are never shown in training, though both words are,
         with other partners: drawing one means the model learned what the words mean, not
         which pictures go with which caption.
@@ -97,6 +99,10 @@
         <label class="field">How many <select id="pc-w-count"></select></label>
         <label class="field">Colour <select id="pc-w-colour"></select></label>
         <label class="field">Shape <select id="pc-w-shape"></select></label>
+      </div>
+      <div class="row pc-draw-row" id="pc-free-row" hidden>
+        <label class="field pc-free">Sentence (a G4 model reads any sentence)
+          <input id="pc-free" type="text" maxlength="120" value="a picture of three purple triangles"></label>
       </div>
       <div class="row pc-draw-row">
         <label class="field">Guidance <input id="pc-guidance" type="number" min="0" max="10" step="0.5" value="3"></label>

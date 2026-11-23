@@ -766,6 +766,11 @@ perfectly does not make a latent easy to generate (chapter 26). A continuous aut
 light KL term (`scripts/audio.sh ae-shapes`, then `flow-ae-shapes`) fixes it: 98.9%, level
 with G2, in 15 minutes.
 
+The fifth piece (**G4a**) reads a sentence instead of three words: the frozen `tiny` model
+turns the caption into vectors that the flow model reads (`scripts/audio.sh flow-text-shapes`).
+First run: 99.3% on the plain captions, 99.0% on a phrasing it never saw, and the Draw panel
+takes any sentence ("could you paint three yellow squares please": 4 of 4 right).
+
 **How you know G2 worked:** first run, 56 minutes on the card: 99% of seen captions and 100% of
 the never-seen purple triangles drawn right, against 89% / 70% for the best G1, no copies.
 

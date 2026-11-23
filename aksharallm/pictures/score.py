@@ -78,11 +78,16 @@ def tokens_of(pictures: np.ndarray, tokenizer, books: int, device: str = "cpu") 
 
 
 def judge_drawings(captions: list[str], k: int, pics: np.ndarray, toks: np.ndarray,
-                   seen: set[bytes]) -> dict:
+                   seen: set[bytes], facts: list[dict] | None = None) -> dict:
     """The scoring shared by every drawing model: `pics` holds `k` pictures per caption, in
-    caption order; `toks` are their code tokens (for copies and variety)."""
+    caption order; `toks` are their code tokens (for copies and variety). `facts` (one per
+    caption) are what the reader checks; without them they are read off the three-word
+    caption. G4a passes them, because its captions are sentences and are never parsed."""
+    facts = facts or [fact_of(c) for c in captions]
+    held_fact = [(f["colour"], f["shape"]) == HELD_OUT for f in facts]
     asked = [c for c in captions for _ in range(k)]
-    verdicts = [judge(p, fact_of(c)) for p, c in zip(pics, asked, strict=True)]
+    asked_facts = [f for f in facts for _ in range(k)]
+    verdicts = [judge(p, f) for p, f in zip(pics, asked_facts, strict=True)]
     copies = [t.astype(np.int64).tobytes() in seen for t in toks]
 
     def group(sel: list[int]) -> dict:
@@ -96,13 +101,13 @@ def judge_drawings(captions: list[str], k: int, pics: np.ndarray, toks: np.ndarr
         out["correct"] = "".join("1" if verdicts[i]["all"] else "0" for i in sel)
         return out
 
-    held = [i for i, c in enumerate(asked) if is_held_out(c)]
-    rest = [i for i, c in enumerate(asked) if not is_held_out(c)]
+    held = [i for i in range(len(asked)) if held_fact[i // k]]
+    rest = [i for i in range(len(asked)) if not held_fact[i // k]]
     per_caption = []
     for j, c in enumerate(captions):
         sel = list(range(j * k, (j + 1) * k))
         distinct = len({toks[i].tobytes() for i in sel})
-        per_caption.append({"caption": c, "held_out": is_held_out(c),
+        per_caption.append({"caption": c, "held_out": held_fact[j], "fact": facts[j],
                             "all": sum(verdicts[i]["all"] for i in sel) / k,
                             "distinct": distinct, "copies": sum(copies[i] for i in sel),
                             "reads": [verdicts[i]["read"] for i in sel]})
@@ -131,13 +136,21 @@ def public(result: dict) -> dict:
     return {k: v for k, v in result.items() if not k.startswith("_")}
 
 
-def compare(a: dict, b: dict) -> dict:
-    """Two G1 reports paired per (caption, sample) on `all`, seen and held-out separately.
-    Refuses reports that drew different captions or a different k."""
+def compare(a: dict, b: dict, by_fact: bool = False) -> dict:
+    """Two reports paired per (caption, sample) on `all`, seen and held-out separately.
+    Refuses reports that drew different captions or a different k. `by_fact` pairs two
+    PHRASINGS of the same facts instead (G4a): the captions differ on purpose, so what must
+    match is the fact behind each caption, in order."""
     from ..eval.versus import sign_test
-    if a["captions"] != b["captions"] or a["k"] != b["k"]:
+    if by_fact:
+        fa = [p.get("fact") for p in a.get("per_caption", [])]
+        fb = [p.get("fact") for p in b.get("per_caption", [])]
+        if None in fa or fa != fb or a["k"] != b["k"]:
+            raise ValueError("the reports do not say the same facts in the same order with the "
+                             "same k; they cannot be paired by fact")
+    elif a["captions"] != b["captions"] or a["k"] != b["k"]:
         raise ValueError("the reports drew different captions or a different k per caption; "
-                         "they cannot be paired")
+                         "they cannot be paired (two phrasings of the same facts: --by-fact)")
     out = {}
     for part in ("seen", "held_out"):
         ra, rb = a[part], b[part]

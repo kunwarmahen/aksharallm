@@ -228,7 +228,7 @@ def cmd_gen_report(args) -> int:
     root = _root()
     d = _load_drawer(args.checkpoint, _device(args.device), args.snap)
     r = d.report(k=args.k, guidance=args.guidance, temperature=args.temperature,
-                 top_k=args.top_k, seed=args.seed, steps=args.steps)
+                 top_k=args.top_k, seed=args.seed, steps=args.steps, phrasing=args.phrasing)
     run = d.path.parent.name
     stem = f"gen-{run}-step{d.step}-g{args.guidance:g}"
     if args.k != 8:                       # never overwrite the default k=8 report
@@ -239,6 +239,8 @@ def cmd_gen_report(args) -> int:
         stem += f"-n{args.steps}"
     if args.snap:
         stem += "-snap"
+    if args.phrasing:
+        stem += f"-p{args.phrasing}"
     names = gallery(r, root / RESULTS / stem)
     print(f"{d.path} ({d.kind}, step {d.step}): {args.k} pictures for each of "
           f"{len(r['captions'])} captions, guidance {args.guidance:g}, {r['seconds']}s\n")
@@ -263,7 +265,7 @@ def cmd_gen_report(args) -> int:
 def cmd_gen_compare(args) -> int:
     from .score import compare
     a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
-    for part, r in compare(a, b).items():
+    for part, r in compare(a, b, by_fact=args.by_fact).items():
         p = "–" if r["p"] is None else f"{r['p']:.3g}"
         print(f"{part:<10} n {r['n']:>4}   a {r['a'] * 100:5.1f}%   b {r['b'] * 100:5.1f}%   "
               f"b only {r['b_only']:>3}   a only {r['a_only']:>3}   p {p}")
@@ -311,6 +313,10 @@ def main(argv=None) -> int:
             s.add_argument("--out", default=None, help="PNG path (default logs/pictures/draw/)")
         else:
             s.add_argument("--k", type=int, default=8, help="pictures per caption")
+            s.add_argument("--phrasing", default=None,
+                           help="G4a: say the 60 captions in this phrasing (pictures/phrases.py: "
+                                "a training one such as picture_of, or held-out show_me / "
+                                "in_colour); default: the three-word captions")
         s.add_argument("--guidance", type=float, default=3.0, help="1 = no guidance")
         s.add_argument("--temperature", type=float, default=1.0)
         s.add_argument("--top-k", type=int, default=None)
@@ -327,9 +333,11 @@ def main(argv=None) -> int:
     s.add_argument("--out", default=None, help="default: data/pictures/latents-<run>")
     s.add_argument("--device", default="cpu")
     s.set_defaults(fn=cmd_latents)
-    s = sub.add_parser("gen-compare", help="G1: two gen-reports, paired per (caption, sample)")
+    s = sub.add_parser("gen-compare", help="two gen-reports, paired per (caption, sample)")
     s.add_argument("a")
     s.add_argument("b")
+    s.add_argument("--by-fact", action="store_true",
+                   help="G4a: pair two phrasings of the same facts (the captions differ)")
     s.set_defaults(fn=cmd_gen_compare)
     args = ap.parse_args(argv)
     return args.fn(args)

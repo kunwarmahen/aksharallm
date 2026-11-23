@@ -327,3 +327,120 @@ train: {{out_dir: {tmp_path / 'checkpoints/g3b'}, batch_size: 4, max_steps: 2, e
     assert d.kind == "G3" and hasattr(d.tokenizer, "latent") and not hasattr(d.scorer, "latent")
     r = d.report(k=1, captions=["one red circle"])
     assert r["seen"]["n"] == 1 and len(r["per_caption"]) == 1
+
+
+# ---- G4a: a sentence, read by a frozen text model ---------------------------------------
+
+def test_every_phrasing_says_its_facts_and_the_held_out_ones_are_never_trained_on():
+    from aksharallm.pictures.codes import all_captions
+    from aksharallm.pictures.phrases import HELD_OUT, TRAIN, all_facts, fact_from_text, phrase
+    from aksharallm.pictures.train_flow import phrased
+    facts = all_facts()
+    assert [phrase(f, "canonical") for f in facts] == all_captions()
+    assert not set(TRAIN) & set(HELD_OUT)
+    for f in facts:
+        said = {name: phrase(f, name) for name in [*TRAIN, *HELD_OUT]}
+        assert all(fact_from_text(s) == f for s in said.values()), said
+        assert not {said[n] for n in HELD_OUT} & {said[n] for n in TRAIN}
+    rng = np.random.default_rng(0)
+    held = {phrase(f, n) for f in facts for n in HELD_OUT}
+    drawn = set(phrased(all_captions() * 40, rng))
+    assert not drawn & held and len(drawn) > 300          # many phrasings, none held out
+    assert fact_from_text("a nice picture") is None
+    assert fact_from_text("two red and blue circles") is None   # ambiguous: refused
+
+
+class StubText:
+    """A text encoder that needs no checkpoint: a fixed vector per word, zero padding."""
+    dim, max_len = 6, 5
+
+    def encode(self, captions):
+        out = torch.zeros(len(captions), self.max_len, self.dim)
+        for i, c in enumerate(captions):
+            for j, w in enumerate(c.split()[: self.max_len]):
+                g = torch.Generator().manual_seed(sum(map(ord, w)))
+                out[i, j] = torch.randn(self.dim, generator=g)
+        return out
+
+
+def _text_model():
+    fc = tiny_fc(text="stub", text_len=5, text_dim=6)
+    m = FlowModel(fc).eval()
+    nn.init.normal_(m.out.weight, std=0.5)
+    m.attach_text(StubText())
+    return m
+
+
+def test_a_text_model_reads_vectors_and_its_empty_caption_is_zeros():
+    m = _text_model()
+    cond = m.condition(["two red circles", "a picture of one blue square"])
+    assert cond.shape == (2, 5, 6) and torch.equal(m.null_condition(cond), torch.zeros_like(cond))
+    x, t = torch.randn(2, 3, 16, 16), torch.tensor([0.3, 0.3])
+    v = m(x, t, cond)
+    assert v.shape == x.shape
+    assert not torch.allclose(m(x, t, m.condition(["four green triangles"] * 2)), v)
+    out = sample(m, ["two red circles"], steps=2, guidance=3.0)     # guidance uses the zeros
+    assert out.shape == (1, 3, 16, 16)
+    with pytest.raises(ValueError, match="text encoder"):
+        FlowModel(tiny_fc(text="stub", text_len=5, text_dim=6)).condition(["x"])
+
+
+def test_the_text_encoder_pads_with_zeros_truncates_and_caches(monkeypatch):
+    import aksharallm.infer.cli as cli
+    import aksharallm.tokenizer.tokenizer as tk
+    from aksharallm.pictures.text import TextEncoder
+
+    class Fake(nn.Module):
+        cfg = ModelConfig(vocab_size=50, d_model=4, n_heads=1)
+
+        def forward(self, idx, return_hidden=False):
+            self.calls = getattr(self, "calls", 0) + 1
+            return idx[..., None].float().expand(*idx.shape, 4), None
+
+    class Tok:
+        def __init__(self, path):
+            pass
+
+        def encode(self, s):
+            return [len(w) for w in s.split()]
+    monkeypatch.setattr(cli, "load_model", lambda path, device: (Fake(), {}))
+    monkeypatch.setattr(tk, "Tokenizer", Tok)
+    e = TextEncoder("x.pt", "tok.json", max_len=3)
+    v = e.encode(["ab cde", "a bb ccc dddd"])
+    assert v.shape == (2, 3, 4)
+    assert v[0, :2, 0].tolist() == [2.0, 3.0] and v[0, 2].abs().sum() == 0      # zero padding
+    assert v[1, :, 0].tolist() == [1.0, 2.0, 3.0]                                # truncated
+    calls = e.model.calls
+    e.encode(["ab cde"])
+    assert e.model.calls == calls                                                # cached
+
+
+def test_sentences_are_judged_against_their_facts_not_parsed():
+    from aksharallm.pictures.phrases import phrase
+    from aksharallm.pictures.score import judge_drawings
+    from aksharallm.vision.image import render
+    facts = [{"count": 2, "colour": "red", "shape": "circle"},
+             {"count": 3, "colour": "purple", "shape": "triangle"}]
+    caps = [phrase(f, "of_them") for f in facts]          # "red circles, two of them"
+    pics = np.stack([render(f, seed=i) for i, f in enumerate(facts)])
+    toks = np.arange(2)[:, None].astype(np.int64)
+    r = judge_drawings(caps, 1, pics, toks, set(), facts)
+    assert r["seen"]["all"] == 1.0 and r["held_out"]["all"] == 1.0
+    assert r["held_out"]["n"] == 1 and r["per_caption"][1]["held_out"]
+
+
+def test_two_phrasings_pair_by_fact_but_not_by_accident():
+    from aksharallm.pictures.score import compare
+    f1, f2 = {"count": 1, "colour": "red", "shape": "circle"}, {"count": 2, "colour": "red", "shape": "circle"}
+
+    def rep(caps, facts, correct):
+        return {"captions": caps, "k": 2, "per_caption": [{"fact": f} for f in facts],
+                "seen": {"n": 4, "all": 0.5, "correct": correct}, "held_out": {"n": 0}}
+    a = rep(["one red circle", "two red circles"], [f1, f2], "1100")
+    b = rep(["show me one red circle", "show me two red circles"], [f1, f2], "0111")
+    with pytest.raises(ValueError, match="by-fact"):
+        compare(a, b)
+    r = compare(a, b, by_fact=True)["seen"]
+    assert (r["b_only"], r["a_only"]) == (2, 1)
+    with pytest.raises(ValueError, match="same facts"):
+        compare(a, rep(b["captions"], [f2, f1], "0111"), by_fact=True)

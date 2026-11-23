@@ -74,7 +74,8 @@ class Pictures:
                 continue
             pg = blob.get(stage) or {}
             out.append({"rel": str(path.relative_to(self.root)), "step": blob.get("step"),
-                        "kind": "G1" if stage == "picgen" else "G2",
+                        "kind": ("G1" if stage == "picgen" else "G4" if pg.get("text")
+                                 else "G3" if pg.get("space") == "latent" else "G2"),
                         "books": pg.get("books"), "tokenizer": pg.get("tokenizer"),
                         "best_val": blob.get("best_val"), "mtime": path.stat().st_mtime})
         return sorted(out, key=lambda r: r["mtime"], reverse=True)
@@ -193,10 +194,17 @@ class Pictures:
         if rel not in {g["rel"] for g in self.generators()}:
             raise PicturesError(f"not a drawing model (G1 or G2): {rel!r}")
         caption = " ".join(str(spec.get("caption") or "").lower().split())
-        try:
-            word_ids(caption)
-        except ValueError as e:
-            raise PicturesError(str(e)) from e
+        kind = next((g["kind"] for g in self.generators() if g["rel"] == rel), "G1")
+        if kind == "G4":
+            # A sentence, read by the model's text encoder. Judged only if a count, a colour
+            # and a shape can be found in it (fact_from_text); otherwise shown, not scored.
+            if not caption or len(caption) > 120:
+                raise PicturesError("write a sentence of up to 120 characters")
+        else:
+            try:
+                word_ids(caption)
+            except ValueError as e:
+                raise PicturesError(str(e)) from e
         n = int(spec.get("n") or 8)
         guidance = float(spec.get("guidance") if spec.get("guidance") is not None else 3.0)
         seed = int(spec.get("seed") or 0)
@@ -208,18 +216,25 @@ class Pictures:
             self._g1 = cache = (rel, load_drawer(self.root / rel, self.root, "cpu"))
         d = cache[1]
         pics = d.draw([caption] * n, guidance=guidance, seed=seed)
-        want = fact_of(caption)
+        from ..pictures.phrases import fact_from_text
+        want = fact_from_text(caption) if kind == "G4" else fact_of(caption)
         out = []
         for img in pics:
             buf = io.BytesIO()
             Image.fromarray(img).save(buf, format="PNG")
+            if want is None:
+                from ..pictures.reader import read
+                out.append({"png": "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode(),
+                            "ok": None, "read": read(img)})
+                continue
             v = judge(img, want)
             out.append({"png": "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode(),
                         "ok": bool(v["all"]), "read": v["read"]})
         g = f"{guidance:g}"
         return finite({"caption": caption, "step": d.step, "kind": d.kind, "pictures": out,
-                       "agree": sum(p["ok"] for p in out),
-                       "held_out": (want["colour"], want["shape"]) == ("purple", "triangle"),
+                       "agree": (sum(bool(p["ok"]) for p in out) if want else None),
+                       "judged_as": want,
+                       "held_out": bool(want) and (want["colour"], want["shape"]) == ("purple", "triangle"),
                        "command": f'python -m aksharallm.pictures draw {rel} "{caption}" '
                                   f"--n {n} --guidance {g} --seed {seed}"})
 
