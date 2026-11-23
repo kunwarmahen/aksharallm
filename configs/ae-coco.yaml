@@ -1,0 +1,44 @@
+# G4c (docs/26 § "G4c: real photos"): ae-shapes's recipe on COCO 2017 photos at 64x64. The same
+# encoder and decoder, a Gaussian latent, a light KL term; 16 channels instead of 8, because a
+# photo carries more than three shapes on a flat background (8x8x16 = 1,024 numbers against
+# 12,288 pixels). Plain L1+L2, no perceptual or adversarial loss: expect blur, and measure it.
+#
+#   python -m aksharallm.pictures coco            # data/vision/coco64 (+ coco64-val), minutes
+#   scripts/audio.sh ae-coco
+#   python -m aksharallm.pictures latents ae-coco --corpus data/vision/coco64 \
+#       --out data/pictures/latents-ae-coco
+
+name: ae-coco
+
+autoencoder:
+  image_size: 64
+  channels: [64, 128, 256]
+  latent_dim: 16
+  kl_weight: 1.0e-3
+
+data:
+  corpus: data/vision/coco64
+  holdout: data/vision/none          # photos have no held-out combination
+
+optim:
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 500
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.99
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/ae-coco
+  batch_size: 64
+  max_steps: 40000
+  eval_every: 2000
+  eval_batches: 8
+  sample_every: 5000
+  sample_images: 256
+  ckpt_every: 2000
+  log_every: 100
+  seed: 1337
+  resume: auto

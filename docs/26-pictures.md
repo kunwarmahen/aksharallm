@@ -178,9 +178,16 @@ python -m aksharallm.pictures draw imggen-shapes "two red circles" --guidance 3
 python -m aksharallm.pictures gen-report imggen-shapes --guidance 3   # all 60 captions, judged
 python -m aksharallm.pictures gen-compare A.json B.json               # paired per drawing
 
+# G4c, real photos (COCO 2017: the three archives into data/coco/raw/ first)
+python -m aksharallm.pictures coco                              # data/vision/coco64 (+ coco64-val), ~2 min
+scripts/audio.sh ae-coco && scripts/audio.sh clip-coco && scripts/audio.sh flow-coco
+python -m aksharallm.pictures coco-report flow-coco --clip clip-coco --guidance 3
+python -m aksharallm.pictures coco-compare A.json B.json        # same captions, paired
+
 # G4b, our own contrastive model, and captions that say size and place
 python -m aksharallm.pictures scenes                            # data/vision/scenes64k (+ -holdout)
 scripts/audio.sh clip-shapes                                    # small: CPU is fine (CUDA_VISIBLE_DEVICES=)
+python -m aksharallm.pictures clip-calibrate clip-shapes        # the none-fits floor (1% of clean originals)
 python -m aksharallm.pictures clip-report clip-shapes           # beside the reader, originals
 python -m aksharallm.pictures clip-report clip-shapes --through ae-shapes   # damaged pictures
 python -m aksharallm.pictures gen-report imggen-shapes-gpu --clip clip-shapes
@@ -739,9 +746,95 @@ is half one thing and half another; they are simply strict in different places. 
 judge is trustworthy on clean pictures and on the mistakes generators actually make (wrong
 count, wrong colour), and not a substitute for the reader on borderline shapes.
 
-The scenes drawing model (`ae-scenes`, then `flow-text-scenes`) runs in the night queue
-(`logs/queue/night-1124.sh`): every one of the 270 facts drawn 8 times, judged by both, in the
+### None fits: a floor, and what it costs (2026-11-23)
+
+A closed-set judge picks the best caption it is offered, so five shapes come out "four". The fix
+is a **cosine floor** (`pictures clip-calibrate clip-shapes`, written to
+`checkpoints/clip-shapes/none_fits.json` with the step it belongs to): the 1st percentile of how
+well clean val originals (the last 2,048 of each corpus, never the ones a report reads) match
+their own canonical caption: 0.920 for shapes, 0.948 for scenes. A picture whose best caption
+fits worse than that is judged **none fits**. It applies to canonical captions only; another
+phrasing sits on its own scale.
+
+The numbers that decided it (cosine with the asked caption):
+
+| pictures | 1st pct | median |
+|---|---|---|
+| clean seen originals | 0.921 | 0.961 |
+| G1 drawings the reader calls right | 0.80–0.92 | 0.96 |
+| five or six shapes drawn for "four" (28) | 0.77 | **0.90** |
+| clean originals of the **held-out** combinations | 0.88–0.90 | 0.96–0.97 |
+
+So the floor catches most of the five-for-four pictures, and it also refuses the held-out
+originals that fit a little less well because no training picture looked like them. The margin
+(best caption's lead over the runner-up) was tried as well and separates them worse.
+
+| | closed set | with the floor |
+|---|---|---|
+| G1 `imggen-shapes-gpu`, agree / kappa / model-only / reader-only | 95.4% / 0.90 / 19 / 3 | **96.7% / 0.93 / 6 / 10** |
+| G1 `imggen-shapes64k-pos-long` | 97.7% / 0.88 / 11 / 0 | 97.5% / 0.88 / 2 / 10 |
+| clean held-out originals, shapes / scenes | 100% / 100% | **92.2% / 77.3%** |
+| clean seen originals | 100% | 99.0–99.2% (1% by construction) |
+
+The floor turns a lenient judge into a strict one: its disagreements with the reader move from
+"accepts what is wrong" to "refuses what is right", and on the pictures that matter most, the
+never-seen combinations, it refuses up to a quarter. **A cutoff calibrated on what training
+showed also refuses what is new**, which is exactly what a held-out test exists to accept. Both
+verdicts are reported (`own_clip.closed` beside the floored one, and a "closed set" column in
+`clip-report`), so a reader can see which kind of error a number carries. Offering the captions
+that are missing (an open vocabulary, real for G4c's photos, where every val caption is a
+candidate) is the better fix than any floor.
+
+The scenes drawing model (`ae-scenes`, then `flow-text-scenes`) runs on the card
+(`logs/queue/day-1123.sh`, by day from 11-23 08:36, the user's go-ahead): every one of the 270 facts drawn 8 times, judged by both, in the
 canonical wording, both held-out phrasings and guidance 3.
+
+## G4c: real photos (built 2026-11-23)
+
+The first corpus nobody drew for us. COCO 2017: 118,287 training and 5,000 validation photos of
+everyday scenes, each with five sentences written by people. `pictures coco` reads the three
+downloaded archives member by member (never extracted), cuts each photo to its centre square
+and resizes it to 64×64, and writes the same `images.bin` + manifest as every corpus here
+(`kind: coco`, one fact per photo: its id and its five captions). 118k photos in two minutes;
+1.4 GB.
+
+```mermaid
+flowchart LR
+    C["a COCO caption"] --> T["the 300M small-code-py,<br/>frozen (it read web English)"]
+    T --> F["flow model, 512 x 12,<br/>on an 8x8x16 latent"]
+    F --> D["ae-coco's decoder"] --> P["64x64 photo"]
+    P --> J["clip-coco: its own caption<br/>in the top 5 of 1,000?"]
+    R["the real photo of<br/>that caption"] --> J
+```
+
+Three runs, each one of the earlier recipes pointed at photos:
+
+| run | what | from |
+|---|---|---|
+| `ae-coco` | the continuous autoencoder, 8×8×**16** latent (a photo carries more than shapes on a flat ground), plain L1+L2: expect blur | G3b's `ae-shapes` |
+| `clip-coco` | the contrastive judge: a 6-layer ViT and the frozen 300M; a photo's five captions are all its matches | G4b's `clip-shapes` |
+| `flow-coco` | text to photo: the flow model, larger, on `ae-coco`'s latent, reading a random one of the photo's five captions through the frozen 300M | G4a's `flow-text-shapes` |
+
+**The caption is read by the 300M, not `tiny`.** `tiny` only ever read children's stories;
+"a giraffe standing next to a zebra" needs a model that has read the web. The text model runs on
+the card (`text_device: auto`), and with 590,000 captions its vectors cannot all be cached
+(`text_cache: 30000`); the rest are encoded every step, all the uncached captions of a batch in
+one forward, padded **at the end**: a causal model's vector at a real token never sees what
+follows, so a padded row equals the row alone (`tests/test_coco.py`, and
+[lesson 35](lessons/35-padding.md) pads at the front).
+
+**The report** (`pictures coco-report flow-coco --clip clip-coco`, `pictures/photos.py`): one
+drawing for each of the first 1,000 val captions, and every number twice, for the drawings and
+for the **real photos** of the same captions, with chance beside them: how well the drawing
+matches its caption (and another photo's caption, the floor), whether its own caption is in the
+top 1 / 5 / 10 of the 1,000, and the Fréchet distance between the drawings' and the real photos'
+image vectors in our model's features, beside the same distance between two halves of the real
+photos. It is FID's formula in our own features, so it is not FID. Two reports on the same
+captions pair per caption (`pictures coco-compare`).
+
+**Status**: built and smoke-tested end to end on the CPU (an untrained model scores chance, as it
+must). The three runs and the reports are queued on the card (`logs/queue/g4c-1123.sh`, after the
+scenes runs, by day until 23:50 then nightly).
 
 ## Traps to keep
 
@@ -785,7 +878,8 @@ canonical wording, both held-out phrasings and guidance 3.
 | 16 | [`pictures/drawer.py`](../aksharallm/pictures/drawer.py) → `load_drawer` | one door for G1, G2 and G3: draw, score, copies through the tokenizer; `corpus_kind` picks 60 shapes or 270 scene facts |
 | 17 | [`pictures/scenes.py`](../aksharallm/pictures/scenes.py) → `render`, `HELD_OUT` | G4b's second corpus: size and place in one column, two held-out combinations; the reader's `size_of` and `where_of` read them back |
 | 18 | [`pictures/clip.py`](../aksharallm/pictures/clip.py) → `clip_loss`, `ClipModel`, `rank`, `agreement` · [`train_clip.py`](../aksharallm/pictures/train_clip.py) | G4b: every same-fact caption a match, padding masked out of the text head, a picture's closest caption among every caption its corpus can say, Cohen's kappa against the reader |
-| 19 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
+| 19 | [`pictures/coco.py`](../aksharallm/pictures/coco.py) → `pack`, `square` · [`pictures/photos.py`](../aksharallm/pictures/photos.py) → `score`, `frechet` | G4c: COCO packed from the archives in order with its captions; the photo report, every number beside the real photos' and chance, the Fréchet distance by two `eigh` calls |
+| 20 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
 
 Tests: `tests/test_pictures.py`. They cover the reader on every count × colour × shape, the
 reader seeing blur and recolouring, the codebook prefix ignoring later codebooks, batch
@@ -829,6 +923,19 @@ one loader opens either coder and G3's latents come from the autoencoder's mean 
 snap to); and a G3b run scores copies with the VQ tokenizer, not the autoencoder. Three mutants
 were checked red: sampling in eval mode, ignoring the autoencoder's latent, and scoring with the
 autoencoder.
+
+G4b adds `tests/test_clip.py` (13): the reader on every scene and on a wrong size and place,
+a corpus that never draws its held-out combinations, scene captions round-tripping while shapes
+phrasings stay G4a's, a scene report broken out by attribute and held-out combination, CLIP's
+loss exactly at one match per row, two pictures of one fact never pushed apart, padding never
+changing an embedding, rank, agreement and kappa, the none-fits floor (below it nothing fits,
+the closed verdict kept; a quantile of clean originals; one checkpoint's floor never another's),
+and the trainer's save and resume. Sixteen mutants were checked red. G4c adds
+`tests/test_coco.py` (7): photos packed in order with their own captions, a photo's five
+captions as one match, a padded batch encoding each caption exactly as alone (and the cache
+bounded), the Fréchet distance against its closed form, the photo report's ceiling and floor,
+the flow trainer reading one of a photo's own captions, and the photo autoencoder's PSNR-only
+report. Eight mutants were checked red.
 
 G4a adds five: every phrasing says its facts and the held-out phrasings are never drawn for
 training; a text model reads vectors and its empty caption is zeros; the text encoder pads with

@@ -169,6 +169,7 @@
         <label class="field">Contrastive model <select id="pc-clip-ckpt"></select></label>
         <label class="field">Pictures <select id="pc-clip-through"></select></label>
         <button id="pc-clip-run" type="button">Make a contrastive report</button>
+        <button id="pc-clip-cal" class="ghost" type="button">Measure the none-fits floor</button>
         <button id="pc-scenes" class="ghost" type="button">Render the scenes corpus</button>
       </div>
       <p class="panel-note">
@@ -176,6 +177,47 @@
         come back damaged and the reader is no longer 100%: that is where agreement means
         something. Train the model with the dashboard's <strong>Start</strong>
         (<code>clip-shapes</code>, small enough for the CPU).
+      </p>
+      <p class="panel-note">
+        <strong>None fits.</strong> A judge that only picks the closest caption calls five shapes
+        “four” when no caption says five. The floor is how well clean originals match their own
+        caption (the worst 1%); a picture whose best caption fits worse is judged “none fits”.
+        The closed-set column is the same model without it. The cost is in the held-out rows:
+        pictures of combinations training never showed fit less well, and the floor refuses some
+        of them too.
+      </p>
+    </div>
+
+    <div class="panel">
+      <h3>From a sentence to a photo (G4c)</h3>
+      <p class="panel-note">
+        COCO 2017: 118,287 everyday photos, each cut to a 64×64 square, each with five sentences
+        written by people. A model draws one picture for each validation caption. Nothing can
+        read a photo back by rule, so every number comes from our contrastive model trained on
+        COCO, and each is shown beside the same number for the <strong>real photo</strong> of
+        that caption (as good as it gets) and beside <strong>chance</strong>.
+        <strong>Top-5</strong>: of all the captions, is the drawing's own one of the five that
+        fit it best? <strong>Distance</strong> compares the drawings with the real photos as a
+        whole, in our model's features (the formula FID uses, not FID itself); two halves of
+        the real photos give the distance that means “indistinguishable”.
+      </p>
+      <div class="row">
+        <label class="field">Report <select id="pc-coco-report"></select></label>
+      </div>
+      <div class="scroll-x"><table id="pc-coco-table" class="grid"></table></div>
+      <p id="pc-coco-note" class="panel-note"></p>
+      <div id="pc-coco-gallery" class="pc-gen-gallery"></div>
+      <div class="row">
+        <label class="field">Photo model <select id="pc-coco-gen"></select></label>
+        <label class="field">Judged by <select id="pc-coco-clip"></select></label>
+        <label class="field">Captions <input id="pc-coco-n" type="number" min="20" max="5000" value="200"></label>
+        <label class="field">Guidance <input id="pc-coco-g" type="number" min="0" max="10" step="0.5" value="3"></label>
+        <button id="pc-coco-run" type="button">Make a photo report</button>
+      </div>
+      <p class="panel-note">
+        Train with the dashboard's <strong>Start</strong>: <code>ae-coco</code> (the photo
+        autoencoder), <code>clip-coco</code> (the judge), then <code>flow-coco</code>. From this
+        page a report runs on the CPU (minutes for 200 captions). <span id="pc-coco-data"></span>
       </p>
     </div>
 

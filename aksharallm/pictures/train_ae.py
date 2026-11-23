@@ -105,9 +105,11 @@ def judge_set(model, ds, n: int, device) -> dict:
     orig = np.asarray(ds.images[idx])
     recon = from_tensor(model(torch.from_numpy(to_tensor(orig)).to(device))[0]
                         .float().clamp(-1, 1).cpu().numpy())
+    out = {"n": n, "psnr": float(np.mean([psnr(a, b) for a, b in zip(orig, recon, strict=True)]))}
+    if getattr(ds.manifest, "kind", "shapes") == "coco":
+        return out | {"all": None}       # a photo has no facts to read back: PSNR only
     m = _marks(recon, [ds.manifest.facts[j] for j in idx])
-    return {"n": n, "psnr": float(np.mean([psnr(a, b) for a, b in zip(orig, recon, strict=True)])),
-            **{k: m[k].count("1") / n for k in ("count", "colour", "shape", "all")}}
+    return out | {k: m[k].count("1") / n for k in ("count", "colour", "shape", "all")}
 
 
 def main(argv=None) -> int:
@@ -196,7 +198,8 @@ def main(argv=None) -> int:
 
     def sample(step: int) -> dict:
         s = {"val": judge_set(model, val_ds, cfg.train.sample_images, device)}
-        line = f"val {s['val']['psnr']:.1f}dB all {s['val']['all'] * 100:.0f}%"
+        line = f"val {s['val']['psnr']:.1f}dB" + ("" if s["val"]["all"] is None
+                                                  else f" all {s['val']['all'] * 100:.0f}%")
         if holdout:
             s["holdout"] = judge_set(model, holdout, 64, device)
             line += f"  |  held-out combination all {s['holdout']['all'] * 100:.0f}%"

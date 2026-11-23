@@ -215,6 +215,14 @@ picture_corpus() {
         elif [ "$c" = "data/vision/scenes64k" ]; then
             echo "    $c is missing. Rendering 64,000 scenes (size and place, ~20 s)..."
             $PY -m aksharallm.pictures scenes --out "$c"
+        elif [ "$c" = "data/vision/coco64" ]; then
+            if [ -s data/coco/raw/train2017.zip ] && [ -s data/coco/raw/annotations_trainval2017.zip ]; then
+                echo "    $c is missing. Packing COCO 2017 at 64x64 (~3 min)..."
+                $PY -m aksharallm.pictures coco --out "$c" || exit 1
+            else
+                echo "    ERROR: $c is missing and so is COCO in data/coco/raw/ (docs/26 § G4c: download it first)" >&2
+                exit 1
+            fi
         else
             echo "    ERROR: $c/images.bin does not exist." >&2
             exit 1
@@ -222,13 +230,31 @@ picture_corpus() {
     fi
     sz=$(stat -c%s "$c/images.bin")
     echo "    $c/images.bin: $((sz / 1000000)) MB = $((sz / 12288)) pictures at 64x64"
+    if grep -q '"kind": "coco"' "$c/manifest.json"; then
+        # photos: no reader. Check the captions instead: every photo must have some.
+        $PY - "$c" <<'PYEOF' || exit 1
+import json, sys
+m = json.load(open(sys.argv[1] + "/manifest.json"))
+bad = sum(1 for f in m["facts"] if not f.get("captions"))
+print(f"    {len(m['facts']):,} photos, {sum(len(f['captions']) for f in m['facts']):,} captions, {bad} without one")
+sys.exit(1 if bad else 0)
+PYEOF
+        return 0
+    fi
     $PY -m aksharallm.pictures read --corpus "$c" --n 500 \
         || { echo "    the reader is not exact on the corpus -- every score would be wrong" >&2; exit 1; }
 }
 if [ "$KIND" = clip ]; then
     for c in $CORPORA; do picture_corpus "$c"; done
-    [ -s data/tinystories/tokenizer.json ] && [ -s checkpoints/tiny/ckpt_best.pt ] \
-        || { echo "    ERROR: the frozen text model (checkpoints/tiny) or its tokenizer is missing" >&2; exit 1; }
+    read -r TXT TXTTOK < <($PY - "$CFG" <<'EOF'
+import sys, yaml
+c = (yaml.safe_load(open(sys.argv[1])) or {}).get("clip") or {}
+print(c.get("text", "checkpoints/tiny/ckpt_best.pt"), c.get("text_tokenizer", "data/tinystories/tokenizer.json"))
+EOF
+)
+    [ -s "$TXT" ] && [ -s "$TXTTOK" ] \
+        || { echo "    ERROR: the frozen text model ($TXT) or its tokenizer ($TXTTOK) is missing" >&2; exit 1; }
+    echo "    frozen text model: $TXT"
     CORPORA=""
 fi
 if [ "$KIND" = picture ] || [ "$KIND" = flow ]; then

@@ -101,7 +101,14 @@ def batch_of(ds, n: int, drop: float, rng, model=None) -> tuple[torch.Tensor, to
     its frozen text model; G1–G3's read the three word ids."""
     imgs, caps = ds.batch(n)
     if model is not None and getattr(model, "text_proj", None) is not None:
-        cond = model.condition(phrased(caps, rng))
+        if getattr(ds.manifest, "kind", "shapes") == "coco":
+            # G4c: a photo is read with one of its own five captions, at random
+            from .clip import text_of
+            said = [text_of(ds.manifest.facts[int(i)], i=int(rng.integers(5)))
+                    for i in ds.last_picks]
+        else:
+            said = phrased(caps, rng)
+        cond = model.condition(said)
         if drop > 0:
             cond[torch.from_numpy(rng.random(n) < drop)] = 0.0
         return torch.from_numpy(imgs), cond
@@ -132,7 +139,8 @@ def evaluate(model, ds, device, batch_size, batches, amp) -> float:
         x, caps = rows(ds, idx)
         x1 = torch.from_numpy(x).to(device)
         if getattr(model, "text_proj", None) is not None:
-            words = model.condition(phrased(caps, offset=b), device)
+            coco = getattr(ds.manifest, "kind", "shapes") == "coco"
+            words = model.condition(caps if coco else phrased(caps, offset=b), device)
         else:
             words = torch.tensor([word_ids(c) for c in caps], device=device)
         with amp():
@@ -179,10 +187,11 @@ def main(argv=None) -> int:
     drop_rng = np.random.default_rng(cfg.train.seed + 2)
     encoder = None
     if fc.text:
-        # G4a: the frozen text model (on the CPU: it reads a few hundred distinct sentences
-        # once each, and its vectors are cached).
+        # G4a: the frozen text model, on the CPU (`text_device: cpu`: it reads a few hundred
+        # distinct sentences once each, and its vectors are cached), or on the card for G4c's
+        # 300M reading COCO (`text_device: auto`).
         from .flow import TextEncoder_for
-        encoder = TextEncoder_for(fc, "cpu")
+        encoder = TextEncoder_for(fc, device)
         fc.text_dim = encoder.dim
     model = FlowModel(fc).to(device)
     if encoder is not None:
@@ -270,8 +279,11 @@ def main(argv=None) -> int:
                          else tokenizer)
         # every fact the corpus can say: 60 for shapes, 270 for scenes (G4b), canonical wording
         from .phrases import all_facts, phrase
-        man = json.loads(Path(cfg.data.corpus, "manifest.json").read_text())
-        facts = all_facts(man.get("kind", "shapes"))
+        from ..vision.image import manifest_kind
+        kind = manifest_kind(cfg.data.corpus)
+        if kind == "coco":       # photos: no reader; `pictures coco-report` scores them
+            return None
+        facts = all_facts(kind)
         caps = [phrase(f, "canonical") for f in facts]
         k = cfg.train.sample_k
         pics = draw(model, [c for c in caps for _ in range(k)],
@@ -366,6 +378,10 @@ def main(argv=None) -> int:
                 final_val_loss=val, best_val=best, score=final)
     stop_file.unlink(missing_ok=True)
     print(f"\nstopped: {reason}. last step {step}, best val {best:.4f}")
+    from ..vision.image import manifest_kind
+    if manifest_kind(cfg.data.corpus) == "coco":
+        print(f"    measure: python -m aksharallm.pictures coco-report {cfg.name} --clip clip-coco")
+        return 0
     print(f"    measure: python -m aksharallm.pictures gen-report {cfg.name} --guidance 3")
     print(f"    draw:    python -m aksharallm.pictures draw {cfg.name} \"two red circles\"")
     return 0

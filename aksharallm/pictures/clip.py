@@ -26,6 +26,13 @@ equally (`clip_loss`, `same`), which is the version of the loss that is true of 
 `tests/test_clip.py` checks that a model which already matches every picture to its fact gets
 no gradient from it, and that the diagonal-only loss would still push it.
 
+**It can say "none of these fit".** A closed-set judge picks the best of the captions it is
+offered, so a picture of five shapes, with no caption saying "five", is called "four". A cosine
+floor fixes that (`calibrate`): the 1st percentile of how well clean originals match their own
+caption, so by construction about 1% of correct pictures are refused, and a picture whose best
+caption fits worse than that is judged "none fits". The floor is written beside the checkpoint
+(`none_fits.json`, with the step it was measured at) and ignored if the step does not match.
+
 **The score it gives is named for what it is.** `own_clip` in a report is the share of drawn
 pictures whose closest caption, among every caption the corpus can say, is the one that was
 asked for, in this model's feature space. It is not CLIPScore and not FID (gotcha 12): those
@@ -67,11 +74,28 @@ class ClipConfig:
     text_tokenizer: str = "data/tinystories/tokenizer.json"
     text_len: int = 20
     text_dim: int = 0             # filled from the text model
+    #: where the frozen text model runs: "cpu" (tiny), or "auto" (the card if there is one:
+    #: the 300M reading COCO's captions)
+    text_device: str = "cpu"
+    #: captions whose vectors are kept (0 = all: fine for shapes' few thousand, not for COCO)
+    text_cache: int = 0
 
 
 def fact_key(f: dict) -> tuple:
-    """What two captions must share to describe the same picture."""
+    """What two captions must share to describe the same picture: the facts of a drawn
+    picture, or the photo itself for COCO (G4c), whose five captions all describe it."""
+    if "id" in f:
+        return ("photo", f["id"])
     return tuple(f.get(k) for k in ("count", "size", "colour", "shape", "where"))
+
+
+def text_of(f: dict, phrasing: str = "canonical", i: int = 0) -> str:
+    """The caption to read for a fact: a phrasing of a drawn picture's facts, or the `i`-th
+    of a COCO photo's own captions (its people-written sentences; phrasings do not apply)."""
+    if "captions" in f:
+        return f["captions"][i % len(f["captions"])]
+    from .phrases import phrase
+    return phrase(f, phrasing)
 
 
 def same_fact(facts: list[dict]) -> torch.Tensor:
@@ -167,12 +191,23 @@ class ClipModel(nn.Module):
         return sum(p.numel() for p in self.parameters())
 
 
-def text_encoder_for(cc: ClipConfig, device: str = "cpu", root: str | Path | None = None):
+def resolve_device(name: str) -> str:
+    return ("cuda" if torch.cuda.is_available() else "cpu") if name == "auto" else name
+
+
+def text_encoder_for(cc, device: str | None = None, root: str | Path | None = None):
+    """The frozen text model a G4b (or G4a/G4c flow) config names. `device` overrides the
+    config's `text_device`; paths are relative to `root` if given."""
     from .text import TextEncoder
 
     def at(p):
         return Path(root) / p if root is not None and not Path(p).is_absolute() else Path(p)
-    return TextEncoder(at(cc.text), at(cc.text_tokenizer), cc.text_len, device)
+    dev = resolve_device(device or getattr(cc, "text_device", "cpu"))
+    return TextEncoder(at(cc.text), at(cc.text_tokenizer), cc.text_len, dev,
+                       cache_limit=getattr(cc, "text_cache", 0) or None)
+
+
+NONE_FITS = "none_fits.json"
 
 
 def load_clip(path: str | Path, device: str = "cpu", root: str | Path | None = None):
@@ -183,8 +218,34 @@ def load_clip(path: str | Path, device: str = "cpu", root: str | Path | None = N
     model = ClipModel(cc)
     model.load_state_dict(blob["model"])
     model.to(device).eval()
-    model.attach_text(text_encoder_for(cc, "cpu", root))
+    model.attach_text(text_encoder_for(cc, None if device == "cuda" else "cpu", root))
+    model.none_fits = read_floor(path, blob.get("step"))
     return model, blob
+
+
+def read_floor(path: str | Path, step) -> dict | None:
+    """The none-fits floors measured for THIS checkpoint (same file name and step), or None.
+    A floor measured on another step's embeddings is a different scale and is ignored."""
+    f = Path(path).parent / NONE_FITS
+    if not f.is_file():
+        return None
+    import json
+    d = json.loads(f.read_text())
+    mine = d.get(Path(path).name) or {}
+    return mine.get("floors") if mine.get("step") == step else None
+
+
+@torch.no_grad()
+def calibrate(model: ClipModel, sets: list[tuple[str, np.ndarray, list[dict]]], *,
+              q: float = 0.01, device: str = "cpu") -> dict:
+    """Per corpus kind: the `q` quantile of the cosine between clean original pictures and
+    their own canonical caption. `sets` = (kind, pictures, facts)."""
+    out = {}
+    for kind, pics, facts in sets:
+        from .phrases import all_facts
+        r = rank(model, pics, facts, all_facts(kind), device=device)
+        out[kind] = float(np.quantile(np.asarray(r["cos"]), q))
+    return out
 
 
 def public_config(cc: ClipConfig) -> dict:
@@ -208,23 +269,33 @@ def picture_vectors(model: ClipModel, pics: np.ndarray, device="cpu", batch=256)
 
 @torch.no_grad()
 def rank(model: ClipModel, pics: np.ndarray, asked: list[dict], candidates: list[dict], *,
-         phrasing: str = "canonical", device: str = "cpu") -> dict:
+         phrasing: str = "canonical", device: str = "cpu", floor: float | None = None) -> dict:
     """For each picture: is the caption it was drawn for the closest of all `candidates`
     (every fact the corpus can say, in `phrasing`)? Returns per-picture `top1` (bool),
     `best` (index of the closest candidate), `cos` (cosine with the asked caption) and
-    `margin` (that cosine minus the best other one)."""
-    from .phrases import phrase
+    `margin` (that cosine minus the best other one). With a `floor`, also `fits` (the best
+    caption's cosine reaches it) and `top1` requires it: below the floor the answer is "none
+    of these fit", whichever caption happened to be closest."""
     keys = [fact_key(f) for f in candidates]
-    want = [keys.index(fact_key(f)) for f in asked]
-    txt = model.embed_texts([phrase(f, phrasing) for f in candidates], device).float().cpu()
+    where = {k: i for i, k in enumerate(keys)}
+    want = [where[fact_key(f)] for f in asked]
+    txt = torch.cat([model.embed_texts([text_of(f, phrasing) for f in candidates[i:i + 512]],
+                                       device).float().cpu()
+                     for i in range(0, len(candidates), 512)])
     sims = picture_vectors(model, pics, device) @ txt.t()                # (N, C)
     best = sims.argmax(1)
     w = torch.tensor(want)
     cos = sims[torch.arange(len(w)), w]
     other = sims.clone()
     other[torch.arange(len(w)), w] = -2.0
-    return {"top1": (best == w).tolist(), "best": best.tolist(), "cos": cos.tolist(),
-            "margin": (cos - other.max(1).values).tolist()}
+    out = {"top1": (best == w).tolist(), "best": best.tolist(), "cos": cos.tolist(),
+           "margin": (cos - other.max(1).values).tolist()}
+    if floor is not None:
+        fits = sims.max(1).values >= floor
+        out["closed_top1"] = out["top1"]
+        out["fits"] = fits.tolist()
+        out["top1"] = ((best == w) & fits).tolist()
+    return out
 
 
 def agreement(model_ok: list[bool], reader_ok: list[bool]) -> dict:
@@ -244,13 +315,16 @@ def agreement(model_ok: list[bool], reader_ok: list[bool]) -> dict:
 
 
 def score_drawings(model: ClipModel, result: dict, candidates: list[dict], *,
-                   device: str = "cpu", checkpoint: str = "") -> dict:
+                   device: str = "cpu", checkpoint: str = "", kind: str = "shapes") -> dict:
     """The `own_clip` block a report gains: adherence by our contrastive model, seen and
-    held-out separately, beside its agreement with the reader on the same pictures."""
+    held-out separately, beside its agreement with the reader on the same pictures. With a
+    calibrated floor (`none_fits.json`), "none fits" counts as wrong; the closed-set verdict
+    is kept beside it (`closed_top1`)."""
     k, pics = result["k"], result["_pictures"]
     facts = [p["fact"] for p in result["per_caption"]]
     asked = [f for f in facts for _ in range(k)]
-    r = rank(model, pics, asked, candidates, device=device)
+    floor = (getattr(model, "none_fits", None) or {}).get(kind)
+    r = rank(model, pics, asked, candidates, device=device, floor=floor)
     reader_ok = [v == "1" for p in result["per_caption"]
                  for v in _verdicts(p, k)]
     held = [p["held_out"] for p in result["per_caption"] for _ in range(k)]
@@ -265,9 +339,14 @@ def score_drawings(model: ClipModel, result: dict, candidates: list[dict], *,
                                        [reader_ok[i] for i in sel])}
     seen = [i for i in range(len(asked)) if not held[i]]
     out = [i for i in range(len(asked)) if held[i]]
-    return {"checkpoint": checkpoint, "candidates": len(candidates),
-            "seen": part(seen), "held_out": part(out),
-            "agreement": agreement(r["top1"], reader_ok)}
+    res = {"checkpoint": checkpoint, "candidates": len(candidates), "floor": floor,
+           "seen": part(seen), "held_out": part(out),
+           "agreement": agreement(r["top1"], reader_ok)}
+    if floor is not None:
+        res["closed"] = {"top1": float(np.mean(r["closed_top1"])),
+                         "agreement": agreement(r["closed_top1"], reader_ok),
+                         "none_fits": int(sum(not f for f in r["fits"]))}
+    return res
 
 
 def _verdicts(per_caption: dict, k: int) -> str:

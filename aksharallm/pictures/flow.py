@@ -92,6 +92,10 @@ class FlowConfig:
     text_tokenizer: str | None = None
     text_len: int = 16
     text_dim: int = 0
+    #: G4c: where the frozen text model runs ("cpu", or "auto" for the card) and how many
+    #: captions' vectors it keeps (0 = all)
+    text_device: str = "cpu"
+    text_cache: int = 0
 
     @property
     def grid(self) -> int:
@@ -275,13 +279,11 @@ def load_flow(path: str | Path, device: str = "cpu", root: str | Path | None = N
 
 
 def TextEncoder_for(fc: FlowConfig, device: str = "cpu", root: str | Path | None = None):
-    """The frozen text model a G4a config names (paths relative to `root` if given)."""
-    from .text import TextEncoder
-
-    def at(p):
-        p = Path(p)
-        return p if p.is_absolute() or root is None else Path(root) / p
-    return TextEncoder(at(fc.text), at(fc.text_tokenizer), fc.text_len, device)
+    """The frozen text model a G4a config names (paths relative to `root` if given). A
+    `text_device: auto` config runs it on the card whenever the drawing does."""
+    from .clip import text_encoder_for
+    dev = "cpu" if fc.text_device == "cpu" or device == "cpu" else None   # None: the config's
+    return text_encoder_for(fc, dev, root)
 
 
 def public_config(fc: FlowConfig) -> dict:

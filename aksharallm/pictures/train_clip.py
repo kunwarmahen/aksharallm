@@ -93,7 +93,8 @@ def draw_batch(sets: list[ImageCaptions], n: int, rng, *, phrasing: str | None =
                picks: list[np.ndarray] | None = None):
     """`n` pictures split evenly over `sets`, with their facts and a caption for each: a
     random TRAINING phrasing, or `phrasing` for all (val)."""
-    from .phrases import TRAIN, phrase
+    from .clip import text_of
+    from .phrases import TRAIN
     names = list(TRAIN)
     imgs, facts = [], []
     per = [n // len(sets) + (i < n % len(sets)) for i in range(len(sets))]
@@ -101,7 +102,10 @@ def draw_batch(sets: list[ImageCaptions], n: int, rng, *, phrasing: str | None =
         idx = picks[j] if picks is not None else rng.choice(ds.index, size=m)
         imgs.append(to_tensor(np.asarray(ds.images[np.sort(idx)])))
         facts += [ds.manifest.facts[int(i)] for i in np.sort(idx)]
-    caps = [phrase(f, phrasing or names[int(rng.integers(len(names)))]) for f in facts]
+    # a drawn picture: a random training phrasing of its facts; a COCO photo: one of its own
+    # five captions at random (val: the first)
+    caps = [text_of(f, phrasing or names[int(rng.integers(len(names)))],
+                    0 if phrasing else int(rng.integers(5))) for f in facts]
     return torch.from_numpy(np.concatenate(imgs)), facts, caps
 
 
@@ -131,6 +135,14 @@ def evaluate(model, sets, device, cfg, amp) -> dict:
         idx = ds.index[:n]
         pics = np.asarray(ds.images[idx])
         facts = [ds.manifest.facts[int(i)] for i in idx]
+        if kind == "coco":
+            # photos: is a photo's own (first) caption the closest of the n val photos'
+            # captions, and is it in the closest five?
+            r = rank(model, pics, facts, facts, device=device)
+            ranks = _ranks(model, pics, facts, device)
+            out["coco_top1"] = float(np.mean(r["top1"]))
+            out["coco_top5"] = float(np.mean(ranks < 5))
+            continue
         cands = all_facts(kind)
         out[f"{kind}_top1"] = float(np.mean(rank(model, pics, facts, cands, device=device)["top1"]))
         out[f"{kind}_show_me"] = float(np.mean(
@@ -144,6 +156,18 @@ def evaluate(model, sets, device, cfg, amp) -> dict:
         out[f"{kind_of(hd)}_held_out_top1"] = float(np.mean(r["top1"]))
     model.train(was)
     return out
+
+
+@torch.no_grad()
+def _ranks(model, pics, facts, device) -> np.ndarray:
+    """For each photo, where its own first caption ranks among all `facts`' first captions."""
+    from .clip import picture_vectors, text_of
+    img = picture_vectors(model, pics, device)
+    txt = torch.cat([model.embed_texts([text_of(f) for f in facts[i:i + 512]], device).float().cpu()
+                     for i in range(0, len(facts), 512)])
+    sims = img @ txt.t()
+    own = sims.diagonal()[:, None]
+    return (sims > own).sum(1).numpy()
 
 
 def main(argv=None) -> int:
@@ -166,7 +190,7 @@ def main(argv=None) -> int:
     train_sets = [ImageCaptions(c, split="train", seed=cfg.train.seed + i)
                   for i, c in enumerate(cfg.data.corpora)]
     val_sets = [ImageCaptions(c, split="val") for c in cfg.data.corpora]
-    encoder = text_encoder_for(cc, "cpu")
+    encoder = text_encoder_for(cc, None if device == "cuda" else "cpu")
     cc.text_dim = encoder.dim
     model = ClipModel(cc).to(device)
     model.attach_text(encoder)

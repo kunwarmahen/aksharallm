@@ -48,8 +48,17 @@ class Drawer:
     def books(self) -> int:
         return self.cfg.books
 
-    def draw(self, captions: list[str], **kw) -> np.ndarray:
-        return self.draw_with_tokens(captions, **kw)[0]
+    def draw(self, captions: list[str], *, guidance: float = 1.0, seed: int = 0,
+             temperature: float = 1.0, top_k: int | None = None,
+             steps: int | None = None) -> np.ndarray:
+        """Pictures only. A flow model's are not encoded back to codes, which also lets a
+        coder with no codes (G4c's photo autoencoder, no VQ scorer) draw."""
+        if self.kind == "G1":
+            return self.draw_with_tokens(captions, guidance=guidance, seed=seed,
+                                         temperature=temperature, top_k=top_k)[0]
+        from .flow import draw
+        return draw(self.model, captions, guidance=guidance, steps=steps, seed=seed,
+                    device=self.device, tokenizer=self.tokenizer, snap=self.snap)
 
     def draw_with_tokens(self, captions: list[str], *, guidance: float = 1.0, seed: int = 0,
                          temperature: float = 1.0, top_k: int | None = None,
@@ -83,12 +92,9 @@ class Drawer:
     def corpus_kind(self) -> str:
         """"shapes" or "scenes" (G4b): the kind of corpus this model trained on, read from the
         corpus's manifest, so a report asks it for the facts it can say."""
+        from ..vision.image import manifest_kind
         corpus = (self.blob.get("config") or {}).get("data", {}).get("corpus")
-        m = self.root / str(corpus) / "manifest.json" if corpus else None
-        if m is None or not m.is_file():
-            return "shapes"
-        import json
-        return json.loads(m.read_text()).get("kind", "shapes")
+        return manifest_kind(self.root / str(corpus)) if corpus else "shapes"
 
     def report(self, *, k: int = 8, guidance: float = 1.0, seed: int = 0,
                temperature: float = 1.0, top_k: int | None = None, steps: int | None = None,
@@ -116,7 +122,7 @@ class Drawer:
         if clip is not None:
             from .clip import score_drawings
             out["own_clip"] = score_drawings(clip[0], out, all_facts(kind), device=self.device,
-                                             checkpoint=str(clip[1]))
+                                             checkpoint=str(clip[1]), kind=kind)
         return out | {"model": self.kind, "corpus_kind": kind, "phrasing": phrasing,
                       "guidance": guidance, "temperature": temperature,
                       "top_k": top_k, "steps": steps, "seed": seed,

@@ -213,3 +213,47 @@ train: {{out_dir: {tmp_path / 'run'}, batch_size: 8, max_steps: 3, eval_every: 2
     assert [r["start_step"] for r in log if r.get("event") == "session_start"] == [0, 3]
     evals = [r for r in log if "shapes_top1" in r]
     assert evals and all(0 <= r["shapes_top1"] <= 1 for r in evals)
+
+
+def test_below_the_floor_no_caption_fits_and_the_closed_verdict_is_kept():
+    m = ClipModel(tiny_cc()).eval()
+    m.attach_text(StubText())
+    cands = [{"count": n, "colour": "red", "shape": "circle"} for n in (1, 2, 3)]
+    from aksharallm.pictures.phrases import phrase
+    txt = m.embed_texts([phrase(f, "canonical") for f in cands]).detach()
+    # picture 0 is exactly caption 0; picture 1 is half way between captions 1 and 2
+    mid = F.normalize(txt[1] + txt[2], dim=-1)
+    m.embed_images = lambda x: torch.stack([txt[0], mid])[: len(x)]
+    pics = np.zeros((2, 16, 16, 3), dtype=np.uint8)
+    cos_mid = float(mid @ txt[1])
+    r = rank(m, pics, [cands[0], cands[1]], cands, floor=(cos_mid + 1.0) / 2)
+    assert r["fits"] == [True, False]
+    assert r["top1"][0] is True and r["top1"][1] is False
+    assert r["closed_top1"][0] is True                      # closed set: picks the nearer one anyway
+    assert rank(m, pics, [cands[0], cands[1]], cands)["top1"][0] is True     # no floor, no "fits"
+
+
+def test_the_floor_is_a_quantile_of_clean_originals_and_belongs_to_one_checkpoint(tmp_path):
+    from aksharallm.pictures.clip import NONE_FITS, calibrate, read_floor
+    m = ClipModel(tiny_cc()).eval()
+    m.attach_text(StubText())
+    cands = [{"count": n, "colour": "red", "shape": "circle"} for n in (1, 2, 3)]
+    from aksharallm.pictures.phrases import phrase
+    txt = m.embed_texts([phrase(f, "canonical") for f in cands]).detach()
+    vecs = torch.stack([F.normalize(txt[i % 3] + 0.1 * (i + 1) * txt[(i + 1) % 3], dim=-1)
+                        for i in range(30)])
+    m.embed_images = lambda x: vecs[: len(x)]
+    facts = [cands[i % 3] for i in range(30)]
+    import aksharallm.pictures.phrases as ph
+    orig = ph.all_facts
+    ph.all_facts = lambda kind="shapes": cands
+    try:
+        got = calibrate(m, [("shapes", np.zeros((30, 16, 16, 3), np.uint8), facts)], q=0.1)
+    finally:
+        ph.all_facts = orig
+    own = [float(vecs[i] @ txt[i % 3]) for i in range(30)]
+    assert got["shapes"] == pytest.approx(float(np.quantile(own, 0.1)))
+    (tmp_path / NONE_FITS).write_text(json.dumps({"ckpt_best.pt": {"step": 7, "floors": {"shapes": 0.5}}}))
+    assert read_floor(tmp_path / "ckpt_best.pt", 7) == {"shapes": 0.5}
+    assert read_floor(tmp_path / "ckpt_best.pt", 8) is None        # another step's scale
+    assert read_floor(tmp_path / "ckpt_last.pt", 7) is None        # another checkpoint

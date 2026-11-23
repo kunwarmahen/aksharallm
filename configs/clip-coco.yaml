@@ -1,0 +1,52 @@
+# G4c (docs/26 § "G4c: real photos"): G4b's contrastive model on COCO, the judge for drawn
+# photos (no rule can read a photo). The caption side is the frozen 300M small-code-py (it read
+# web English; tiny only read children's stories), on the card; the photo side a 6-layer ViT.
+# A photo's five captions are all its matches. Scored by top-1 / top-5 retrieval among 1,000
+# val photos' captions.
+#
+#   scripts/audio.sh clip-coco
+#   python -m aksharallm.pictures coco-report flow-coco --clip clip-coco
+
+name: clip-coco
+
+clip:
+  image_size: 64
+  patch: 8
+  d_vision: 256
+  n_layers: 6
+  n_heads: 4
+  d_text: 256
+  text_layers: 2
+  d_embed: 256
+  temperature: 0.07
+  text: checkpoints/small-code-py/ckpt_best.pt
+  text_tokenizer: data/blend/tokenizer.json
+  text_len: 32
+  text_device: auto
+  text_cache: 30000
+
+data:
+  corpora: [data/vision/coco64]
+  holdouts: []
+
+optim:
+  lr: 5.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 500
+  weight_decay: 0.1
+  beta1: 0.9
+  beta2: 0.98
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/clip-coco
+  batch_size: 256
+  max_steps: 15000
+  eval_every: 1000
+  eval_batches: 4
+  eval_pictures: 1000
+  ckpt_every: 1000
+  log_every: 50
+  seed: 1337
+  resume: auto

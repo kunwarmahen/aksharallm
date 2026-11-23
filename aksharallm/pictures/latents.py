@@ -137,5 +137,6 @@ class LatentDataset:
 
     def batch(self, batch_size: int) -> tuple[np.ndarray, list[str]]:
         picks = self.rng.choice(self.index, size=batch_size)
+        self.last_picks = picks       # which pictures, for a caller that needs their facts
         return (np.asarray(self.z[picks], dtype=np.float32),
                 [self.manifest.captions[int(i)] for i in picks])

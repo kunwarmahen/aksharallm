@@ -85,6 +85,19 @@ class ImageManifest:
         Path(path).write_text(json.dumps(self.__dict__, indent=1))
 
 
+def manifest_kind(corpus: str | Path) -> str:
+    """"shapes", "scenes" or "coco" for a corpus folder, without parsing the manifest: `kind`
+    is its last key, and a COCO manifest (590,000 captions) is ~100 MB of JSON."""
+    m = Path(corpus) / "manifest.json"
+    try:
+        with open(m, "rb") as f:
+            f.seek(max(0, m.stat().st_size - 200))
+            tail = f.read().decode(errors="ignore")
+    except OSError:
+        return "shapes"
+    return next((k for k in ("coco", "scenes") if f'"kind": "{k}"' in tail), "shapes")
+
+
 # ---------------------------------------------------------------------------------------
 # reading and writing
 # ---------------------------------------------------------------------------------------
@@ -294,6 +307,7 @@ class ImageCaptions:
 
     def batch(self, batch_size: int) -> tuple[np.ndarray, list[str]]:
         picks = self.rng.choice(self.index, size=batch_size, replace=len(self.index) < batch_size)
+        self.last_picks = picks       # which pictures, for a caller that needs their facts
         return (to_tensor(self.images[picks]),
                 [self.manifest.captions[int(i)] for i in picks])
 

@@ -786,7 +786,22 @@ scripts/audio.sh ae-scenes                               # then flow-text-scenes
 
 **How you know G4b worked:** the model picks every original's own caption (100%, held-out
 combinations included), and on real drawing mistakes it agrees with the reader 95–98% of the
-time (kappa ~0.9). Where it does not, read why (it cannot say "five" if no caption does).
+time (kappa ~0.9). Where it does not, read why (it cannot say "five" if no caption does;
+`pictures clip-calibrate clip-shapes` adds a "none fits" floor, at a cost the report shows).
+
+The seventh (**G4c**) is real photos: COCO 2017 (118k photos, five people-written captions each),
+cut to 64×64, drawn from a caption read by the frozen 300M, and judged by a contrastive model
+trained on COCO, every number printed beside the real photo's and chance:
+
+```bash
+python -m aksharallm.pictures coco                       # the three COCO zips in data/coco/raw/ first
+scripts/audio.sh ae-coco                                 # then clip-coco, then flow-coco
+python -m aksharallm.pictures coco-report flow-coco --clip clip-coco --guidance 3
+```
+
+**How you know G4c worked:** the drawings' own captions land in the top 5 of 1,000 far more often
+than chance (0.5%), closing on the real photos' rate, and their distance to the real photos in our
+features shrinks toward what two halves of the real photos score.
 
 **How you know G2 worked:** first run, 56 minutes on the card: 99% of seen captions and 100% of
 the never-seen purple triangles drawn right, against 89% / 70% for the best G1, no copies.

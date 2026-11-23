@@ -81,6 +81,15 @@ def cmd_scenes(args) -> int:
     return 0
 
 
+def cmd_coco(args) -> int:
+    """G4c: pack COCO 2017 (train -> OUT, val -> OUT-val) as 64x64 picture corpora."""
+    from .coco import pack
+    for split in args.splits.split(","):
+        out = args.out if split == "train" else f"{args.out}-{split}"
+        pack(args.raw, out, split, limit=args.limit or None, workers=args.workers)
+    return 0
+
+
 def cmd_report(args) -> int:
     import torch
 
@@ -286,8 +295,9 @@ def cmd_gen_report(args) -> int:
                 f"{g[c] * 100:>6.1f}%" for c in [*attrs, "all"]) + f" {g['copies'] * 100:>6.1f}%")
     oc = r.get("own_clip")
     if oc:
+        fl = "" if oc.get("floor") is None else f" and fits above the floor {oc['floor']:.3f}"
         print(f"\n  our contrastive model ({oc['checkpoint']}): the asked caption is the closest of "
-              f"{oc['candidates']}")
+              f"{oc['candidates']}{fl}")
         for label, key in (("seen", "seen"), ("held out", "held_out")):
             g = oc[key]
             if g.get("n"):
@@ -296,6 +306,12 @@ def cmd_gen_report(args) -> int:
                 print(f"  {label:<10} top-1 {g['top1'] * 100:5.1f}%  agrees with the reader on "
                       f"{a['agree'] * 100:5.1f}% (kappa {kappa}; model only {a['model_only']}, "
                       f"reader only {a['reader_only']})")
+        if oc.get("closed"):
+            c = oc["closed"]
+            ck = "–" if c["agreement"]["kappa"] is None else f"{c['agreement']['kappa']:.2f}"
+            print(f"  without the floor (closed set): top-1 {c['top1'] * 100:.1f}%, agrees "
+                  f"{c['agreement']['agree'] * 100:.1f}% (kappa {ck}); {c['none_fits']} pictures "
+                  "judged 'none fits'")
     print(f"\n  variety: {r['variety'] * 100:.0f}% of the {args.k} pictures per caption are distinct")
     print("  held-out captions: " + "  ".join(
         f"{p['caption']} {p['all'] * 100:.0f}%" for p in r["per_caption"] if p["held_out"]))
@@ -304,6 +320,37 @@ def cmd_gen_report(args) -> int:
     f = root / RESULTS / f"{stem}.json"
     f.write_text(json.dumps(out, indent=1))
     print(f"\nwrote {f}  (gallery: one PNG per caption)")
+    return 0
+
+
+def cmd_clip_calibrate(args) -> int:
+    """G4b: measure the none-fits floor on clean originals and write it beside the checkpoint."""
+    import numpy as np
+
+    from ..vision.image import ImageCaptions
+    from .clip import NONE_FITS, calibrate, load_clip
+    root = _root()
+    path = find_checkpoint(args.checkpoint, root)
+    model, blob = load_clip(path, _device(args.device), root)
+    sets = []
+    for corpus in ((blob.get("config") or {}).get("data") or {}).get("corpora") or []:
+        ds = ImageCaptions(root / corpus, split="val")
+        # the LAST val pictures: clip-report reads the first ones, so the floor is never
+        # measured on the pictures it is then reported on
+        idx = ds.index[-args.n:]
+        sets.append((getattr(ds.manifest, "kind", "shapes"), np.asarray(ds.images[idx]),
+                     [ds.manifest.facts[int(i)] for i in idx]))
+    floors = calibrate(model, sets, q=args.q, device=_device(args.device))
+    f = path.parent / NONE_FITS
+    d = json.loads(f.read_text()) if f.is_file() else {}
+    d[path.name] = {"step": blob.get("step"), "q": args.q, "n": args.n, "floors": floors,
+                    "built": time.strftime("%Y-%m-%d %H:%M:%S")}
+    f.write_text(json.dumps(d, indent=1) + "\n")
+    print(f"{path} (step {blob.get('step')}): a picture whose best caption fits worse than this "
+          f"is judged 'none fits' ({args.q:.0%} of clean originals would be)")
+    for kind, v in floors.items():
+        print(f"  {kind:<8} cosine floor {v:.4f}")
+    print(f"wrote {f}")
     return 0
 
 
@@ -334,10 +381,16 @@ def cmd_clip_report(args) -> int:
     print(f"{path} (step {blob.get('step')}): is each picture's own caption the closest of every "
           "caption its corpus can say?" + (f"  Pictures passed through {args.through} first."
                                            if coder else ""))
-    print(f"\n  {'pictures':<36} {'n':>5} {'reader':>7} {'model':>7} {'show_me':>8} "
+    floors = getattr(model, "none_fits", None) or {}
+    print("  none-fits floor: " + (", ".join(f"{k} {v:.4f}" for k, v in floors.items()) if floors
+                                   else "none calibrated (pictures clip-calibrate): closed set only"))
+    print(f"\n  {'pictures':<36} {'n':>5} {'reader':>7} {'model':>7} {'closed':>7} {'show_me':>8} "
           f"{'agree':>7} {'kappa':>6}  model's misses differ in")
     for corpus, split, frac in sets:
         ds = ImageCaptions(root / corpus, split="val", val_frac=frac)
+        if getattr(ds.manifest, "kind", "shapes") == "coco":
+            print(f"  {corpus}: photos have no reader to agree with; see pictures coco-report")
+            continue
         idx = ds.index[: args.n]
         pics = np.asarray(ds.images[idx])
         if coder is not None:
@@ -350,12 +403,15 @@ def cmd_clip_report(args) -> int:
         facts = [ds.manifest.facts[int(i)] for i in idx]
         kind = getattr(ds.manifest, "kind", "shapes")
         cands = all_facts(kind)
-        r = rank(model, pics, facts, cands, device=device)
+        r = rank(model, pics, facts, cands, device=device, floor=floors.get(kind))
+        # the floor is a cosine measured against CANONICAL captions; another phrasing sits on
+        # its own scale, so the held-out phrasing is read closed-set
         rs = rank(model, pics, facts, cands, phrasing="show_me", device=device)
+        closed = r.get("closed_top1", r["top1"])
         reader_ok = [judge(p, f)["all"] for p, f in zip(pics, facts, strict=True)]
         a = agreement(r["top1"], reader_ok)
         miss = {}
-        for ok, b, f in zip(r["top1"], r["best"], facts, strict=True):
+        for ok, b, f in zip(closed, r["best"], facts, strict=True):
             if not ok:
                 for attr in ATTRS:
                     if attr in f and cands[b][attr] != f[attr]:
@@ -363,13 +419,17 @@ def cmd_clip_report(args) -> int:
         row = {"pictures": corpus, "split": split, "kind": kind, "n": len(idx),
                "reader": float(np.mean(reader_ok)), "top1": float(np.mean(r["top1"])),
                "show_me": float(np.mean(rs["top1"])), "cos": float(np.mean(r["cos"])),
+               "closed_top1": float(np.mean(closed)), "floor": floors.get(kind),
+               "none_fits": int(sum(not f for f in r.get("fits", []))),
+               "closed_agreement": agreement(closed, reader_ok),
                "agreement": a, "misses_by_attribute": miss,
                "correct": "".join("1" if t else "0" for t in r["top1"]),
                "reader_correct": "".join("1" if t else "0" for t in reader_ok)}
         out["sets"].append(row)
         kappa = "–" if a["kappa"] is None else f"{a['kappa']:.2f}"
         print(f"  {corpus + ' (' + split + ')':<36} {len(idx):>5} {row['reader'] * 100:>6.1f}% "
-              f"{row['top1'] * 100:>6.1f}% {row['show_me'] * 100:>7.1f}% {a['agree'] * 100:>6.1f}% "
+              f"{row['top1'] * 100:>6.1f}% {row['closed_top1'] * 100:>6.1f}% "
+              f"{row['show_me'] * 100:>7.1f}% {a['agree'] * 100:>6.1f}% "
               f"{kappa:>6}  " + (", ".join(f"{k} {v}" for k, v in miss.items()) or "–"))
     stem = f"clip-{run}-step{blob.get('step')}" + (f"-through-{Path(args.through).stem if args.through.endswith('.pt') else args.through}"
                                                   if args.through else "")
@@ -378,7 +438,55 @@ def cmd_clip_report(args) -> int:
     f.write_text(json.dumps(out, indent=1))
     print(f"\nwrote {f}\n  reader = the rule-based reader on the same pictures (100% on originals: "
           "the positive control);\n  model = our contrastive model's closest caption is the right "
-          "one; agree/kappa = the two verdicts per picture.")
+          "one\n  (and fits above the floor: below it, 'none fits'); closed = the same without the "
+          "floor; agree/kappa = the two verdicts per picture.")
+    return 0
+
+
+def cmd_coco_report(args) -> int:
+    """G4c: draw a photo for each of the first N COCO val captions, scored by clip-coco."""
+    from .clip import load_clip
+    from .photos import gallery, public, report
+    root = _root()
+    device = _device(args.device)
+    d = _load_drawer(args.checkpoint, device)
+    cp = find_checkpoint(args.clip, root)
+    clip, _ = load_clip(cp, device, root)
+    r = report(d, clip, root / args.corpus, n=args.n, guidance=args.guidance, seed=args.seed,
+               steps=args.steps, device=device, clip_path=str(cp.relative_to(root)
+                                                             if cp.is_relative_to(root) else cp))
+    run = d.path.parent.name
+    stem = f"coco-{run}-step{d.step}-g{args.guidance:g}-n{args.n}"
+    gallery(r, root / RESULTS / f"{stem}.png")
+    print(f"{d.path} (step {d.step}): {args.n} COCO val captions, one drawing each, guidance "
+          f"{args.guidance:g}, {r['seconds']}s; judged by {cp}")
+    print(f"\n  {'':<16} {'match':>7} {'mismatch':>9} {'top-1':>7} {'top-5':>7} {'top-10':>7}")
+    for name in ("real", "drawn"):
+        x = r[name]
+        print(f"  {name + (' photo' if name == 'real' else ''):<16} {x['match']:>7.3f} "
+              f"{x['mismatch']:>9.3f} {x['top1'] * 100:>6.1f}% {x['top5'] * 100:>6.1f}% "
+              f"{x['top10'] * 100:>6.1f}%")
+    c = r["chance"]
+    print(f"  {'chance':<16} {'':>7} {'':>9} {c['top1'] * 100:>6.1f}% {c['top5'] * 100:>6.1f}% "
+          f"{c['top10'] * 100:>6.1f}%")
+    dist = r["distance"]
+    print(f"\n  distance to real photos in our features (Frechet, NOT FID): drawings "
+          f"{dist['drawn_vs_real']:.4f}; two halves of the real photos {dist['real_half_vs_half']:.4f}")
+    out = public(r) | {"checkpoint": str(d.path), "run": run, "step": d.step,
+                       "gallery": [f"{stem}.png"]}
+    f = root / RESULTS / f"{stem}.json"
+    f.write_text(json.dumps(out, indent=1))
+    print(f"\nwrote {f}  (gallery {stem}.png: real photos above, drawings below)")
+    return 0
+
+
+def cmd_coco_compare(args) -> int:
+    from .photos import compare
+    a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
+    r = compare(a, b)
+    p = "–" if r["p"] is None else f"{r['p']:.3g}"
+    print(f"top-5, n {r['n']}   a {r['a'] * 100:5.1f}%   b {r['b'] * 100:5.1f}%   "
+          f"b only {r['b_only']}   a only {r['a_only']}   p {p}\n\na = {args.a}\nb = {args.b}")
     return 0
 
 
@@ -406,6 +514,13 @@ def main(argv=None) -> int:
     s.add_argument("--n", type=int, default=64000)
     s.add_argument("--seed", type=int, default=0)
     s.set_defaults(fn=cmd_scenes)
+    s = sub.add_parser("coco", help="G4c: pack COCO 2017 photos + captions at 64x64")
+    s.add_argument("--raw", default="data/coco/raw", help="folder with the three downloaded zips")
+    s.add_argument("--out", default="data/vision/coco64")
+    s.add_argument("--splits", default="val,train")
+    s.add_argument("--limit", type=int, default=0, help="first N photos per split (0 = all)")
+    s.add_argument("--workers", type=int, default=12)
+    s.set_defaults(fn=cmd_coco)
     s = sub.add_parser("report", help="reconstruct val pictures at each codebook count and judge them")
     s.add_argument("checkpoint", help="a .pt, or a run name (checkpoints/<run>/ckpt_best.pt)")
     s.add_argument("--n", type=int, default=256, help="pictures to judge")
@@ -455,6 +570,27 @@ def main(argv=None) -> int:
                            help="G4b: also score every picture with our contrastive model "
                                 "(a .pt or run name, e.g. clip-shapes), beside the reader")
         s.set_defaults(fn=fn)
+    s = sub.add_parser("coco-report", help="G4c: draw from COCO val captions, judged by clip-coco")
+    s.add_argument("checkpoint", help="a G4c flow model (.pt or run name, e.g. flow-coco)")
+    s.add_argument("--clip", default="clip-coco", help="the contrastive model that judges")
+    s.add_argument("--corpus", default="data/vision/coco64-val")
+    s.add_argument("--n", type=int, default=1000, help="captions (one drawing each)")
+    s.add_argument("--guidance", type=float, default=3.0)
+    s.add_argument("--steps", type=int, default=None)
+    s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--device", default="cpu")
+    s.set_defaults(fn=cmd_coco_report)
+    s = sub.add_parser("coco-compare", help="G4c: two coco-reports on the same captions, paired")
+    s.add_argument("a")
+    s.add_argument("b")
+    s.set_defaults(fn=cmd_coco_compare)
+    s = sub.add_parser("clip-calibrate", help="G4b: measure the none-fits floor on clean originals")
+    s.add_argument("checkpoint", help="a .pt, or a run name (clip-shapes)")
+    s.add_argument("--q", type=float, default=0.01,
+                   help="share of clean originals the floor refuses (default 0.01)")
+    s.add_argument("--n", type=int, default=2048, help="val originals per corpus (the last ones)")
+    s.add_argument("--device", default="cpu")
+    s.set_defaults(fn=cmd_clip_calibrate)
     s = sub.add_parser("clip-report", help="G4b: our contrastive model on known pictures, beside the reader")
     s.add_argument("checkpoint", help="a .pt, or a run name (clip-shapes)")
     s.add_argument("--n", type=int, default=512, help="pictures per set")

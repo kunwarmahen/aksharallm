@@ -13,6 +13,9 @@
   ~5M transformer, a second or two) and returns each picture with what the reader saw in it;
   `gen-*.json` reports (all 60 captions, seen and held-out) list, open and pair like the
   tokenizer's; `pictures codes` and `pictures gen-report` are jobs.
+* **G4c, from a sentence to a photo** — `coco-*.json` reports (`pictures coco-report`): every
+  number for the drawings beside the same number for the real photos of those captions, and
+  chance; the gallery (real above, drawn below); the report as a job.
 * **G4b, a judge that learned** — our own contrastive model (`stage: clip`): its
   `clip-*.json` reports (the model beside the reader on known pictures, and on pictures damaged
   by a coder), `pictures clip-report` and `pictures scenes` as jobs, and `--clip` on a
@@ -35,11 +38,16 @@ from ..audio.ttsreports import finite
 from .jobs import CliJobs, JobError
 
 RESULTS = Path("logs/pictures")
-_NAME = re.compile(r"^(report|gen|clip)-[A-Za-z0-9_.-]+\.json$")
+_NAME = re.compile(r"^(report|gen|clip|coco)-[A-Za-z0-9_.-]+\.json$")
 
 
 class PicturesError(RuntimeError):
     pass
+
+
+def _corpus_kind(corpus: Path) -> str:
+    from ..vision.image import manifest_kind
+    return manifest_kind(corpus)
 
 
 class Pictures:
@@ -77,7 +85,10 @@ class Pictures:
             if stage not in ("picgen", "flow"):
                 continue
             pg = blob.get(stage) or {}
+            corpus = ((blob.get("config") or {}).get("data") or {}).get("corpus")
+            kind = _corpus_kind(self.root / corpus) if corpus else "shapes"
             out.append({"rel": str(path.relative_to(self.root)), "step": blob.get("step"),
+                        "corpus_kind": kind,
                         "kind": ("G1" if stage == "picgen" else "G4" if pg.get("text")
                                  else "G3" if pg.get("space") == "latent" else "G2"),
                         "books": pg.get("books"), "tokenizer": pg.get("tokenizer"),
@@ -94,8 +105,10 @@ class Pictures:
                 continue
             if blob.get("stage") != "clip":
                 continue
+            from ..pictures.clip import read_floor
             out.append({"rel": str(path.relative_to(self.root)), "step": blob.get("step"),
-                        "best_val": blob.get("best_val"), "mtime": path.stat().st_mtime})
+                        "best_val": blob.get("best_val"), "mtime": path.stat().st_mtime,
+                        "floors": read_floor(path, blob.get("step"))})
         # newest run first, and within a run its best checkpoint before its last
         return sorted(out, key=lambda r: (-r["mtime"] // 3600, "ckpt_best" not in r["rel"]))
 
@@ -121,8 +134,22 @@ class Pictures:
                             "through": d.get("through"),
                             "sets": [{k: x.get(k) for k in ("pictures", "split", "kind", "n",
                                                             "reader", "top1", "show_me",
-                                                            "agreement", "misses_by_attribute")}
+                                                            "agreement", "misses_by_attribute",
+                                                            "closed_top1", "floor", "none_fits")}
                                      for x in d.get("sets") or []]})
+            except (OSError, ValueError, KeyError):
+                continue
+        return out
+
+    def coco_reports(self) -> list[dict]:
+        out = []
+        for p in sorted((self.root / RESULTS).glob("coco-*.json"),
+                        key=lambda p: p.stat().st_mtime, reverse=True):
+            try:
+                d = json.loads(p.read_text())
+                out.append({"name": p.name, "run": d.get("run"), "step": d.get("step"),
+                            "n": d.get("n"), "guidance": d.get("guidance"),
+                            "top5": d["drawn"]["top5"], "real_top5": d["real"]["top5"]})
             except (OSError, ValueError, KeyError):
                 continue
         return out
@@ -178,6 +205,9 @@ class Pictures:
         return finite({"checkpoints": self.checkpoints(), "reports": self.reports(),
                        "generators": self.generators(), "gen_reports": self.gen_reports(),
                        "clips": self.clips(), "clip_reports": self.clip_reports(),
+                       "coco_reports": self.coco_reports(),
+                       "coco": {"train": (self.root / "data/vision/coco64/manifest.json").is_file(),
+                                "val": (self.root / "data/vision/coco64-val/manifest.json").is_file()},
                        "coders": [c["rel"] for c in self.coders()],
                        "codes": codes, "corpus": self.corpus(), "jobs": self.jobs.status()})
 
@@ -326,6 +356,26 @@ class Pictures:
                 argv += ["--through", through]
             return self.jobs.start(argv, f"our contrastive model {rel} beside the reader"
                                    + (f", pictures through {through}" if through else ""))
+        if kind == "coco-report":
+            rel = str(spec.get("checkpoint") or "")
+            if rel not in {g["rel"] for g in self.generators() if g.get("corpus_kind") == "coco"}:
+                raise JobError(f"not a photo-drawing model (G4c): {rel!r}")
+            clip = str(spec.get("clip") or "")
+            if clip not in {c["rel"] for c in self.clips()}:
+                raise JobError(f"not a contrastive model checkpoint: {clip!r}")
+            n = int(spec.get("n") or 200)
+            guidance = float(spec.get("guidance") if spec.get("guidance") is not None else 3.0)
+            if not 20 <= n <= 5000 or not 0 <= guidance <= 10:
+                raise JobError("captions 20–5,000, guidance 0–10")
+            return self.jobs.start(["coco-report", rel, "--clip", clip, "--n", str(n),
+                                    "--guidance", f"{guidance:g}", "--device", "cpu"],
+                                   f"photo report on {rel}, {n} captions, guidance {guidance:g}")
+        if kind == "clip-calibrate":
+            rel = str(spec.get("checkpoint") or "")
+            if rel not in {c["rel"] for c in self.clips()}:
+                raise JobError(f"not a contrastive model checkpoint: {rel!r}")
+            return self.jobs.start(["clip-calibrate", rel, "--device", "cpu"],
+                                   f"measure the none-fits floor of {rel} on clean originals")
         if kind == "scenes":
             return self.jobs.start(["scenes"], "render the scenes corpus (size and place, ~20 s)")
         if kind == "codes":

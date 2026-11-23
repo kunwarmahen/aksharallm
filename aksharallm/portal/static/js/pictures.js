@@ -141,13 +141,15 @@ async function showGenReport(name) {
   const ocLine = (label, g) => (g && g.n ? `${label}: top-1 <b>${pct(g.top1)}</b>, agrees with the reader on `
     + `${pct(g.agreement.agree)} (kappa ${g.agreement.kappa == null ? '–' : fmt.num(g.agreement.kappa, 2)}; `
     + `model only ${g.agreement.model_only}, reader only ${g.agreement.reader_only})` : '');
+  const closed = oc && oc.closed ? ` Without the none-fits floor (${fmt.num(oc.floor, 3)}): top-1 ${pct(oc.closed.top1)}, `
+    + `agrees ${pct(oc.closed.agreement.agree)}; ${oc.closed.none_fits} pictures judged “none fits”.` : '';
   $('#pc-gen-note').innerHTML = `${r.k} pictures per caption, guidance ${fmt.num(r.guidance, 1)}, step `
     + `${fmt.int(r.step)}${r.phrasing ? `, phrasing <code>${escHtml(r.phrasing)}</code>` : ''}. `
     + `Variety <b>${pct(r.variety)}</b>. `
     + (held.length <= 8 ? 'Held-out captions: '
       + held.map((p) => `${escHtml(p.caption)} <b>${pct(p.all)}</b>`).join(' · ') : '')
     + (oc ? `<br>Our contrastive model (<code>${escHtml(String(oc.checkpoint).replace(/^.*?(?=checkpoints\/)/, ''))}</code>), the asked caption the closest of `
-      + `${fmt.int(oc.candidates)}: ${ocLine('seen', oc.seen)}; ${ocLine('held out', oc.held_out)}` : '');
+      + `${fmt.int(oc.candidates)}: ${ocLine('seen', oc.seen)}; ${ocLine('held out', oc.held_out)}.${closed}` : '');
   // held-out captions first: they are the pictures the experiment exists for
   const order = (r.per_caption || []).map((p, i) => ({ p, src: (r.gallery_png || [])[i] }))
     .filter((x) => x.src).sort((a, b) => Number(b.p.held_out) - Number(a.p.held_out));
@@ -184,14 +186,41 @@ function showClipReport(name) {
     return;
   }
   $('#pc-clip-table').innerHTML = '<thead><tr><th>pictures</th><th>n</th><th>reader</th><th>our model</th>'
-    + '<th>held-out phrasing</th><th>agree</th><th>kappa</th><th>model\'s misses were wrong about</th></tr></thead><tbody>'
+    + '<th>closed set</th><th>held-out phrasing</th><th>agree</th><th>kappa</th><th>model\'s misses were wrong about</th></tr></thead><tbody>'
     + r.sets.map((x) => `<tr><td>${escHtml(x.pictures)} (${escHtml(x.split)})</td><td>${fmt.int(x.n)}</td>`
-      + `<td>${pct(x.reader)}</td><td><b>${pct(x.top1)}</b></td><td>${pct(x.show_me)}</td>`
+      + `<td>${pct(x.reader)}</td><td><b>${pct(x.top1)}</b></td><td>${pct(x.closed_top1 == null ? x.top1 : x.closed_top1)}</td><td>${pct(x.show_me)}</td>`
       + `<td>${pct(x.agreement.agree)}</td><td>${x.agreement.kappa == null ? '–' : fmt.num(x.agreement.kappa, 2)}</td>`
       + `<td>${escHtml(Object.entries(x.misses_by_attribute || {}).map(([k, v]) => `${k} ${v}`).join(', ') || '–')}</td></tr>`).join('')
     + '</tbody>';
   $('#pc-clip-note').innerHTML = `step ${fmt.int(r.step)}`
-    + (r.through ? `; every picture passed through <code>${escHtml(r.through)}</code> first (damaged pictures)` : '; the originals');
+    + (r.through ? `; every picture passed through <code>${escHtml(r.through)}</code> first (damaged pictures)` : '; the originals')
+    + ((r.sets[0] || {}).floor == null ? '; no none-fits floor (closed set only)'
+      : `; none-fits floor ${(r.sets || []).map((x) => `${escHtml(x.kind)} ${fmt.num(x.floor, 3)}`).filter((v, i, a) => a.indexOf(v) === i).join(', ')}`);
+}
+
+async function showCocoReport(name) {
+  if (!name) {
+    $('#pc-coco-table').innerHTML = '<tbody><tr><td>no photo report yet — train <code>flow-coco</code>, then Make a photo report below</td></tr></tbody>';
+    $('#pc-coco-note').textContent = '';
+    $('#pc-coco-gallery').innerHTML = '';
+    return;
+  }
+  let r;
+  try { r = await api(`/api/pictures/report?name=${encodeURIComponent(name)}`); } catch (e) {
+    flash(`pictures: ${e.message}`, 'error'); return;
+  }
+  const row = (label, x) => `<tr><td>${label}</td><td>${fmt.num(x.match, 3)}</td><td>${fmt.num(x.mismatch, 3)}</td>`
+    + `<td>${pct(x.top1)}</td><td><b>${pct(x.top5)}</b></td><td>${pct(x.top10)}</td></tr>`;
+  $('#pc-coco-table').innerHTML = '<thead><tr><th></th><th>match</th><th>another photo’s caption</th>'
+    + '<th>top-1</th><th>top-5</th><th>top-10</th></tr></thead><tbody>'
+    + row('real photos', r.real) + row('<b>drawn</b>', r.drawn)
+    + `<tr class="dim"><td>chance</td><td>–</td><td>–</td><td>${pct(r.chance.top1)}</td><td>${pct(r.chance.top5)}</td><td>${pct(r.chance.top10)}</td></tr></tbody>`;
+  $('#pc-coco-note').innerHTML = `${fmt.int(r.n)} captions, guidance ${fmt.num(r.guidance, 1)}, step ${fmt.int(r.step)}, `
+    + `judged by <code>${escHtml(r.clip || '')}</code>. Distance to the real photos in our features: drawings `
+    + `<b>${fmt.num(r.distance.drawn_vs_real, 4)}</b>, two halves of the real photos ${fmt.num(r.distance.real_half_vs_half, 4)}.`;
+  $('#pc-coco-gallery').innerHTML = (r.gallery_png || []).map((src) => `<figure><img src="${src}" loading="lazy" `
+    + 'alt="real photos above, drawings of their captions below"><figcaption>real photos above, drawings of the same captions below: '
+    + (r.captions || []).slice(0, 16).map((c, i) => `${i + 1}. ${escHtml(c)}`).join(' · ') + '</figcaption></figure>').join('');
 }
 
 async function load() {
@@ -254,9 +283,26 @@ async function load() {
     + (res.coders || []).map((c) => `<option value="${escHtml(c)}">through ${escHtml(c)}</option>`).join('');
   if (keepT) $('#pc-clip-through').value = keepT;
   $('#pc-clip-run').disabled = !clips.length;
+  $('#pc-clip-cal').disabled = !clips.length;
   $('#pc-scenes-note').textContent = c.scenes
     ? 'data/vision/scenes64k is rendered (64,000 scenes, plus 128 held-out pictures).'
     : 'the scenes corpus is not made yet: Render the scenes corpus (seconds).';
+  const cocoReports = res.coco_reports || [];
+  const keepR = $('#pc-coco-report').value;
+  $('#pc-coco-report').innerHTML = cocoReports.map((r) => `<option value="${escHtml(r.name)}">${escHtml(r.name)} — `
+    + `top-5 ${pct(r.top5)} (real ${pct(r.real_top5)})</option>`).join('');
+  if (keepR && cocoReports.some((r) => r.name === keepR)) $('#pc-coco-report').value = keepR;
+  await showCocoReport($('#pc-coco-report').value || null);
+  const cocoGens = gens.filter((g) => g.corpus_kind === 'coco');
+  $('#pc-coco-gen').innerHTML = cocoGens.map((g) => `<option value="${escHtml(g.rel)}">${escHtml(g.rel)} — step ${fmt.int(g.step)}</option>`).join('');
+  $('#pc-coco-clip').innerHTML = clipOpts;
+  const cc = clips.find((x) => x.rel.includes('clip-coco'));
+  if (cc) $('#pc-coco-clip').value = cc.rel;
+  $('#pc-coco-run').disabled = !cocoGens.length || !clips.length;
+  const cd = res.coco || {};
+  $('#pc-coco-data').textContent = cd.train && cd.val
+    ? 'data/vision/coco64 and coco64-val are packed.'
+    : 'COCO is not packed yet: python -m aksharallm.pictures coco (after downloading the three archives into data/coco/raw/).';
   pc.job.render(res.jobs);
   if (res.jobs && res.jobs.running) pc.job.poll();
 }
@@ -293,6 +339,12 @@ registerTab('pictures', {
       kind: 'clip-report', checkpoint: $('#pc-clip-ckpt').value, through: $('#pc-clip-through').value,
     });
     $('#pc-scenes').onclick = () => pc.job.start({ kind: 'scenes' });
+    $('#pc-coco-report').onchange = (e) => showCocoReport(e.target.value);
+    $('#pc-coco-run').onclick = () => pc.job.start({
+      kind: 'coco-report', checkpoint: $('#pc-coco-gen').value, clip: $('#pc-coco-clip').value,
+      n: Number($('#pc-coco-n').value) || 200, guidance: Number($('#pc-coco-g').value),
+    });
+    $('#pc-clip-cal').onclick = () => pc.job.start({ kind: 'clip-calibrate', checkpoint: $('#pc-clip-ckpt').value });
     if (!$('#pc-w-count').options.length) {
       const fill = (id, xs, v) => { $(id).innerHTML = xs.map((x) => `<option>${x}</option>`).join(''); $(id).value = v; };
       fill('#pc-w-count', COUNTS, 'two');

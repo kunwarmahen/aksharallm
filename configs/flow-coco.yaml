@@ -1,0 +1,56 @@
+# G4c (docs/26 § "G4c: real photos"): text to photo. G4a's flow model, larger, on ae-coco's
+# latent, the caption read by the frozen 300M small-code-py (on the card). Trained on a random
+# one of each photo's five captions; judged by clip-coco (`pictures coco-report`), each number
+# beside the same number for the real photo.
+#
+#   scripts/audio.sh flow-coco
+#   python -m aksharallm.pictures coco-report flow-coco --clip clip-coco --guidance 3
+
+name: flow-coco
+
+flow:
+  space: latent
+  image_size: 8           # set from the latents' shape at launch (8x8x16)
+  channels: 16
+  patch: 1                # one token per latent cell: 64 tokens
+  d_model: 512
+  n_layers: 12
+  n_heads: 8
+  dropout: 0.0
+  cfg_drop: 0.1
+  sample_steps: 50
+  tokenizer: checkpoints/ae-coco/ckpt_best.pt
+  books: 2
+  text: checkpoints/small-code-py/ckpt_best.pt
+  text_tokenizer: data/blend/tokenizer.json
+  text_len: 32
+  text_device: auto
+  text_cache: 30000
+
+data:
+  corpus: data/vision/coco64
+  latents: data/pictures/latents-ae-coco
+  codes: data/pictures/none              # no VQ codes for photos: no copy check
+
+optim:
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 1000
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.99
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/flow-coco
+  batch_size: 128
+  max_steps: 60000
+  eval_every: 2000
+  eval_batches: 8
+  sample_every: 0
+  sample_k: 0
+  ckpt_every: 2000
+  log_every: 50
+  seed: 1337
+  resume: auto
