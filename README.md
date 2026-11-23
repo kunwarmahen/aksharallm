@@ -1058,7 +1058,11 @@ where no caption it is offered fits (five shapes drawn for "four"). It comes wit
 say size and place, "two big red circles on the left", circles on the right held out. A cosine floor lets it say "none of these fit", and the report shows its cost:
 it also refuses some never-seen combinations, because what is new fits less well. **G4c** is
 real photos: COCO 2017 at 64×64, a caption read by the frozen 300M, an autoencoder, a contrastive
-judge and a flow model trained on it, every score beside the real photo's.
+judge and a flow model trained on it, every score beside the real photo's. Measured: a drawing's
+own caption is in the top 5 of 1,000 for 18% of captions at guidance 1 and 60% at guidance 3
+(the real photos: 34%, chance 0.5%); recognisable bears, stop signs and kitchens at 64 px, faces
+and lettering smeared. The scenes model draws 91% of seen scene captions right and 85% of held-out
+ones at guidance 3.
 - **The next four, built 2026-11-22 and queued for the 11-23 night**: recall capacity (the
   wide models hold all 64 keys the vocabulary has; narrow arms with 16-wide heads ask where a
   DeltaNet memory runs out, docs/19); the hybrid at ~101M against small-student-muon, with the

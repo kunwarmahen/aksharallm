@@ -145,6 +145,10 @@ LAUNCHERS: dict[str, dict] = {
     "clip-shapes": {"script": "scripts/audio.sh", "args": ["clip-shapes"]},
     "ae-scenes": {"script": "scripts/audio.sh", "args": ["ae-scenes"]},
     "flow-text-scenes": {"script": "scripts/audio.sh", "args": ["flow-text-scenes"]},
+    # G4c: COCO photos (autoencoder, judge, text-to-photo flow).
+    "ae-coco": {"script": "scripts/audio.sh", "args": ["ae-coco"]},
+    "clip-coco": {"script": "scripts/audio.sh", "args": ["clip-coco"]},
+    "flow-coco": {"script": "scripts/audio.sh", "args": ["flow-coco"]},
     # The speech recogniser (Phase 7, docs/23): same launcher, an `asr:` config.
     "asr-synth": {"script": "scripts/audio.sh", "args": ["asr-synth"]},
     "asr-libri100": {"script": "scripts/audio.sh", "args": ["asr-libri100"]},

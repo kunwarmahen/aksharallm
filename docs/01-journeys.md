@@ -788,6 +788,9 @@ scripts/audio.sh ae-scenes                               # then flow-text-scenes
 combinations included), and on real drawing mistakes it agrees with the reader 95–98% of the
 time (kappa ~0.9). Where it does not, read why (it cannot say "five" if no caption does;
 `pictures clip-calibrate clip-shapes` adds a "none fits" floor, at a cost the report shows).
+The scenes model draws 91% of seen captions right (the autoencoder's own ceiling is 93%) and 85%
+of the held-out ones at guidance 3 (67% without: circles on the right only come out round with
+guidance).
 
 The seventh (**G4c**) is real photos: COCO 2017 (118k photos, five people-written captions each),
 cut to 64×64, drawn from a caption read by the frozen 300M, and judged by a contrastive model
@@ -801,7 +804,11 @@ python -m aksharallm.pictures coco-report flow-coco --clip clip-coco --guidance 
 
 **How you know G4c worked:** the drawings' own captions land in the top 5 of 1,000 far more often
 than chance (0.5%), closing on the real photos' rate, and their distance to the real photos in our
-features shrinks toward what two halves of the real photos score.
+features shrinks toward what two halves of the real photos score. Measured 2026-11-23: top 5
+18% at guidance 1 and 60% at guidance 3, real photos 34%, distance 0.08 against 0.04; the
+bear, the stop sign and the kitchen are recognisable at 64 px. Past the real photos' row the
+judge is rewarding typical drawings, not better ones ([doc 26](26-pictures.md) § Measured: real
+photos).
 
 **How you know G2 worked:** first run, 56 minutes on the card: 99% of seen captions and 100% of
 the never-seen purple triangles drawn right, against 89% / 70% for the best G1, no copies.

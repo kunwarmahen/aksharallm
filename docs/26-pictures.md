@@ -14,16 +14,18 @@ circles" and writes those integers. The rest of the chapter goes the way real im
 | G2 | flow matching in pixels | 99.2% | [G2](#g2-drawing-by-flow-matching) |
 | G3 / G3b | the same in a latent: a VQ latent, then a continuous one | 87.6% / **98.9% at a third of the cost** | [G3](#g3-flow-matching-in-the-latent) |
 | G4a | the caption read by our own frozen language model | 99.3%, 99.0% on a phrasing never seen | [G4a](#g4a-reading-a-sentence-2026-11-23) |
+| G4b | our own contrastive judge, and scenes that also say size and place | judge agrees with the reader at kappa ~0.9; scenes 91% seen (the autoencoder's ceiling), 85% held out at guidance 3 | [G4b](#g4b-a-judge-that-learned-2026-11-23) |
+| G4c | real COCO photos from people's captions | own caption in the top 5 of 1,000: 18% (g1) / 60% (g3), real photos 34%, chance 0.5% | [G4c](#g4c-real-photos-built-2026-11-23) |
 
-Lessons 29–33 break one piece each: the judge, guidance, the velocity, the latent's scale, and
-a held-out phrasing.
+Lessons 29–35 break one piece each: the judge, guidance, the velocity, the latent's scale, a
+held-out phrasing, the contrastive targets, and the side the padding goes on.
 
 ```mermaid
 flowchart LR
     G0["G0 image tokenizer<br/>(built)"] --> G1["G1 a caption to<br/>the codes (built)"]
     G0 --> G3["G3 flow in the<br/>latent (built)"]
     G2["G2 flow matching<br/>in pixels (built)"] --> G3
-    G1 --> G4["G4 text to image<br/>(G4a built)"]
+    G1 --> G4["G4 text to image<br/>(G4a-c built)"]
     G3 --> G4
     G4 --> G5["G5 short videos<br/>of moving shapes"]
 ```
@@ -785,9 +787,34 @@ verdicts are reported (`own_clip.closed` beside the floored one, and a "closed s
 that are missing (an open vocabulary, real for G4c's photos, where every val caption is a
 candidate) is the better fix than any floor.
 
-The scenes drawing model (`ae-scenes`, then `flow-text-scenes`) runs on the card
-(`logs/queue/day-1123.sh`, by day from 11-23 08:36, the user's go-ahead): every one of the 270 facts drawn 8 times, judged by both, in the
-canonical wording, both held-out phrasings and guidance 3.
+### Measured: drawing scenes (2026-11-23)
+
+`ae-scenes` (24 min) is the scenes corpus's own autoencoder, because `ae-shapes` read scenes back
+only 91% right; `ae-scenes` reads back **93%** (94% on the held-out combinations), so 93% is the
+ceiling for anything drawn through it. `flow-text-scenes` (G4a's recipe on it, 18 min on the card)
+then drew every one of the 270 facts 8 times, judged by the reader and by `clip-shapes`:
+
+| report | seen, all right | held out, all right | circles on the right: shape | purple triangles |
+|---|---|---|---|---|
+| canonical, guidance 1 | 91.4% | 66.7% | 59.6% | 83.3% |
+| `show_me` (never trained), g1 | 91.2% | 66.4% | 59.6% | 84.0% |
+| `in_colour` (never trained), g1 | 91.2% | 64.6% | 65.0% | 69.4% |
+| canonical, **guidance 3** | 91.1% | **84.9%** | **100%** | 85.4% |
+
+* **Seen captions sit at the autoencoder's ceiling**: count and place are 92% each, size, colour
+  and shape 99–100%. The 9% that is lost is mostly two shapes drawn touching, the same failure the
+  autoencoder makes reading them back.
+* **The new attribute generalises; the new combination needs guidance.** A circle has never been
+  shown on the right, and at guidance 1 only 60% of those circles come out round (the rest are the
+  squares and triangles training put there). Guidance 3 makes it 100%, and held out goes 66.7 →
+  84.9% (paired 73–3, p 2e-18) while seen captions do not move (18–24, p 0.44). On the shapes,
+  guidance stopped mattering once the data was enough; on scenes, where a held-out combination
+  conflicts with a place, it still does.
+* **Phrasings it never saw cost nothing measurable** (paired against canonical: `show_me` 11–12,
+  p 1.0; `in_colour` 19–27, p 0.30), except that `in_colour` loses some purple (83% colour).
+* **The two judges agree on seen pictures (98%, kappa 0.88) and part on held-out ones** (81%,
+  kappa 0.63, and nearly every disagreement is the reader accepting a picture our model refuses):
+  the floor at work, refusing what is new (see above).
 
 ## G4c: real photos (built 2026-11-23)
 
@@ -832,9 +859,39 @@ image vectors in our model's features, beside the same distance between two halv
 photos. It is FID's formula in our own features, so it is not FID. Two reports on the same
 captions pair per caption (`pictures coco-compare`).
 
-**Status**: built and smoke-tested end to end on the CPU (an untrained model scores chance, as it
-must). The three runs and the reports are queued on the card (`logs/queue/g4c-1123.sh`, after the
-scenes runs, by day until 23:50 then nightly).
+### Measured: real photos (2026-11-23)
+
+All three runs by day on the card: `ae-coco` 33 min (40k steps, val **27.5 dB** PSNR: blurry, as
+expected of plain L1+L2), `clip-coco` 50 min (15k steps; on its own val photos the right caption is
+the closest in a batch 13.4% of the time, 37.8% in the top 5), `flow-coco` 4 h 40 min (60k steps,
+0.26 s/step). `coco-report`, 1,000 val captions the flow model never saw, one drawing each:
+
+| | match (cosine) | another photo's caption | own caption in top 1 / 5 / 10 of 1,000 |
+|---|---|---|---|
+| drawn, guidance 1 | 0.416 | 0.074 | 6.4 / 18.4 / 27.7% |
+| drawn, guidance 3 | **0.578** | 0.037 | **26.1 / 59.7 / 76.1%** |
+| the real photos | 0.489 | 0.059 | 11.5 / 33.5 / 46.8% |
+| chance | | | 0.1 / 0.5 / 1.0% |
+
+Distance to the real photos in our features: **0.08**, against **0.04** between two halves of the
+real photos. Guidance 3 against 1, paired per caption on top 5: **436–23, p 5e-100**.
+
+![Real COCO val photos above, flow-coco drawings of their captions below](img/coco-flow-g3.png)
+
+*Real photo above, drawing below, guidance 3, the first 16 val captions.* The bear, the stop sign,
+the bedroom, the kitchen, the baseball field, the skier and the surfer are recognisable at 64 px;
+faces, bodies and lettering are smears ("STOP" comes out as "ƧMUP").
+
+**Read the guidance-3 row with care: it beats the real photos, and that does not mean it is
+better than real.** Guidance pushes each drawing toward what is most typical of its caption, which
+is exactly what a contrastive judge rewards; a real photo is matched to one of its five captions
+and also holds everything that caption leaves out. So past the real photos' ceiling the judge
+measures how typical a drawing is, not how good. The two honest numbers are guidance 1 (well
+above chance, below the ceiling) and the distance (twice the real photos' own). This is the
+reason every number is printed beside the real photos': without that row, 59.7% would read as a
+model that draws better than a camera. Two cautions not yet tested: the judge and the drawer read
+the caption through the same frozen 300M, so their errors may agree; and the ceiling is the real
+photos as photographed, not through `ae-coco`, whose blur the drawings inherit.
 
 ## Traps to keep
 
