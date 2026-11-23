@@ -56,7 +56,10 @@ be the decoder's picture of the **denormalised** latent.
 256) and kept colour and shape (≥ 99.8%), but drew 87.6% of seen captions right against G2's
 99.2%: it sometimes puts two shapes touching, because it places them on an 8×8 grid of latent
 cells rather than a 16×16 grid of patches (docs/26 § Measured: G3 against G2). Cheaper per
-step, coarser in where things go: the trade every latent model makes.
+step, coarser in where things go: the trade every latent model makes. A finer latent (the 16×16
+tokenizer's, which reconstructs just as perfectly) made it *worse*, about 50%, whatever the
+number of tokens: a latent can decode perfectly and still be hard to generate, which is why
+Stable Diffusion's autoencoder is trained to keep its latent smooth.
 
 ## Run it yourself
 

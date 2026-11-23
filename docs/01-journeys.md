@@ -761,7 +761,8 @@ way every real image model works: 64 tokens instead of 256, and the tokenizer's 
 the result (`python -m aksharallm.pictures latents imgtok-shapes --corpus data/vision/shapes64k
 --out data/pictures/latents-imgtok-shapes-64k`, then `scripts/audio.sh flow-latent-shapes`).
 First run: 16 minutes instead of ~42, colour and shape kept, count down to 88% (it sometimes
-puts two shapes touching): cheaper, coarser.
+puts two shapes touching): cheaper, coarser. The finer 16×16 latent scores ~50%: reconstructing
+perfectly does not make a latent easy to generate (chapter 26).
 
 **How you know G2 worked:** first run, 56 minutes on the card: 99% of seen captions and 100% of
 the never-seen purple triangles drawn right, against 89% / 70% for the best G1, no copies.

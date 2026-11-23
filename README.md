@@ -1017,7 +1017,9 @@ captions and **100%** of the never-seen purple triangles drawn right, against 89
 the best G1 on the same pictures (paired p 2e-43 / 7e-12); 10 steps already give 98%. **G3,
 the same flow in the tokenizer's 8×8×64 latent**, trains in 16 minutes instead of ~42 and keeps
 colour and shape, but draws 87.6% of seen captions right (G2 99.2%, paired 216–8): placing
-shapes on an 8×8 grid of latent cells, it sometimes puts two touching.
+shapes on an 8×8 grid of latent cells, it sometimes puts two touching. A finer 16×16 latent
+does *worse* (~50%, at 64 or 256 tokens alike): a latent that decodes perfectly is not
+necessarily one a generator can learn.
 - **The next four, built 2026-11-22 and queued for the 11-23 night**: recall capacity (the
   wide models hold all 64 keys the vocabulary has; narrow arms with 16-wide heads ask where a
   DeltaNet memory runs out, docs/19); the hybrid at ~101M against small-student-muon, with the

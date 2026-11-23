@@ -1,0 +1,58 @@
+# G3 on the 16x16 tokenizer's latent (docs/26 § "Is it the latent's resolution?"): G3 drew
+# shapes touching, plausibly because an 8x8 latent cell covers 8x8 pixels. imgtok-shapes16
+# (16x16x64 latent, already trained, lost nothing in G0) is the same test at a finer grid.
+# Arm: 2x2 latent cells per token: 64 tokens. Pair:
+#   flow-latent16-shapes     patch 1: 256 tokens of 4x4 pixels (G2's token count)
+#   flow-latent16p2-shapes   patch 2: 64 tokens of 8x8 pixels  (G3's token count and cost)
+# Otherwise identical to flow-latent-shapes (same width, depth, steps, schedule, seed).
+#
+#   python -m aksharallm.pictures latents imgtok-shapes16 --corpus data/vision/shapes64k \
+#       --out data/pictures/latents-imgtok-shapes16-64k
+#   python -m aksharallm.pictures codes imgtok-shapes16 --books 2 --corpus data/vision/shapes64k \
+#       --out data/pictures/codes-imgtok-shapes16-64k        # for the copy check
+#   scripts/audio.sh flow-latent16p2-shapes
+
+name: flow-latent16p2-shapes
+
+flow:
+  space: latent           # the tokenizer's latent, not pixels
+  image_size: 16          # set from the latents' shape at launch (16x16x64)
+  channels: 64
+  patch: 2                # 2x2 latent cells per token: 64 tokens
+  d_model: 384
+  n_layers: 8
+  n_heads: 6
+  dropout: 0.0
+  cfg_drop: 0.1
+  sample_steps: 50
+  tokenizer: checkpoints/imgtok-shapes16/ckpt_best.pt   # wrote the latents, decodes the drawings
+  books: 2
+
+data:
+  corpus: data/vision/shapes64k
+  latents: data/pictures/latents-imgtok-shapes16-64k
+  codes: data/pictures/codes-imgtok-shapes16-64k
+
+optim:
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 1000
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.99
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/flow-latent16p2-shapes
+  batch_size: 64
+  max_steps: 30000
+  eval_every: 1000
+  eval_batches: 8
+  sample_every: 5000
+  sample_k: 2
+  sample_guidance: 3.0
+  ckpt_every: 2000
+  log_every: 50
+  seed: 1337
+  resume: auto

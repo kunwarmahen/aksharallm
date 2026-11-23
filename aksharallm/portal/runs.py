@@ -131,6 +131,8 @@ LAUNCHERS: dict[str, dict] = {
     "flow-shapes": {"script": "scripts/audio.sh", "args": ["flow-shapes"]},
     # G3, the same flow in the tokenizer's latent (docs/26): `flow:` with `space: latent`.
     "flow-latent-shapes": {"script": "scripts/audio.sh", "args": ["flow-latent-shapes"]},
+    "flow-latent16-shapes": {"script": "scripts/audio.sh", "args": ["flow-latent16-shapes"]},
+    "flow-latent16p2-shapes": {"script": "scripts/audio.sh", "args": ["flow-latent16p2-shapes"]},
     # The speech recogniser (Phase 7, docs/23): same launcher, an `asr:` config.
     "asr-synth": {"script": "scripts/audio.sh", "args": ["asr-synth"]},
     "asr-libri100": {"script": "scripts/audio.sh", "args": ["asr-libri100"]},

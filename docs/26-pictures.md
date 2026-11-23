@@ -501,9 +501,45 @@ is a shape eight pixels out. The copies (0.7%) are all one-square captions, whic
 about two hundred possible layouts; identical code grids there are coincidence, not memory.
 
 So the trade is the one latent models make, measured: **~2.5× cheaper per step for a loss in
-placement precision**, at the same number of steps. Still open, and cheap to answer: G3 at
-matched compute (about 2.5× the steps, the same wall clock as G2), and a finer latent (the
-16×16 tokenizer, `imgtok-shapes16`, which is already trained and lost nothing in G0).
+placement precision**, at the same number of steps.
+
+### Is it the latent's resolution? No (2026-11-22)
+
+The obvious test of "8×8 cells are too coarse" is the 16×16 tokenizer, `imgtok-shapes16`, which
+is already trained and reconstructs every picture perfectly (G0). Two arms on its 16×16×64
+latent, each one config block from G3 (`configs/flow-latent16p2-shapes.yaml`,
+`flow-latent16-shapes.yaml`; same width, depth, steps, schedule and seed):
+
+| arm | latent | tokens | 30k steps | seen: count | seen: all three | held out |
+|---|---|---|---|---|---|---|
+| G2 | pixels, 12,288 numbers | 256 | ~42 min | 99.2% | **99.2%** | **100%** |
+| G3 | 8×8×64, 4,096 numbers | 64 | 16 min | 87.7% | **87.6%** | **79.7%** |
+| G3-16, 2×2 cells per token | 16×16×64, 16,384 numbers | 64 | 16 min | 52.3% | 51.4% | 32.0% |
+| G3-16, 1 cell per token | 16×16×64, 16,384 numbers | 256 | 44 min | 50.8% | 50.3% | 27.3% |
+
+The finer latent is **far worse**, not better (G3 against either arm: 748–99 and 761–92 drawings,
+p < 1e-120), and the two 16×16 arms are the same as each other (358–378, p 0.48): four times the
+tokens bought nothing. The drawings are clean, crisp shapes of the right colour and kind in the
+wrong number, with errors both ways (asked for three: two, four, five).
+
+So the explanation in the previous section was wrong, or at least not the main thing. What the
+numbers do say:
+
+* **A latent that reconstructs perfectly is not automatically one a generator can learn.** Both
+  tokenizers decode every picture right. The 16×16 one is shallower (two halvings, 1.28M
+  parameters against 4.55M) and its latent holds *more* numbers than the picture (16,384 against
+  12,288), so it is less a summary of the picture than a re-encoding of its pixels.
+* **It is not the token count**, since 64 and 256 tokens score the same on it, and not raw size
+  alone, since G2 draws 12,288 pixel values with 256 tokens at 99%.
+* Every latent here is a sum of four codebook vectors, so its values cluster rather than vary
+  smoothly the way pixels do; a flow learns a smooth path to a target, and a clustered target
+  may be what makes the bigger latent hard. That is a hypothesis, not a measurement.
+
+This is why real latent models do not use a plain VQ tokenizer's latent: Stable Diffusion's
+autoencoder is trained with a small KL penalty that keeps its latent smooth and roughly
+Gaussian, precisely so that a diffusion model can learn it. The next experiment that would
+answer this is a continuous autoencoder for G3 (no quantizer, a light KL term), which is also
+the planned first step of G4.
 
 ## Traps to keep
 
