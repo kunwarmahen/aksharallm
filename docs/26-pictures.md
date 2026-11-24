@@ -946,9 +946,10 @@ Four details, each pinned by a test (`tests/test_sharper.py`):
   in the photo.
 * **A late start.** The discriminator switches on at step 10,000 of 40,000, once the autoencoder
   already reconstructs (`ae-coco` was at 26.3 dB by then).
-* **Best is chosen after the start.** The pixel loss rises a little once the decoder trades
-  averages for texture, so "lowest val loss" would keep the blurry checkpoint from before the
-  adversary, and hand it to the flow model under the sharp run's name.
+* **Best is the latest checkpoint** once the adversary has started. The pixel loss rises as the
+  decoder trades averages for texture, so any rule that ranks by it picks the least sharp
+  checkpoint there is. The first version ranked by it "from the start on", picked step 10,000,
+  one step in, and measured sharpness 0.47 for a run whose last step reached 0.77.
 
 **The experiment** is two controlled pairs, each one change apart (a test asserts it):
 `ae-coco` → `ae-coco-gan` (the `adversarial:` section), and `flow-coco` → `flow-coco-gan` (the
@@ -965,10 +966,35 @@ python -m aksharallm.pictures coco-report flow-coco-gan --clip clip-coco --guida
 python -m aksharallm.pictures coco-compare A.json B.json             # same captions, paired
 ```
 
-**Status**: built and tested on the CPU. Queued for the night windows from 2026-11-24 00:30
-(`logs/queue/sharp-1124.sh`): `ae-coco-gan` (~50 min), its report against `ae-coco`'s,
-`flow-coco`'s reports again with the new columns, then `flow-coco-gan` (two nights) and its
-reports, paired.
+### Measured: the reconstructions (2026-11-23)
+
+`ae-coco-gan` trained 40,000 steps in 39 minutes on the card (by day, the user's go-ahead). The
+discriminator stayed contested throughout: right about 50–75% of the time on real patches and
+55–95% on reconstructed ones, never pinned near 100% (it has won) or 50% (it learns nothing).
+`ae-report`, 1,000 val photos, paired photo by photo against `ae-coco`:
+
+| | sharpness | top 5 | distance to real | PSNR |
+|---|---|---|---|---|
+| the real photos | 1.00 | 33.5% | 0.041 (two halves) | |
+| `ae-coco` | 0.54 | 25.0% | 0.054 | 27.75 dB |
+| `ae-coco-gan` | **0.77** | 25.6% | **0.022** | 26.06 dB |
+
+Closer to the real photo's fine detail on **992 of 1,000** photos (p 5e-282), and the price is
+PSNR on every photo (1,000 of 1,000, −1.7 dB): the decoder now puts texture where the photo has
+texture, not always in exactly the same pixels, and a pixel metric counts that as error twice.
+The judge's top 5 did not fall, which is the check that the texture is the photo's and not
+invented. The distance to the real photos fell **below** that between two halves of the real
+photos: in our judge's features a set of these reconstructions is as close to the real set as
+the real set is to itself.
+
+![Real photos (top), through ae-coco (middle), through ae-coco-gan (bottom)](img/ae-coco-gan.png)
+
+*Top: real val photos. Middle: through `ae-coco`. Bottom: through `ae-coco-gan`.* The bookcase,
+the bear's fur, the grass and the letters on the stop sign come back; faces at this size do not.
+
+**Status**: `flow-coco-gan` (the drawing model on this latent) is training on the card
+(`logs/queue/sharp-1124.sh`: by day until 23:50, then the 00:30–05:30 window), then its
+reports at guidance 1 and 3, each paired with `flow-coco`'s.
 
 ## Traps to keep
 

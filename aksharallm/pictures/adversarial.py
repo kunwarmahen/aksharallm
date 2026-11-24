@@ -36,6 +36,8 @@ Three details that keep it from going wrong, each with a test:
 * **It starts late** (`start_step`): the discriminator only switches on once the autoencoder
   already reconstructs. Against a decoder that outputs grey, it wins instantly and its gradient
   says nothing useful.
+* **"Best" is the latest checkpoint** once it has started (`train_ae.py`): the pixel loss rises
+  as texture replaces averages, so ranking by it picks the least sharp checkpoint there is.
 
 `weight: 0` (the default) builds no discriminator at all, so every earlier config trains
 exactly as before.

@@ -164,10 +164,13 @@ def main(argv=None) -> int:
               f"{ad.weight:g} (adaptive), from step {ad.start_step:,}")
 
     start_step, best, best_step = 0, float("inf"), -1
-    # With an adversary, "best" is chosen only among checkpoints it has trained: the pixel loss
-    # rises a little once the decoder trades exact averages for texture, so the plain rule would
-    # keep the blurry checkpoint from before the adversary started, forever.
-    best_from = cfg.adversarial.start_step if cfg.adversarial.weight > 0 else 0
+    # With an adversary, "best" is the LATEST checkpoint it has trained, never the lowest pixel
+    # loss: the pixel loss rises as the decoder trades exact averages for texture, so any rule
+    # that ranks by it picks the least-adversarial checkpoint there is. (First try: lowest val
+    # from start_step on. It picked start_step itself, one step in, and handed the flow model
+    # what was still ae-coco: sharpness 0.47 against 0.76 at the end of the same run.)
+    adversarial_best = cfg.adversarial.weight > 0
+    best_from = cfg.adversarial.start_step if adversarial_best else 0
     ckpt_last = out_dir / "ckpt_last.pt"
     resume = str(ckpt_last) if cfg.train.resume == "auto" and ckpt_last.is_file() else (
         cfg.train.resume if cfg.train.resume != "auto" else None)
@@ -296,7 +299,7 @@ def main(argv=None) -> int:
 
         if cfg.train.eval_every and step > start_step and step % cfg.train.eval_every == 0:
             val = evaluate(model, val_ds, device, cfg.train.batch_size, cfg.train.eval_batches)
-            improved = step >= best_from and (val < best or best_step < best_from)
+            improved = step >= best_from and (adversarial_best or val < best or best_step < best_from)
             if improved:
                 best, best_step = val, step
                 save(out_dir / "ckpt_best.pt", step)
@@ -329,7 +332,7 @@ def main(argv=None) -> int:
 
     save(ckpt_last, step, optimizer=opt.state_dict())
     val = evaluate(model, val_ds, device, cfg.train.batch_size, cfg.train.eval_batches)
-    if step >= best_from and (val < best or best_step < best_from):
+    if step >= best_from and (adversarial_best or val < best or best_step < best_from):
         best, best_step = val, step
         save(out_dir / "ckpt_best.pt", step)
     final = sample(step) if cfg.train.sample_images else None

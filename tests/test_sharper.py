@@ -147,14 +147,16 @@ def test_a_reconstruction_report_pairs_two_autoencoders_photo_by_photo():
         recon_compare(a, b | {"captions": ["z", "y", "x"]})
 
 
-def test_best_is_never_a_checkpoint_from_before_the_adversary(tmp_path, monkeypatch):
+def test_best_is_the_latest_checkpoint_the_adversary_trained_not_the_lowest_pixel_loss(
+        tmp_path, monkeypatch):
     # The pixel loss rises once the decoder trades averages for texture; make that happen on
-    # every eval, so the plain "lowest val" rule would keep step 2, before the adversary.
+    # every eval. "Lowest val" would keep step 2 (before the adversary); "lowest val from the
+    # start on" would keep step 6, its first step, which is what the first real run did.
     import aksharallm.pictures.train_ae as tae
     calls = iter(range(100))
     monkeypatch.setattr(tae, "evaluate", lambda *a, **k: 1.0 + next(calls))
     out = _run(tmp_path, "gan", weight=0.5, start_step=6)
-    assert torch.load(out / "ckpt_best.pt", weights_only=False)["step"] == 6
+    assert torch.load(out / "ckpt_best.pt", weights_only=False)["step"] == 11   # the last step
 
 
 def test_the_sharp_pair_is_each_one_change_from_its_control():
