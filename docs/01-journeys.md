@@ -826,7 +826,8 @@ python -m aksharallm.pictures coco-report flow-coco-gan --clip clip-coco --guida
 
 **How you know it worked:** sharpness moves toward 1.00 for the reconstructions *and* for the
 drawings, and the reconstructions' top 5 does not fall (texture that is not in the photo would
-cost it).
+cost it). Measured: reconstructions 0.54 → 0.77, drawings 0.47 → 0.68, and the drawings' top 5 at
+guidance 1 rose too (18% → 22%, p 0.005).
 
 **How you know G2 worked:** first run, 56 minutes on the card: 99% of seen captions and 100% of
 the never-seen purple triangles drawn right, against 89% / 70% for the best G1, no copies.

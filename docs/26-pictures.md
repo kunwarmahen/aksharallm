@@ -992,9 +992,40 @@ the real set is to itself.
 *Top: real val photos. Middle: through `ae-coco`. Bottom: through `ae-coco-gan`.* The bookcase,
 the bear's fur, the grass and the letters on the stop sign come back; faces at this size do not.
 
-**Status**: `flow-coco-gan` (the drawing model on this latent) is training on the card
-(`logs/queue/sharp-1124.sh`: by day until 23:50, then the 00:30–05:30 window), then its
-reports at guidance 1 and 3, each paired with `flow-coco`'s.
+### Measured: the drawings (2026-11-24)
+
+`flow-coco-gan` is `flow-coco` with one change, the latent it draws in. It trained 60,000 steps
+over the evening and the night window (val 1.241 against `flow-coco`'s 1.270). `coco-report` on
+the same 1,000 val captions and the same seeds, now with the real photos through each model's
+own autoencoder as the row a drawing is read against:
+
+| | sharpness | top 5, g1 | top 5, g3 | distance, g1 / g3 |
+|---|---|---|---|---|
+| real photos | 1.00 | 33.5% | 33.5% | 0.041 (two halves) |
+| real through `ae-coco` | 0.54 | 25.0% | | 0.054 |
+| real through `ae-coco-gan` | 0.77 | 25.6% | | 0.022 |
+| `flow-coco` drawings | 0.47 / 0.51 | 18.4% | 59.7% | 0.084 / 0.077 |
+| `flow-coco-gan` drawings | **0.68 / 0.71** | **22.1%** | 61.3% | **0.047 / 0.063** |
+
+* **The texture survives being drawn.** The drawings keep 68–71% of the real photos' fine detail
+  against 47–51% before, close to what their autoencoder can reproduce at all (77%). The worry
+  was that fine texture is the part of a picture a caption says least about, so a flow model
+  might average it away again; it mostly does not.
+* **And the drawings got more right, not only sharper.** At guidance 1, the honest number, top 5
+  goes 18.4 → 22.1% (paired per caption **101–64, p 0.005**): 86% of what the autoencoder alone
+  allows (25.6%). At guidance 3, 59.7 → 61.3% (111–95, p 0.30, no difference), where the judge
+  is past the real photos and rewards typical pictures anyway.
+* **The distance to the real photos nearly halves at guidance 1** (0.084 → 0.047), most of the
+  way to the 0.041 between two halves of the real photos. Guidance 3 moves the set away from real
+  photos again (0.063), as it should: it trades variety for typical pictures.
+
+![Real photos (top), flow-coco (middle), flow-coco-gan (bottom), same captions and seeds, guidance 3](img/flow-coco-gan.png)
+
+*Top: real val photos. Middle: `flow-coco`. Bottom: `flow-coco-gan`. Same captions, same noise,
+guidance 3.* The layouts match because the seeds do; the bear's fur, the grass, the kitchen
+counters and the crowd behind the batter are textured rather than painted flat. Faces and
+lettering are still wrong ("STOP" reads as a mirrored scrawl): at 64 px with this judge that is
+the next problem, and it is the caption's and the flow model's, no longer the autoencoder's.
 
 ## Traps to keep
 

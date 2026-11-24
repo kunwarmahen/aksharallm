@@ -1063,9 +1063,11 @@ judge and a flow model trained on it, every score beside the real photo's. Measu
 own caption is in the top 5 of 1,000 for 18% of captions at guidance 1 and 60% at guidance 3
 (the real photos: 34%, chance 0.5%); recognisable bears, stop signs and kitchens at 64 px, faces
 and lettering smeared. The scenes model draws 91% of seen scene captions right and 85% of held-out
-ones at guidance 3. **Sharper photos** (built, queued for the night): the photo autoencoder keeps
+ones at guidance 3. **Sharper photos**: the photo autoencoder keeps
 only 54% of a photo's fine detail and alone costs eight points of top 5, so `ae-coco-gan` adds a
-patch discriminator of our own beside its pixel loss, and `flow-coco-gan` draws in its latent.
+patch discriminator of our own beside its pixel loss (fine detail 54% → 77%, judge accuracy kept),
+and `flow-coco-gan` draws in its latent: drawings 47% → 68% of real fine detail, top 5 at
+guidance 1 18% → 22% (p 0.005), distance to the real photos nearly halved.
 - **The next four, built 2026-11-22 and queued for the 11-23 night**: recall capacity (the
   wide models hold all 64 keys the vocabulary has; narrow arms with 16-wide heads ask where a
   DeltaNet memory runs out, docs/19); the hybrid at ~101M against small-student-muon, with the
