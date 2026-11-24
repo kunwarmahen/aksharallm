@@ -104,7 +104,7 @@ def encode_latents(tokenizer_path: str | Path, corpus: str | Path, out_dir: str 
     if progress:
         progress(f"{n:,} latents {tuple(q.shape[1:])} -> {out_dir}/latents.npy "
                  f"({(out_dir / 'latents.npy').stat().st_size / 1e6:.0f} MB; "
-                 f"{q[0].numel():,} numbers a picture against {3 * 64 * 64:,} pixels)")
+                 f"{q[0].numel():,} numbers a picture against {3 * ds.manifest.size ** 2:,} pixels)")
     return meta
 
 

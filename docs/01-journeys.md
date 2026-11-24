@@ -829,6 +829,18 @@ drawings, and the reconstructions' top 5 does not fall (texture that is not in t
 cost it). Measured: reconstructions 0.54 → 0.77, drawings 0.47 → 0.68, and the drawings' top 5 at
 guidance 1 rose too (18% → 22%, p 0.005).
 
+The ninth is **larger photos**: the same two runs at 128×128, with the latent compressing exactly
+as much and the flow model reading the same 64 tokens, judged by the 64-px judge after shrinking:
+
+```bash
+python -m aksharallm.pictures coco --out data/vision/coco128 --size 128
+scripts/audio.sh ae-coco128-gan                                          # then flow-coco128-gan
+python -m aksharallm.pictures coco-report flow-coco128-gan --guidance 1
+```
+
+**How you know it worked:** faces and lettering in the gallery, and sharpness *at 64 px* above
+the 64-px model's; top 5 may move little, since the judge sees 64 px either way.
+
 **How you know G2 worked:** first run, 56 minutes on the card: 99% of seen captions and 100% of
 the never-seen purple triangles drawn right, against 89% / 70% for the best G1, no copies.
 

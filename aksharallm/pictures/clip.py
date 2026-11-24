@@ -259,7 +259,13 @@ def public_config(cc: ClipConfig) -> dict:
 
 @torch.no_grad()
 def picture_vectors(model: ClipModel, pics: np.ndarray, device="cpu", batch=256) -> torch.Tensor:
+    """Image vectors. Pictures larger than the model was trained on (128-px photos before a
+    64-px judge) are shrunk to its size first, so one judge scores every resolution on the same
+    pictures it can see: it measures what was drawn, not how much detail it is shown."""
     from ..vision.image import to_tensor
+    from .measure import shrink
+    if np.asarray(pics).shape[1] != model.cfg.image_size:
+        pics = shrink(pics, model.cfg.image_size)
     out = []
     for i in range(0, len(pics), batch):
         x = torch.from_numpy(to_tensor(np.asarray(pics[i:i + batch]))).to(device)

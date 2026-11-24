@@ -23,6 +23,11 @@ drawn. Then:
   or closer than that, so it is the ceiling a drawing should be read against, where the real
   photos are the ceiling the autoencoder is read against.
 
+**Larger photos** (128 px): the judge was trained at 64, so every picture is shrunk to 64
+before it is judged (`clip.picture_vectors`), and sharpness is reported twice: at the drawing's
+own size against the real photos at that size, and at the judge's size (`sharpness_judged`),
+which is the one that compares a 128-px model with a 64-px one on one scale.
+
 `recon_report` is the autoencoder's own version (`pictures ae-report`): every val photo through
 it, PSNR, sharpness and the same judge, per photo, so two autoencoders pair photo by photo.
 
@@ -75,13 +80,15 @@ def score(clip, drawn: np.ndarray, real: np.ndarray, captions: list[str], *,
     """Every number of the report, for drawings and for the real photos of the same captions
     (and, given `coded`, for the real photos through the drawer's autoencoder)."""
     from .clip import picture_vectors
-    from .measure import high_frequency
+    from .measure import high_frequency, shrink
     txt = torch.cat([clip.embed_texts(captions[i:i + 512], device).float().cpu()
                      for i in range(0, len(captions), 512)])
     out = {"n": len(captions)}
     vecs = {}
     shift = np.roll(np.arange(len(captions)), 1)          # caption i paired with photo i-1's
     hf_real = high_frequency(real).mean()
+    side, judged = np.asarray(real).shape[1], clip.cfg.image_size
+    hf_real_j = high_frequency(shrink(real, judged)).mean() if side != judged else hf_real
     sets = [("drawn", drawn), ("real", real)] + ([("coded", coded)] if coded is not None else [])
     for name, pics in sets:
         img = picture_vectors(clip, pics, device)
@@ -94,12 +101,17 @@ def score(clip, drawn: np.ndarray, real: np.ndarray, captions: list[str], *,
                      "top1": float(np.mean(rank < 1)), "top5": float(np.mean(rank < 5)),
                      "top10": float(np.mean(rank < 10)),
                      "correct": "".join("1" if r < 5 else "0" for r in rank),
-                     "sharpness": float(high_frequency(pics).mean() / hf_real)}
+                     "sharpness": float(high_frequency(pics).mean() / hf_real),
+                     # the same at the judge's size, so a 128-px model and a 64-px one compare
+                     # on one scale: does the extra detail survive shrinking to 64?
+                     "sharpness_judged": float(high_frequency(shrink(pics, judged)).mean()
+                                               / hf_real_j)}
     half = len(captions) // 2
     out["distance"] = {"drawn_vs_real": frechet(vecs["drawn"], vecs["real"]),
                        "real_half_vs_half": frechet(vecs["real"][:half], vecs["real"][half:])}
     if coded is not None:
         out["distance"]["coded_vs_real"] = frechet(vecs["coded"], vecs["real"])
+    out["side"], out["judged_at"] = int(side), int(judged)
     out["chance"] = {"top1": 1 / len(captions), "top5": 5 / len(captions),
                      "top10": 10 / len(captions)}
     return out
@@ -189,10 +201,12 @@ def gallery(result: dict, path, k: int = 16) -> None:
     """Real photo above each drawing, `k` captions, scaled x2."""
     from ..vision.image import write_png
     d, r = result["_drawn"][:k], result["_real"][:k]
-    gap = np.full((64, 3, 3), 255, dtype=np.uint8)
+    side = r.shape[1]
+    gap = np.full((side, 3, 3), 255, dtype=np.uint8)
     rows = [np.concatenate(sum(([x, gap] for x in row), [])[:-1], axis=1) for row in (r, d)]
     sep = np.full((3, rows[0].shape[1], 3), 255, dtype=np.uint8)
-    write_png(path, np.concatenate([rows[0], sep, rows[1]]).repeat(2, 0).repeat(2, 1))
+    scale = max(1, 128 // side)                     # 64-px galleries x2, 128-px ones as drawn
+    write_png(path, np.concatenate([rows[0], sep, rows[1]]).repeat(scale, 0).repeat(scale, 1))
 
 
 def public(result: dict) -> dict:

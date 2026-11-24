@@ -57,6 +57,21 @@ def high_frequency(images: np.ndarray, cutoff: float = 0.25) -> np.ndarray:
     return power[:, band].sum(axis=1) / (h * w)
 
 
+def shrink(images: np.ndarray, size: int) -> np.ndarray:
+    """Pictures `(N, S, S, 3)` -> `(N, size, size, 3)` by averaging each `S/size` square block
+    (the area filter `coco.square` packs with), so a 128-px picture shrunk to 64 is the 64-px
+    picture of the same photo, to within rounding. `S` must be a multiple of `size`."""
+    images = np.asarray(images)
+    s = images.shape[1]
+    if s == size:
+        return images
+    if s % size:
+        raise ValueError(f"cannot shrink {s}px pictures to {size}px: not a whole factor")
+    f = s // size
+    x = images.reshape(len(images), size, f, size, f, images.shape[3]).astype(np.float64)
+    return x.mean(axis=(2, 4)).round().astype(np.uint8)
+
+
 def sharpness(images: np.ndarray, reference: np.ndarray, cutoff: float = 0.25) -> float:
     """High-frequency power of `images` against that of `reference` (mean over each set): 1.0 is
     as much fine detail as the reference, below 1 is blurrier, above 1 is noisier. Ordered: the

@@ -16,6 +16,7 @@ circles" and writes those integers. The rest of the chapter goes the way real im
 | G4a | the caption read by our own frozen language model | 99.3%, 99.0% on a phrasing never seen | [G4a](#g4a-reading-a-sentence-2026-11-23) |
 | G4b | our own contrastive judge, and scenes that also say size and place | judge agrees with the reader at kappa ~0.9; scenes 91% seen (the autoencoder's ceiling), 85% held out at guidance 3 | [G4b](#g4b-a-judge-that-learned-2026-11-23) |
 | G4c | real COCO photos from people's captions | own caption in the top 5 of 1,000: 18% (g1) / 60% (g3), real photos 34%, chance 0.5% | [G4c](#g4c-real-photos-built-2026-11-23) |
+| G4c, sharper | a patch discriminator beside the photo autoencoder's pixel loss | drawings keep 68% of real fine detail (was 47%); top 5 at g1 22% (p 0.005) | [Sharper photos](#sharper-photos-built-2026-11-23) |
 
 Lessons 29–36 break one piece each: the judge, guidance, the velocity, the latent's scale, a
 held-out phrasing, the contrastive targets, the side the padding goes on, and the sign of the
@@ -26,7 +27,7 @@ flowchart LR
     G0["G0 image tokenizer<br/>(built)"] --> G1["G1 a caption to<br/>the codes (built)"]
     G0 --> G3["G3 flow in the<br/>latent (built)"]
     G2["G2 flow matching<br/>in pixels (built)"] --> G3
-    G1 --> G4["G4 text to image<br/>(G4a-c built)"]
+    G1 --> G4["G4 text to image<br/>(G4a-c built,<br/>sharper photos)"]
     G3 --> G4
     G4 --> G5["G5 short videos<br/>of moving shapes"]
 ```
@@ -1027,6 +1028,57 @@ counters and the crowd behind the batter are textured rather than painted flat. 
 lettering are still wrong ("STOP" reads as a mirrored scrawl): at 64 px with this judge that is
 the next problem, and it is the caption's and the flow model's, no longer the autoencoder's.
 
+## Larger photos (built 2026-11-24)
+
+A face in a 64-px photo is a handful of pixels, and the letters on a sign are one or two each.
+No model can draw what the picture has no room for. So the next step is the same recipe at
+**128×128**: four times the pixels, and in the latent four times the cells, so a face or a word
+gets cells of its own rather than sharing one with its surroundings.
+
+Two runs, each the 64-px one scaled rather than changed:
+
+| run | at 64 px | at 128 px |
+|---|---|---|
+| autoencoder (with the discriminator) | `ae-coco-gan`: 8×8×16 latent | `ae-coco128-gan`: **16×16×16** |
+| numbers a photo / pixels a photo | 1,024 / 12,288 (12×) | 4,096 / 49,152 (**12×**, the same) |
+| flow model | `flow-coco-gan`: 64 tokens of 16 | `flow-coco128-gan`: 2×2 patches, **64 tokens of 64** |
+| transformer, text model, steps | 512×12, frozen 300M, 60k | the same |
+
+The compression is kept equal on purpose (a test asserts it): squeezing 128-px photos into the
+64-px run's 1,024 numbers would make "is 128 better" a question about the latent, not the
+picture. And the flow model reads the same 64 tokens with the same transformer, so a step costs
+about the same and the comparison is about what is drawn, not how big the drawer is. The
+autoencoder costs more: four times the pixels a picture, so batch 32 for 60,000 steps.
+
+**Judging a 128-px drawing with a 64-px judge.** `clip-coco` was trained at 64 px. Every
+picture is shrunk to 64 before it is judged (`measure.shrink`, the same area filter the 64-px
+corpus was packed with; a test checks that a photo packed large and shrunk is the photo packed
+small). So the judge scores both models on the same pictures it can see, and any gain in top 5
+is a gain in what was drawn, not in how much detail the judge is shown. Sharpness is reported
+twice: at the drawing's own size against the real photos at that size, and **at 64 px**
+(`sharpness_judged`), the one that compares the two models on one scale. Reports read the val
+photos of the size the model trained on (`coco128-val`) unless told otherwise.
+
+What to expect, written before the run: the judge cannot see faces at 64 px either, so top 5 may
+move little; the case for 128 px is in the gallery (faces, text) and in sharpness at 64 px
+(detail that survives shrinking). If the drawings at 128 are no better *at 64*, the honest
+reading is that this model has no more to say about a caption at 128 than at 64.
+
+```bash
+python -m aksharallm.pictures coco --out data/vision/coco128 --size 128   # the three zips first
+scripts/audio.sh ae-coco128-gan
+python -m aksharallm.pictures ae-report ae-coco128-gan                    # reads coco128-val
+scripts/audio.sh flow-coco128-gan
+python -m aksharallm.pictures coco-report flow-coco128-gan --guidance 1
+python -m aksharallm.pictures coco-compare A.json B.json                  # vs flow-coco-gan's
+```
+
+**Status**: built and smoke-tested end to end on the CPU (an untrained model at chance). The
+COCO archives were downloaded again (they had been deleted once the 64-px corpus was packed).
+Queued for the night windows from 2026-11-25 00:30 (`logs/queue/larger-1125.sh`): the
+autoencoder (~2 h), its report, the flow model (~5 h, two nights), its reports paired with
+`flow-coco-gan`'s.
+
 ## Traps to keep
 
 1. **A score that borrows a name it does not earn.** There is no FID here: FID needs a
@@ -1070,8 +1122,9 @@ the next problem, and it is the caption's and the flow model's, no longer the au
 | 17 | [`pictures/scenes.py`](../aksharallm/pictures/scenes.py) → `render`, `HELD_OUT` | G4b's second corpus: size and place in one column, two held-out combinations; the reader's `size_of` and `where_of` read them back |
 | 18 | [`pictures/clip.py`](../aksharallm/pictures/clip.py) → `clip_loss`, `ClipModel`, `rank`, `agreement` · [`train_clip.py`](../aksharallm/pictures/train_clip.py) | G4b: every same-fact caption a match, padding masked out of the text head, a picture's closest caption among every caption its corpus can say, Cohen's kappa against the reader |
 | 19 | [`pictures/coco.py`](../aksharallm/pictures/coco.py) → `pack`, `square` · [`pictures/photos.py`](../aksharallm/pictures/photos.py) → `score`, `frechet` | G4c: COCO packed from the archives in order with its captions; the photo report, every number beside the real photos' and chance, the Fréchet distance by two `eigh` calls |
-| 20 | [`pictures/adversarial.py`](../aksharallm/pictures/adversarial.py) → `PatchDiscriminator`, `d_loss`, `g_loss`, `adaptive_weight` · [`measure.py`](../aksharallm/pictures/measure.py) → `sharpness` · [`photos.py`](../aksharallm/pictures/photos.py) → `recon_report`, `through` | sharper photos: the discriminator beside the pixel loss, its late start and adaptive weight in `train_ae.py`, and the fine-detail measure that says whether it worked |
-| 21 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
+| 20 | [`pictures/measure.py`](../aksharallm/pictures/measure.py) → `shrink` · [`pictures/clip.py`](../aksharallm/pictures/clip.py) → `picture_vectors` | larger photos: a 128-px drawing shrunk by the same area filter the 64-px corpus was packed with, before the 64-px judge sees it |
+| 21 | [`pictures/adversarial.py`](../aksharallm/pictures/adversarial.py) → `PatchDiscriminator`, `d_loss`, `g_loss`, `adaptive_weight` · [`measure.py`](../aksharallm/pictures/measure.py) → `sharpness` · [`photos.py`](../aksharallm/pictures/photos.py) → `recon_report`, `through` | sharper photos: the discriminator beside the pixel loss, its late start and adaptive weight in `train_ae.py`, and the fine-detail measure that says whether it worked |
+| 22 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
 
 Tests: `tests/test_pictures.py`. They cover the reader on every count × colour × shape, the
 reader seeing blur and recolouring, the codebook prefix ignoring later codebooks, batch
@@ -1136,7 +1189,11 @@ carries the discriminator on and refuses to restart it; two reconstruction repor
 photo; both new configs are one change from their controls; the portal lists reconstruction
 reports. Ten mutants were checked red (one, the rule for best, only after a test was added for
 it; and the decoder-step check first passed with its sign flipped, on a flat test picture where
-GroupNorm had no variance to work with).
+GroupNorm had no variance to work with). Larger photos add four to `tests/test_coco.py`: a
+photo packed large and shrunk is the photo packed small, the judge shrinks larger photos to its
+own size, the 128-px runs keep the 64-px runs' compression and sequence length (it caught the
+first config, whose 16×16×8 latent compressed twice as hard), and a report reads the val photos
+of the size its model trained on. Four mutants were checked red.
 
 G4a adds five: every phrasing says its facts and the held-out phrasings are never drawn for
 training; a text model reads vectors and its empty caption is zeros; the text encoder pads with

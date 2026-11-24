@@ -152,6 +152,9 @@ LAUNCHERS: dict[str, dict] = {
     # Sharper photos: ae-coco plus a patch discriminator, and flow-coco on its latent.
     "ae-coco-gan": {"script": "scripts/audio.sh", "args": ["ae-coco-gan"]},
     "flow-coco-gan": {"script": "scripts/audio.sh", "args": ["flow-coco-gan"]},
+    # Larger photos: the same two at 128x128.
+    "ae-coco128-gan": {"script": "scripts/audio.sh", "args": ["ae-coco128-gan"]},
+    "flow-coco128-gan": {"script": "scripts/audio.sh", "args": ["flow-coco128-gan"]},
     # The speech recogniser (Phase 7, docs/23): same launcher, an `asr:` config.
     "asr-synth": {"script": "scripts/audio.sh", "args": ["asr-synth"]},
     "asr-libri100": {"script": "scripts/audio.sh", "args": ["asr-libri100"]},

@@ -1067,7 +1067,9 @@ ones at guidance 3. **Sharper photos**: the photo autoencoder keeps
 only 54% of a photo's fine detail and alone costs eight points of top 5, so `ae-coco-gan` adds a
 patch discriminator of our own beside its pixel loss (fine detail 54% → 77%, judge accuracy kept),
 and `flow-coco-gan` draws in its latent: drawings 47% → 68% of real fine detail, top 5 at
-guidance 1 18% → 22% (p 0.005), distance to the real photos nearly halved.
+guidance 1 18% → 22% (p 0.005), distance to the real photos nearly halved. **Larger photos**
+(built, queued): the same recipe at 128×128 (`ae-coco128-gan`, `flow-coco128-gan`), the latent
+compressing exactly as much and the drawer reading as many tokens, judged after shrinking to 64.
 - **The next four, built 2026-11-22 and queued for the 11-23 night**: recall capacity (the
   wide models hold all 64 keys the vocabulary has; narrow arms with 16-wide heads ask where a
   DeltaNet memory runs out, docs/19); the hybrid at ~101M against small-student-muon, with the

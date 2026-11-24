@@ -1,0 +1,57 @@
+# Larger photos (docs/26 § "Larger photos"): flow-coco-gan drawing at 128x128. The latent is
+# ae-coco128-gan's 16x16x16; with 2x2 patches that is 64 tokens of 64 numbers, the same sequence
+# length and transformer as flow-coco-gan (64 tokens of 16), so the step costs about the same and
+# the comparison is about the picture, not the model's size. Judged by clip-coco at 64 px (each
+# drawing shrunk), against the 64-px model on the same captions and seeds.
+#
+#   scripts/audio.sh flow-coco128-gan        # needs ae-coco128-gan and its latents
+#   python -m aksharallm.pictures coco-report flow-coco128-gan --corpus data/vision/coco128-val
+
+name: flow-coco128-gan
+
+flow:
+  space: latent
+  image_size: 16          # set from the latents' shape at launch (16x16x16)
+  channels: 16
+  patch: 2                # 2x2 latent cells a token: 64 tokens, as flow-coco-gan
+  d_model: 512
+  n_layers: 12
+  n_heads: 8
+  dropout: 0.0
+  cfg_drop: 0.1
+  sample_steps: 50
+  tokenizer: checkpoints/ae-coco128-gan/ckpt_best.pt
+  books: 2
+  text: checkpoints/small-code-py/ckpt_best.pt
+  text_tokenizer: data/blend/tokenizer.json
+  text_len: 32
+  text_device: auto
+  text_cache: 30000
+
+data:
+  corpus: data/vision/coco128
+  latents: data/pictures/latents-ae-coco128-gan
+  codes: data/pictures/none              # no VQ codes for photos: no copy check
+
+optim:
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 1000
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.99
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/flow-coco128-gan
+  batch_size: 128
+  max_steps: 60000
+  eval_every: 2000
+  eval_batches: 8
+  sample_every: 0
+  sample_k: 0
+  ckpt_every: 2000
+  log_every: 50
+  seed: 1337
+  resume: auto

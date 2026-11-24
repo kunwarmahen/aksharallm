@@ -82,11 +82,12 @@ def cmd_scenes(args) -> int:
 
 
 def cmd_coco(args) -> int:
-    """G4c: pack COCO 2017 (train -> OUT, val -> OUT-val) as 64x64 picture corpora."""
+    """G4c: pack COCO 2017 (train -> OUT, val -> OUT-val) as square picture corpora (64x64 by
+    default; `--size 128` for the larger-photo runs)."""
     from .coco import pack
     for split in args.splits.split(","):
         out = args.out if split == "train" else f"{args.out}-{split}"
-        pack(args.raw, out, split, limit=args.limit or None, workers=args.workers)
+        pack(args.raw, out, split, size=args.size, limit=args.limit or None, workers=args.workers)
     return 0
 
 
@@ -452,7 +453,7 @@ def cmd_coco_report(args) -> int:
     d = _load_drawer(args.checkpoint, device)
     cp = find_checkpoint(args.clip, root)
     clip, _ = load_clip(cp, device, root)
-    r = report(d, clip, root / args.corpus, n=args.n, guidance=args.guidance, seed=args.seed,
+    r = report(d, clip, root / _val_corpus(args.corpus, d.blob), n=args.n, guidance=args.guidance, seed=args.seed,
                steps=args.steps, device=device, clip_path=str(cp.relative_to(root)
                                                              if cp.is_relative_to(root) else cp))
     run = d.path.parent.name
@@ -477,15 +478,17 @@ _ROWS = {"real": "real photo", "coded": "real, coded", "drawn": "drawn"}
 
 
 def _photo_table(r: dict, drawn: str = "drawn") -> None:
+    small = r.get("side") and r.get("side") != r.get("judged_at")
     print(f"\n  {'':<16} {'match':>7} {'mismatch':>9} {'top-1':>7} {'top-5':>7} {'top-10':>7} "
-          f"{'sharpness':>10}")
+          f"{'sharpness':>10}" + (f" {'at ' + str(r['judged_at']) + 'px':>9}" if small else ""))
     for name in ("real", "coded", "drawn"):
         if name not in r:
             continue
         x = r[name]
         label = drawn if name == "drawn" else _ROWS[name]
         print(f"  {label:<16} {x['match']:>7.3f} {x['mismatch']:>9.3f} {x['top1'] * 100:>6.1f}% "
-              f"{x['top5'] * 100:>6.1f}% {x['top10'] * 100:>6.1f}% {x.get('sharpness', 1.0):>10.2f}")
+              f"{x['top5'] * 100:>6.1f}% {x['top10'] * 100:>6.1f}% {x.get('sharpness', 1.0):>10.2f}"
+              + (f" {x.get('sharpness_judged', 1.0):>9.2f}" if small else ""))
 
 
 def _distance(r: dict, what: str) -> None:
@@ -499,6 +502,17 @@ def _distance(r: dict, what: str) -> None:
           "1.00 as sharp, below blurrier")
 
 
+def _val_corpus(given, blob) -> str:
+    """The corpus a photo report reads: the one given, else the val half of the corpus the
+    model trained on (`coco128` -> `coco128-val`), so a 128-px model is never compared with
+    64-px photos by accident."""
+    if given:
+        return given
+    corpus = ((blob.get("config") or {}).get("data") or {}).get("corpus") or "data/vision/coco64"
+    corpus = str(corpus).rstrip("/")
+    return corpus if corpus.endswith("-val") else f"{corpus}-val"
+
+
 def cmd_ae_report(args) -> int:
     """Sharper photos: an autoencoder on the first N val photos, judged as drawings would be."""
     from .clip import load_clip
@@ -510,7 +524,7 @@ def cmd_ae_report(args) -> int:
     coder, blob = load_coder(path, device)
     cp = find_checkpoint(args.clip, root)
     clip, _ = load_clip(cp, device, root)
-    r = recon_report(coder, clip, root / args.corpus, n=args.n, device=device,
+    r = recon_report(coder, clip, root / _val_corpus(args.corpus, blob), n=args.n, device=device,
                      clip_path=str(cp.relative_to(root) if cp.is_relative_to(root) else cp))
     run, step = path.parent.name, int(blob.get("step", -1))
     stem = f"recon-{run}-step{step}-n{args.n}"
@@ -587,9 +601,11 @@ def main(argv=None) -> int:
     s.add_argument("--n", type=int, default=64000)
     s.add_argument("--seed", type=int, default=0)
     s.set_defaults(fn=cmd_scenes)
-    s = sub.add_parser("coco", help="G4c: pack COCO 2017 photos + captions at 64x64")
+    s = sub.add_parser("coco", help="G4c: pack COCO 2017 photos + captions (64x64, or --size 128)")
     s.add_argument("--raw", default="data/coco/raw", help="folder with the three downloaded zips")
     s.add_argument("--out", default="data/vision/coco64")
+    s.add_argument("--size", type=int, default=64, help="side in pixels (64, or 128 for the "
+                                                       "larger-photo runs)")
     s.add_argument("--splits", default="val,train")
     s.add_argument("--limit", type=int, default=0, help="first N photos per split (0 = all)")
     s.add_argument("--workers", type=int, default=12)
@@ -646,7 +662,8 @@ def main(argv=None) -> int:
     s = sub.add_parser("coco-report", help="G4c: draw from COCO val captions, judged by clip-coco")
     s.add_argument("checkpoint", help="a G4c flow model (.pt or run name, e.g. flow-coco)")
     s.add_argument("--clip", default="clip-coco", help="the contrastive model that judges")
-    s.add_argument("--corpus", default="data/vision/coco64-val")
+    s.add_argument("--corpus", default=None,
+                   help="val photos (default: the val half of the corpus the model trained on)")
     s.add_argument("--n", type=int, default=1000, help="captions (one drawing each)")
     s.add_argument("--guidance", type=float, default=3.0)
     s.add_argument("--steps", type=int, default=None)
@@ -657,7 +674,8 @@ def main(argv=None) -> int:
                                          "(PSNR, sharpness, judged by clip-coco)")
     s.add_argument("checkpoint", help="a photo autoencoder (.pt or run name, e.g. ae-coco-gan)")
     s.add_argument("--clip", default="clip-coco", help="the contrastive model that judges")
-    s.add_argument("--corpus", default="data/vision/coco64-val")
+    s.add_argument("--corpus", default=None,
+                   help="val photos (default: the val half of the corpus the model trained on)")
     s.add_argument("--n", type=int, default=1000, help="photos")
     s.add_argument("--against", default=None,
                    help="pair with another autoencoder's report (a .json, or a run name whose "

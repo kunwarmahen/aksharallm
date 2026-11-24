@@ -1,0 +1,50 @@
+# Larger photos (docs/26 § "Larger photos"): ae-coco-gan's recipe at 128x128. Same encoder and
+# decoder (three halvings: 128 -> 16x16), same discriminator, same adaptive weight. The latent is
+# 16x16x16 = 4,096 numbers for 49,152 pixels, the same 12x compression as ae-coco-gan's 8x8x16
+# for 12,288, spread over four times the cells: where a face or a letter is gets cells of its
+# own. Batch 32 (four times the pixels a picture) and 60,000 steps.
+#
+#   python -m aksharallm.pictures coco --out data/vision/coco128 --size 128
+#   scripts/audio.sh ae-coco128-gan
+#   python -m aksharallm.pictures ae-report ae-coco128-gan --corpus data/vision/coco128-val
+
+name: ae-coco128-gan
+
+autoencoder:
+  image_size: 128
+  channels: [64, 128, 256]
+  latent_dim: 16
+  kl_weight: 1.0e-3
+
+adversarial:
+  weight: 0.5             # times the adaptive factor: half as strong as the pixel loss
+  start_step: 15000       # a quarter of the run, as in ae-coco-gan
+  channels: [64, 128, 256]
+  lr: 2.0e-4
+
+data:
+  corpus: data/vision/coco128
+  holdout: data/vision/none          # photos have no held-out combination
+
+optim:
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 500
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.99
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/ae-coco128-gan
+  batch_size: 32
+  max_steps: 60000
+  eval_every: 2000
+  eval_batches: 8
+  sample_every: 5000
+  sample_images: 128
+  ckpt_every: 2000
+  log_every: 100
+  seed: 1337
+  resume: auto

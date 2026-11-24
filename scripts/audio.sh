@@ -215,10 +215,11 @@ picture_corpus() {
         elif [ "$c" = "data/vision/scenes64k" ]; then
             echo "    $c is missing. Rendering 64,000 scenes (size and place, ~20 s)..."
             $PY -m aksharallm.pictures scenes --out "$c"
-        elif [ "$c" = "data/vision/coco64" ]; then
+        elif [ "$c" = "data/vision/coco64" ] || [ "$c" = "data/vision/coco128" ]; then
+            local px=${c#data/vision/coco}
             if [ -s data/coco/raw/train2017.zip ] && [ -s data/coco/raw/annotations_trainval2017.zip ]; then
-                echo "    $c is missing. Packing COCO 2017 at 64x64 (~3 min)..."
-                $PY -m aksharallm.pictures coco --out "$c" || exit 1
+                echo "    $c is missing. Packing COCO 2017 at ${px}x${px} (~3-6 min)..."
+                $PY -m aksharallm.pictures coco --out "$c" --size "$px" || exit 1
             else
                 echo "    ERROR: $c is missing and so is COCO in data/coco/raw/ (docs/26 § G4c: download it first)" >&2
                 exit 1
@@ -229,7 +230,8 @@ picture_corpus() {
         fi
     fi
     sz=$(stat -c%s "$c/images.bin")
-    echo "    $c/images.bin: $((sz / 1000000)) MB = $((sz / 12288)) pictures at 64x64"
+    local side; side=$($PY -c "import json,sys; print(json.load(open(sys.argv[1]))['size'])" "$c/manifest.json" 2>/dev/null || echo 64)
+    echo "    $c/images.bin: $((sz / 1000000)) MB = $((sz / (side * side * 3))) pictures at ${side}x${side}"
     if grep -q '"kind": "coco"' "$c/manifest.json"; then
         # photos: no reader. Check the captions instead: every photo must have some.
         $PY - "$c" <<'PYEOF' || exit 1

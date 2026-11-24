@@ -212,7 +212,10 @@ async function showCocoReport(name) {
   const recon = name.startsWith('recon-');
   const row = (label, x) => `<tr><td>${label}</td><td>${fmt.num(x.match, 3)}</td><td>${fmt.num(x.mismatch, 3)}</td>`
     + `<td>${pct(x.top1)}</td><td><b>${pct(x.top5)}</b></td><td>${pct(x.top10)}</td>`
-    + `<td>${x.sharpness == null ? '–' : fmt.num(x.sharpness, 2)}</td></tr>`;
+    + `<td>${x.sharpness == null ? '–' : fmt.num(x.sharpness, 2)}`
+    + (r.side && r.side !== r.judged_at && x.sharpness_judged != null
+      ? ` <span class="dim">(${fmt.num(x.sharpness_judged, 2)} at ${r.judged_at} px)</span>` : '')
+    + '</td></tr>';
   const d = r.distance || {};
   $('#pc-coco-table').innerHTML = '<thead><tr><th></th><th>match</th><th>another photo’s caption</th>'
     + '<th>top-1</th><th>top-5</th><th>top-10</th><th>sharpness</th></tr></thead><tbody>'
@@ -227,7 +230,9 @@ async function showCocoReport(name) {
     + `<b>${fmt.num(d.drawn_vs_real, 4)}</b>`
     + (d.coded_vs_real != null ? `, the real photos through its autoencoder ${fmt.num(d.coded_vs_real, 4)}` : '')
     + `, two halves of the real photos ${fmt.num(d.real_half_vs_half, 4)}. `
-    + '<b>Sharpness</b> is fine detail against the real photos’: 1.00 as sharp, below 1 blurrier.';
+    + '<b>Sharpness</b> is fine detail against the real photos’: 1.00 as sharp, below 1 blurrier.'
+    + (r.side && r.side !== r.judged_at
+      ? ` These are ${r.side}-px pictures; the judge sees them shrunk to ${r.judged_at} px, and the number in brackets is sharpness at that size, the one to compare with a ${r.judged_at}-px model.` : '');
   $('#pc-coco-gallery').innerHTML = (r.gallery_png || []).map((src) => `<figure><img src="${src}" loading="lazy" `
     + 'alt="real photos above, drawings of their captions below"><figcaption>real photos above, drawings of the same captions below: '
     + (r.captions || []).slice(0, 16).map((c, i) => `${i + 1}. ${escHtml(c)}`).join(' · ') + '</figcaption></figure>').join('');

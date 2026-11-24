@@ -225,7 +225,8 @@
         judges what comes back, in the same table (its reports are the <code>recon-…</code>
         ones). <code>ae-coco</code> was trained on pixel error alone and keeps about half the
         fine detail; <code>ae-coco-gan</code> adds a discriminator that tells real patches from
-        reconstructed ones, so a smear stops being the cheapest guess.
+        reconstructed ones, so a smear stops being the cheapest guess. The <code>…128…</code> runs
+        do the same at 128×128 pixels, four times the detail, judged shrunk to 64.
       </p>
       <p class="panel-note">
         Train with the dashboard's <strong>Start</strong>: <code>ae-coco</code> (the photo

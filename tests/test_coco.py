@@ -166,3 +166,56 @@ def test_the_autoencoder_report_on_photos_is_psnr_only(tmp_path):
     ds = ImageCaptions(tmp_path / "c", split="val", val_frac=1.0)
     r = judge_set(PictureAutoencoder(AEConfig(image_size=64, channels=[8, 8, 8], latent_dim=2)), ds, 4, "cpu")
     assert r["all"] is None and r["n"] == 4 and np.isfinite(r["psnr"])
+
+
+def test_a_photo_packed_large_and_shrunk_is_the_photo_packed_small():
+    """Larger photos are judged by the 64-px judge after `shrink`, so shrinking must give what
+    packing at the smaller size gives (to within rounding), or the 128-px model is judged on
+    different photos from the 64-px one."""
+    from PIL import Image
+
+    from aksharallm.pictures.coco import square
+    from aksharallm.pictures.measure import shrink
+    y, x = np.mgrid[0:96, 0:150]
+    rgb = np.stack([(x * 1.7) % 256, (y * 2.3) % 256, ((x + y) * 0.9) % 256], -1).astype(np.uint8)
+    im = Image.fromarray(rgb)
+    big, small = square(im, 32), square(im, 16)
+    assert big.shape == (32, 32, 3) and small.shape == (16, 16, 3)
+    assert np.abs(shrink(big[None], 16)[0].astype(int) - small).max() <= 2
+    with pytest.raises(ValueError, match="whole factor"):
+        shrink(big[None], 12)
+
+
+def test_the_judge_shrinks_larger_photos_to_its_own_size():
+    from aksharallm.pictures.clip import ClipConfig, ClipModel, picture_vectors
+    from aksharallm.pictures.measure import shrink
+    torch.manual_seed(0)
+    m = ClipModel(ClipConfig(image_size=16, patch=4, d_vision=8, n_layers=1, n_heads=2, d_text=8,
+                             d_embed=4, text="s", text_len=4, text_dim=4)).eval()
+    big = np.random.default_rng(0).integers(0, 256, (3, 32, 32, 3), dtype=np.uint8)
+    assert torch.allclose(picture_vectors(m, big), picture_vectors(m, shrink(big, 16)))
+
+
+def test_the_larger_photo_runs_keep_the_compression_and_the_sequence_length():
+    """128 px against 64 px is only about the picture if the latent compresses as much and the
+    flow model reads as many tokens: four times the cells, a quarter of the channels, 2x2
+    patches."""
+    from aksharallm.pictures.train_ae import load_ae_config
+    from aksharallm.pictures.train_flow import load_flow_config
+    a64, a128 = (load_ae_config(f"configs/{n}.yaml").autoencoder for n in ("ae-coco-gan", "ae-coco128-gan"))
+    numbers = [a.grid ** 2 * a.latent_dim for a in (a64, a128)]
+    assert 3 * a64.image_size ** 2 / numbers[0] == 3 * a128.image_size ** 2 / numbers[1]
+    f64, f128 = (load_flow_config(f"configs/{n}.yaml").flow for n in ("flow-coco-gan", "flow-coco128-gan"))
+    assert (a64.grid // f64.patch) ** 2 == (a128.grid // f128.patch) ** 2 == 64
+    assert f128.channels == a128.latent_dim and f64.channels == a64.latent_dim
+    for k in ("d_model", "n_layers", "n_heads", "text", "text_len"):
+        assert getattr(f64, k) == getattr(f128, k), k
+
+
+def test_a_photo_report_reads_the_val_photos_of_the_size_the_model_trained_on():
+    from aksharallm.pictures.__main__ import _val_corpus
+    cfg = lambda c: {"config": {"data": {"corpus": c}}}         # noqa: E731
+    assert _val_corpus(None, cfg("data/vision/coco128")) == "data/vision/coco128-val"
+    assert _val_corpus(None, cfg("data/vision/coco128-val")) == "data/vision/coco128-val"
+    assert _val_corpus(None, {}) == "data/vision/coco64-val"
+    assert _val_corpus("x", cfg("data/vision/coco128")) == "x"
