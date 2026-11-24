@@ -61,7 +61,9 @@ class LongContext:
 
     def overview(self, ckpt_id: str | None = None) -> dict:
         """Checkpoints, their current window, and whether a job is running."""
-        cks = [c.as_dict() for c in self.store.list()]
+        # Text models, plus the recall models its recall test scores; a codec or picture
+        # model has no positions to extend (see infer/checkpoints.KINDS).
+        cks = [c.as_dict() for c in self.store.list() if c.kind in ("text", "recall")]
         out = {
             "checkpoints": cks,
             "methods": [m for m in METHODS],

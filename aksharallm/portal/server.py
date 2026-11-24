@@ -893,7 +893,7 @@ class Handler(BaseHTTPRequestHandler):
             ngram=int(sent.get("ngram", 0) or 0),
         )
         messages = [m for m in (data.get("messages") or [])
-                    if isinstance(m, dict) and m.get("role") in ("user", "assistant")
+                    if isinstance(m, dict) and m.get("role") in ("user", "assistant", "tool")
                     and str(m.get("content", "")).strip()]
 
         stream = self.playground.stream(
@@ -904,6 +904,7 @@ class Handler(BaseHTTPRequestHandler):
             probe=(str(data["probe"]) if data.get("probe") else None),
             task=(str(data["task"]) if data.get("task") else None),
             adapter=(str(data["adapter"]) if data.get("adapter") else None),
+            tools=bool(data.get("tools")),
             record=data.get("record", True) is not False)
 
         self.send_response(200)

@@ -29,6 +29,11 @@ from .history import History, record_from
 from .tasks import TASKS_BY_ID, catalogue
 
 
+#: How many tool calls one chat answer may make before its next turn is taken as final.
+#: The same cap as the Tools tab's agent (`tools.agent.solve`).
+MAX_TOOL_CALLS = 3
+
+
 class Playground:
     """Everything the Playground tab and `aksharallm.infer.cli` need, in one place."""
 
@@ -74,7 +79,7 @@ class Playground:
                messages: list[dict] | None = None, system: str | None = None,
                params: SamplingParams | None = None, device: str | None = None,
                probe: str | None = None, task: str | None = None,
-               adapter: str | None = None,
+               adapter: str | None = None, tools: bool = False,
                record: bool = True) -> Iterator[tuple[str, object]]:
         """Generate, then grade and record. Yields the engine's events plus two of its own.
 
@@ -99,8 +104,86 @@ class Playground:
         stream = self.engine.stream(ckpt_id, mode, prompt=prompt, messages=messages,
                                     system=system, params=params, device=device,
                                     adapter=adapter)
+        if tools and mode == "chat" and code_task is None:
+            # Validated eagerly above (the first turn's stream exists), so a bad request is
+            # still a 4xx; the later turns are opened inside the generator.
+            stream = self._tool_chat(stream, ckpt_id=ckpt_id, prompt=prompt,
+                                     messages=messages, system=system, params=params,
+                                     device=device, adapter=adapter)
         return self._wrap(stream, mode=mode, prompt=prompt, system=system, probe=probe,
                           task=code_task, record=record)
+
+    def _tool_chat(self, first, *, ckpt_id: str, prompt: str, messages: list[dict] | None,
+                   system: str | None, params: SamplingParams | None, device: str | None,
+                   adapter: str | None) -> Iterator[tuple[str, object]]:
+        """A chat turn in which the model may call Python, as the Tools tab's agent does.
+
+            the model's turn contains <tool>code</tool>?
+              -> run the code in the sandbox (infer/sandbox.py — the same isolated process
+                 the code tasks and GRPO's tool reward use), add the call and a `tool` turn
+                 holding its output, and let the model take another turn (at most
+                 MAX_TOOL_CALLS times)
+              -> otherwise that turn is the answer
+
+        The call and the tool turn are rendered exactly as `tools/problems.conversation`
+        writes them for training, so a tool-trained model sees what it learned to expect.
+        A model that never learned the format never writes `<tool>`, and this is a no-op.
+
+        Events: the engine's, plus `("tool", {code, output, status})` between turns. The
+        final `done` carries `turns` — every message this exchange added, tool turns
+        included — so the page's chat history holds what the model actually saw.
+        """
+        from ..tools.agent import TOOL
+        from ..tools.problems import TOOL_CLOSE, TOOL_OPEN
+
+        turns = list(messages or []) + [{"role": "user", "content": prompt}]
+        added = [{"role": "user", "content": prompt}]
+        transcript, tokens, calls, elapsed = [], 0, 0, 0.0
+        stream = first
+        while True:
+            text, stats = "", {}
+            try:
+                for kind, payload in stream:
+                    if kind == "start":
+                        if calls == 0:
+                            yield kind, payload
+                    elif kind == "delta":
+                        text += payload
+                        yield kind, payload
+                    elif kind == "done":
+                        stats = dict(payload)
+            finally:
+                stream.close()
+            tokens += stats.get("tokens") or 0
+            elapsed += stats.get("elapsed_s") or 0.0
+            m = TOOL.search(text)
+            if m and calls < MAX_TOOL_CALLS:
+                code = m.group(1)
+                res = sandbox.run_program(code, timeout_s=min(5.0, self.cfg.sandbox_timeout_s),
+                                          memory_mb=self.cfg.sandbox_memory_mb,
+                                          enabled=self.cfg.run_tests)
+                output = (res.stdout.strip() or res.detail)[:300]
+                call = {"role": "assistant", "content": f"{TOOL_OPEN}\n{code}\n{TOOL_CLOSE}"}
+                tool = {"role": "tool", "content": output}
+                turns += [call, tool]
+                added += [call, tool]
+                transcript += [text, f"[tool output] {output}"]
+                calls += 1
+                yield "tool", {"code": code, "output": output, "status": res.status,
+                               "call": calls}
+                stream = self.engine.stream(ckpt_id, "chat", prompt="", messages=turns,
+                                            system=system, params=params, device=device,
+                                            adapter=adapter)
+                continue
+            added.append({"role": "assistant", "content": text})
+            transcript.append(text)
+            # Totals over every turn of the exchange (the sandbox time is not in `elapsed`).
+            stats.update(text=text, tokens=tokens, tool_calls=calls, turns=added,
+                         elapsed_s=elapsed,
+                         tok_per_s=(tokens / elapsed) if elapsed > 0 else None,
+                         transcript="\n".join(transcript))
+            yield "done", stats
+            return
 
     def _wrap(self, stream, *, mode: str, prompt: str, system: str | None,
               probe: str | None, task, record: bool) -> Iterator[tuple[str, object]]:
@@ -129,7 +212,8 @@ class Playground:
 
                 if record:
                     row = record_from(stats, mode=mode, prompt=prompt,
-                                      output=stats.get("text", text), probe=probe,
+                                      output=stats.get("transcript") or stats.get("text", text),
+                                      probe=probe,
                                       task=task.id if task else None, test=test,
                                       system=system)
                     stats["record_id"] = self.history.append(row)["id"]

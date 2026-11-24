@@ -119,6 +119,143 @@ STAGE_INFO = {
 CHAT_STAGES = ("grpo", "dpo", "sft", "code")
 
 
+#: What a checkpoint IS, when it is not a text language model, and where in the portal it is
+#: used instead. The Playground lists every `.pt` under checkpoints/, and since the first
+#: version of it the repo has grown codecs, recognisers, picture models, world models and
+#: recall models — about half the files on disk. Each one either cannot be loaded as a
+#: `Transformer` at all, or loads and samples *something* that is not text: a world model
+#: writes grid cells, a G1 picture model writes image codes. Neither fails; both read as a
+#: broken language model. So every checkpoint carries a `kind`, decided from what is inside
+#: the file (never from its name), and the Playground offers only `text`.
+#:
+#: kind -> (what it is, portal view that uses it, that view's label, why it is not text)
+KINDS = {
+    "diffusion": ("masked diffusion LM", "diff", "Diffusion",
+                  "it fills in blanks across a whole sequence instead of extending a prefix "
+                  "(docs/20)"),
+    "tagger": ("punctuation tagger", "dictate", "Dictation",
+               "it labels each word with punctuation and capitals; it never learned to "
+               "write (docs/23)"),
+    "world": ("world model", "world", "World",
+              "its vocabulary is grid cells and moves, not words (docs/25)"),
+    "recall": ("associative-recall model", "longctx", "Context",
+               "its vocabulary is the recall test's keys and values, not words (docs/19)"),
+    "picgen": ("picture generator (G1)", "pictures", "Pictures",
+               "it writes image codes from a three-word caption (docs/26)"),
+    "flow": ("picture generator (flow)", "pictures", "Pictures",
+             "it draws pictures by flow matching (docs/26)"),
+    "autoencoder": ("picture autoencoder", "pictures", "Pictures",
+                    "it compresses pictures to a latent and back (docs/26)"),
+    "picture": ("image tokenizer", "pictures", "Pictures",
+                "it turns pictures into codes and back (docs/26)"),
+    "clip": ("picture-caption judge", "pictures", "Pictures",
+             "it scores how well a caption fits a picture (docs/26)"),
+    "vision": ("image captioner", "vision", "Vision",
+               "it reads a picture and writes its caption (docs/22)"),
+    "codec": ("speech codec", "audio", "Audio",
+              "it turns audio into integers and back (docs/21)"),
+    "audiolm": ("audio language model", "audio", "Audio",
+                "it writes codec codes — speech — not text (docs/21)"),
+    "asr": ("speech recogniser", "dictate", "Dictation",
+            "it turns speech into text, and needs audio in (docs/23)"),
+    "speaker": ("speaker embedding", "audio", "Audio",
+                "it turns a voice into a vector (docs/21)"),
+    "other": ("not a text model", None, None,
+              "it has no language-model config, so nothing here can sample it"),
+}
+
+#: Kinds that are not a `Transformer` with a `model_config` at all, so `Engine.load` cannot
+#: even build them (a G1 picture model is a Transformer but records no text tokenizer).
+#: The rest of KINDS load fine (the Diffusion, Interp and Context tabs load
+#: them through the same engine) and are refused only when asked to generate text.
+UNLOADABLE_KINDS = frozenset(KINDS) - {"diffusion", "tagger", "world", "recall"}
+
+
+def not_text_message(info) -> str:
+    """The sentence the Playground (and the CLI) shows for a checkpoint it cannot talk to.
+
+    Says what the file is and where to use it, because "cannot load" alone sends the reader
+    looking for a bug in a model that is fine."""
+    what, view, label, why = KINDS.get(info.kind, KINDS["other"])
+    where = (f" Use the portal's {label} tab (#{view}) for it." if label else "")
+    return (f"{info.rel} is a {what}, not a text language model: {why}.{where}")
+
+
+def _tokenizer_kind(tok_path: Path | None) -> str | None:
+    """`world` / `recall` from the meta.json beside a word-level tokenizer, else None.
+
+    Both corpora write their vocabulary into `meta.json` next to `tokenizer.json`, with a
+    field only they have — so this reads the data's own description rather than guessing
+    from a directory name."""
+    if not tok_path:
+        return None
+    meta = tok_path.parent / "meta.json"
+    try:
+        import json
+        info = json.loads(meta.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(info, dict):
+        return None
+    if info.get("task") == "recall":
+        return "recall"
+    if "frame_tokens" in info:
+        return "world"
+    return None
+
+
+def kind_of(ckpt: dict, tok_path: Path | None = None) -> str:
+    """What a loaded checkpoint payload is — see KINDS. `text` is a language model."""
+    stage = ckpt.get("stage")
+    if isinstance(stage, str) and stage in KINDS:
+        return stage
+    cfg = ckpt.get("config") if isinstance(ckpt.get("config"), dict) else {}
+    for section in cfg:
+        if section in KINDS and section not in ("diffusion",):
+            # `diffusion:` is a section every LM config carries (default off); the others
+            # name the trainer that wrote the file.
+            return section
+    mcfg = _mapping(ckpt.get("model_config"))
+    if not mcfg:
+        return "other"
+    if not mcfg.get("causal", True) and mcfg.get("mask_token_id") is not None:
+        return "diffusion"
+    if mcfg.get("tag_classes"):
+        return "tagger"
+    return _tokenizer_kind(tok_path) or "text"
+
+
+def _notes(mcfg: dict, ckpt: dict) -> list[str]:
+    """Plain-language facts about the architecture that change what the Playground does.
+
+    Each is something the `arch` string encodes tersely (or not at all) and that a reader
+    would otherwise discover by surprise: a hybrid ignores the draft control, an MoE model's
+    parameter count is not what one token uses, a quantized file is not the bf16 model."""
+    out = []
+    hybrid = _hybrid_str(mcfg).strip()
+    if hybrid:
+        out.append(f"{hybrid.replace('DeltaNet', 'Gated DeltaNet')} blocks "
+                   "(docs/04). It decodes with a fixed-size recurrent state instead of a "
+                   "growing KV cache, so the draft (n-gram) control is ignored for it.")
+    if int(mcfg.get("n_experts") or 0):
+        out.append(f"mixture of experts: {mcfg['n_experts']} experts, each token routed to "
+                   f"{mcfg.get('moe_top_k', 2)} (docs/15). The parameter count is the total; "
+                   "one token uses only its experts.")
+    quant = ckpt.get("quant")
+    if isinstance(quant, dict):
+        out.append(f"quantized: {quant.get('label', '4-bit')} (docs/11) — not the bf16 "
+                   "weights; expect slightly different text from the float model.")
+    scaling = _mapping(mcfg.get("rope_scaling"))
+    if scaling.get("type") not in (None, "none") and scaling.get("original_max_seq_len"):
+        out.append(f"context extended with {scaling['type']} x{scaling.get('factor', 1):g} "
+                   f"from {scaling['original_max_seq_len']} tokens, without training "
+                   "(docs/19).")
+    if mcfg.get("attn_window"):
+        out.append(f"sliding-window attention: each token sees the last "
+                   f"{mcfg['attn_window']} (docs/19).")
+    return out
+
+
 def repo_root() -> Path:
     """The repo root, from this file's location (aksharallm/infer/checkpoints.py).
 
@@ -263,6 +400,10 @@ class Checkpoint:
     mask_token_id: int | None = None
     #: A punctuation tagger (docs/23): a classifier, so no sampler may run it either.
     tag_classes: int = 0
+    #: What the file is (KINDS); only `text` can be talked to in the Playground.
+    kind: str = "text"
+    #: Architecture facts that change how it behaves when sampled (see `_notes`).
+    notes: tuple = ()
     error: str | None = None
 
     @property
@@ -270,8 +411,23 @@ class Checkpoint:
         return not self.causal and self.mask_token_id is not None
 
     @property
+    def playable(self) -> bool:
+        """Can the Playground sample text from it? A text LM that reads cleanly."""
+        return self.kind == "text" and not self.error
+
+    @property
     def modes(self) -> list[str]:
+        if self.kind != "text":
+            return []
         return STAGE_INFO.get(self.stage, STAGE_INFO["unknown"])["modes"]
+
+    @property
+    def elsewhere(self) -> dict | None:
+        """For a checkpoint that is not a text model: what it is and which tab uses it."""
+        if self.kind == "text":
+            return None
+        what, view, label, why = KINDS.get(self.kind, KINDS["other"])
+        return {"kind": self.kind, "what": what, "view": view, "tab": label, "why": why}
 
     @property
     def trained_window(self) -> int | None:
@@ -281,10 +437,15 @@ class Checkpoint:
 
     def as_dict(self) -> dict:
         info = STAGE_INFO.get(self.stage, STAGE_INFO["unknown"])
+        elsewhere = self.elsewhere
         return {
             "run": self.run, "name": self.name, "rel": self.rel, "size": self.size,
             "mtime": self.mtime, "stage": self.stage, "stage_label": info["label"],
-            "stage_note": info["note"], "modes": info["modes"],
+            "stage_note": (info["note"] if elsewhere is None else
+                           f"This is a {elsewhere['what']}, not a text language model: "
+                           f"{elsewhere['why']}."),
+            "modes": self.modes, "kind": self.kind, "playable": self.playable,
+            "elsewhere": elsewhere, "notes": list(self.notes),
             "step": self.step, "best_val": self.best_val, "max_steps": self.max_steps,
             "progress": ((self.step + 1) / self.max_steps
                          if self.step is not None and self.max_steps else None),
@@ -507,7 +668,9 @@ class CheckpointStore:
                # existed has neither key, and all of them are autoregressive.
                "causal": bool(mcfg.get("causal", True)),
                "mask_token_id": mcfg.get("mask_token_id"),
-               "tag_classes": int(mcfg.get("tag_classes") or 0)},
+               "tag_classes": int(mcfg.get("tag_classes") or 0),
+               "kind": kind_of(ckpt, tok_path),
+               "notes": tuple(_notes(_mapping(mcfg), ckpt))},
             error=None)
 
     def _loss_at(self, run_dir: Path, step: int | None) -> float | None:
@@ -540,7 +703,10 @@ class CheckpointStore:
         would open the playground on a 13M-parameter TinyStories model every time.
         Returns None on a fresh clone with nothing trained yet.
         """
-        usable = [c for c in self.list() if not c.error]
+        # Only text models: a fresh codec or picture run is often the most recently written
+        # file on disk, and the Playground opening on a speech codec it cannot talk to is
+        # the first thing anyone would see.
+        usable = [c for c in self.list() if c.playable]
         if not usable:
             return None
         order = {"grpo": 0, "dpo": 0, "sft": 1, "code": 2, "base": 3, "unknown": 4}

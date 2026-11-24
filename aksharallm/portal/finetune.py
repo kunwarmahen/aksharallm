@@ -139,6 +139,8 @@ class FinetuneJobs:
         """
         out = []
         for ck in self.store.list():
+            if ck.kind != "text":
+                continue        # not a text model (LoRA/SFT need a text language model); see infer/checkpoints.KINDS
             quantized = bool(re.search(r"-(rtn|gptq|awq|qat)-(int[48]|nf4)-", ck.name))
             out.append({
                 "id": ck.rel, "run": ck.run, "name": ck.name, "rel": ck.rel,

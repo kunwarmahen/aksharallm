@@ -103,6 +103,8 @@ class QuantJobs:
         """
         out = []
         for ck in self.store.list():
+            if ck.kind != "text":
+                continue        # not a text model (a codec or picture model has no `nn.Linear` stack to quantize); see infer/checkpoints.KINDS
             quantized = bool(re.search(r"-(rtn|gptq|awq|qat)-int[48]-", ck.name))
             out.append({
                 "id": ck.rel, "run": ck.run, "name": ck.name, "rel": ck.rel,

@@ -52,6 +52,8 @@ from .checkpoints import (
     Checkpoint,
     CheckpointStore,
     InferError,
+    UNLOADABLE_KINDS,
+    not_text_message,
     repo_root,
 )
 from .generate import IncrementalDecoder, stream_generate
@@ -439,6 +441,10 @@ class Engine:
         info = self.store.get(ckpt_id)
         if info.error:
             raise InferError(f"{info.rel} cannot be loaded: {info.error}")
+        if info.kind in UNLOADABLE_KINDS:
+            # Not a `Transformer` at all (a codec, a recogniser, a picture model…): building
+            # one would die on a missing `model_config` with a KeyError nobody can read.
+            raise InferError(not_text_message(info))
         ad: Adapter | None = None
         if adapter:
             ad = self.adapters.get(self.adapters.identify(adapter))
@@ -631,6 +637,11 @@ class Engine:
             raise InferError(
                 f"{loaded.info.rel} is the dictation punctuation tagger (docs/23), not a "
                 "language model. It runs inside dictation: `python -m aksharallm.dictate clean`.")
+        if loaded.info.kind != "text":
+            # World, recall and G1 picture models are ordinary causal transformers, so they
+            # load and sample without complaint — and print grid cells, recall keys or image
+            # codes as though they were words. Their tabs know how to read them.
+            raise InferError(not_text_message(loaded.info))
         if mode in ("complete", "code"):
             if not prompt.strip():
                 raise InferError("nothing to complete — type a prompt first.")

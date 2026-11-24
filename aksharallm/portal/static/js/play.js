@@ -1,6 +1,6 @@
 import { $, $$, api, escHtml, fmt, post } from './core.js';
 import { state } from './state.js';
-import { registerTab } from './router.js';
+import { registerTab, showView } from './router.js';
 
 /* ================================================================= playground ==========
  * Talking to the model this portal is training.
@@ -10,6 +10,12 @@ import { registerTab } from './router.js';
  * deliberately the twin of `explain()` — two extra event kinds and nothing else new:
  *   start : the checkpoint's provenance (step, val loss, tokens seen) and where it ran
  *   test  : the sandbox verdict, for a graded Python task
+ *   tool  : a Python call a chat model made, and what the sandbox printed (chat + tools)
+ *
+ * The picker lists every checkpoint on disk, and about half of them are not text models at
+ * all (codecs, recognisers, picture and world models). They are grouped apart, and choosing
+ * one shows what it is and opens the tab that uses it instead of a Generate button that
+ * would either fail or print image codes as words.
  */
 
 const play = {
@@ -63,10 +69,27 @@ function renderCkptMeta() {
     ['parameters', c.params == null ? '?' : fmt.compact(c.params)],
     ['context', c.max_seq_len == null ? '?' : fmt.int(c.max_seq_len) + ' tokens'],
   ];
+  if (c.arch) rows.push(['shape', c.arch]);
+  const away = c.elsewhere;
   box.innerHTML = rows.map(([k, v]) =>
-    `<div><dt>${escHtml(k)}</dt><dd>${escHtml(String(v))}</dd></div>`).join('')
+    `<div${k === 'shape' ? ' class="wide"' : ''}><dt>${escHtml(k)}</dt>`
+    + `<dd>${escHtml(String(v))}</dd></div>`).join('')
     + `<p class="hint">${escHtml(c.stage_note || '')}</p>`
+    + ((c.notes || []).length
+      ? `<ul class="play-notes">${c.notes.map((n) => `<li>${escHtml(n)}</li>`).join('')}</ul>`
+      : '')
+    + (away ? `<div class="play-away"><strong>Not something to talk to here.</strong> `
+      + `${escHtml(away.what)} — ${escHtml(away.why)}.`
+      + (away.view ? ` <button class="primary" type="button" data-view="${escHtml(away.view)}">`
+        + `Open the ${escHtml(away.tab)} tab</button>` : '') + '</div>' : '')
     + (c.error ? `<p class="err">${escHtml(c.error)}</p>` : '');
+  const go = box.querySelector('.play-away button');
+  if (go) go.addEventListener('click', () => showView(go.dataset.view));
+  /* Nothing to generate from a checkpoint that is not a text model. */
+  const canPlay = c.playable !== false;
+  $('#play-go').disabled = !canPlay || !!play.abort;
+  $('#play-suite').disabled = !canPlay;
+  $('#play-prompt').disabled = !canPlay;
 }
 
 /** Where it will run, and why. Shown before you press Generate, not after. */
@@ -101,16 +124,24 @@ function renderModes() {
   if (ad && ['sft', 'dpo', 'grpo', 'code'].includes(ad.stage)) {
     allowed = ['complete', 'chat', 'code'];
   }
+  /* A codec or a world model has no modes at all; keep the last mode selected (so the
+   * presets still render) but disable every button. */
+  const none = !allowed.length;
   for (const btn of $$('#play-modes .ghost')) {
     const ok = allowed.includes(btn.dataset.mode);
     btn.disabled = !ok;
-    btn.title = ok ? '' : 'this checkpoint has not been trained for that yet';
+    btn.title = ok ? '' : (none ? 'not a text model'
+      : 'this checkpoint has not been trained for that yet');
     btn.classList.toggle('on', btn.dataset.mode === play.mode);
   }
+  $('#play-tools-field').hidden = play.mode !== 'chat' || none;
+  if (none) { $('#play-modenote').textContent = ''; return; }
   if (!allowed.includes(play.mode)) setMode(allowed[0]);
   const note = $('#play-modenote');
   if (play.mode === 'chat') {
-    note.textContent = 'Multi-turn, using the ChatML template the SFT trainer teaches.';
+    note.textContent = 'Multi-turn, using the ChatML template the SFT trainer teaches.'
+      + ($('#play-tools').checked ? ' A <tool>…</tool> call the model writes is run in the '
+        + 'sandbox and its output handed back, as the tool-use models were trained.' : '');
   } else if (play.mode === 'code') {
     const sb = (play.data && play.data.sandbox) || {};
     note.textContent = sb.enabled && sb.available
@@ -169,6 +200,12 @@ const testBadge = (t) => {
       + `<pre>${escHtml(t.stderr)}</pre></details>` : '')
     + '</div>';
 };
+
+const toolBadge = (t) => `<div class="play-test play-tool ${t.status === 'pass' ? 'ok' : 'warn'}">`
+  + `<strong>TOOL CALL ${escHtml(String(t.call))}</strong> ran in the sandbox → `
+  + `<code>${escHtml(t.output || '')}</code>`
+  + `<details><summary>what was executed</summary><pre>${escHtml(t.code || '')}</pre></details>`
+  + '</div>';
 
 /** One exchange. `meta` is the provenance line — the thing that makes an old answer
  *  meaningful a month later. */
@@ -230,7 +267,7 @@ async function generate({ prompt, probe, task, quiet }) {
     : prompt;
   if (!quiet) addTurn({ role: 'user', text: shown, cls: play.mode === 'code' ? 'mono' : '' });
   const answer = addTurn({ role: 'model', text: '', cls: play.mode === 'code' ? 'mono' : '' });
-  const body = answer.querySelector('.turn-body');
+  let body = answer.querySelector('.turn-body');
   let text = '';
   let stats = null;
   const started = Date.now();
@@ -248,6 +285,7 @@ async function generate({ prompt, probe, task, quiet }) {
         task: task || null,
         probe: probe || null,
         messages: play.mode === 'chat' ? play.messages : [],
+        tools: play.mode === 'chat' && $('#play-tools').checked,
         system: play.mode === 'chat' ? $('#play-system').value : null,
         sampling: sampling(),
       }),
@@ -291,11 +329,21 @@ async function generate({ prompt, probe, task, quiet }) {
           $('#play-transcript').scrollTop = $('#play-transcript').scrollHeight;
         }
         if (evt.test) answer.insertAdjacentHTML('beforeend', testBadge(evt.test));
+        if (evt.tool) {
+          /* The model called Python. Show the call's output under the text that made it,
+           * then stream its next turn into a fresh body below. */
+          answer.insertAdjacentHTML('beforeend', toolBadge(evt.tool));
+          body = document.createElement('div');
+          body.className = 'turn-body';
+          answer.appendChild(body);
+          text = '';
+          playStatus(`tool call ${evt.tool.call} ran — the model continues…`, 'busy');
+        }
         if (evt.done) { stats = evt.done; stop = true; }
       }
     }
 
-    if (!text.trim()) {
+    if (!text.trim() && !(stats && stats.tool_calls)) {
       body.innerHTML = '<em class="hint">the model produced nothing at all — with a very '
         + 'low top-p or a temperature of 0 on an undertrained model this does happen.</em>';
     }
@@ -306,8 +354,11 @@ async function generate({ prompt, probe, task, quiet }) {
       const sp = stats.speculative;
       const drafted = sp ? ` · drafted ${(sp.accept_rate * 100).toFixed(0)}% accepted,`
         + ` ${sp.tokens_per_forward.toFixed(2)} tokens per model pass` : '';
+      const called = stats.tool_calls
+        ? ` · ${stats.tool_calls} tool call${stats.tool_calls > 1 ? 's' : ''}` : '';
       playStatus(`${stats.tokens} tokens · ${rate} · `
-        + `${stats.finish === 'stop' ? 'stopped on its own' : 'hit the token limit'}${drafted}`);
+        + `${stats.finish === 'stop' ? 'stopped on its own' : 'hit the token limit'}`
+        + `${called}${drafted}`);
     } else {
       playStatus(`done in ${fmt.dur((Date.now() - started) / 1000)}`);
     }
@@ -335,8 +386,14 @@ async function submitPrompt() {
   if (!prompt.trim()) return;
   if (play.mode === 'chat') {
     const stats = await generate({ prompt });
-    play.messages.push({ role: 'user', content: prompt });
-    play.messages.push({ role: 'assistant', content: (stats && stats.text) || '' });
+    /* With tools on, the exchange includes the call and its output: keep exactly what the
+     * model saw, or its next turn reads a history in which the answer came from nowhere. */
+    if (stats && stats.turns) {
+      play.messages.push(...stats.turns);
+    } else {
+      play.messages.push({ role: 'user', content: prompt });
+      play.messages.push({ role: 'assistant', content: (stats && stats.text) || '' });
+    }
     if (play.messages.length > 20) play.messages = play.messages.slice(-20);
   } else {
     await generate({ prompt });
@@ -494,13 +551,30 @@ async function openPlayTab() {
   try {
     const d = await api('/api/infer');
     play.data = d;
+    const text = d.checkpoints.filter((c) => c.kind === 'text');
+    const other = d.checkpoints.filter((c) => c.kind !== 'text');
     $('#play-count').textContent = d.checkpoints.length
-      ? `${d.checkpoints.length} checkpoint(s)` : 'none yet';
+      ? `${text.length} text-model checkpoints` + (other.length ? ` · ${other.length} others` : '')
+      : 'none yet';
 
+    /* Chat models first (the interesting ones once post-training has run), then base
+     * models, then everything that is not a text model, grouped by what it is. */
+    const opt = (c, label) => `<option value="${escHtml(c.rel)}"${c.error ? ' disabled' : ''}>`
+      + `${escHtml(label)}</option>`;
+    const group = (title, cs, label = ckptLabel) => (cs.length
+      ? `<optgroup label="${escHtml(title)}">${cs.map((c) => opt(c, label(c))).join('')}</optgroup>`
+      : '');
+    const chat = text.filter((c) => (c.modes || []).includes('chat'));
+    const base = text.filter((c) => !(c.modes || []).includes('chat'));
+    const kinds = [...new Set(other.map((c) => c.kind))];
     const sel = $('#play-ckpt');
-    sel.innerHTML = d.checkpoints.map((c) =>
-      `<option value="${escHtml(c.rel)}"${c.error ? ' disabled' : ''}>`
-      + `${escHtml(ckptLabel(c))}</option>`).join('');
+    sel.innerHTML = group('Chat models', chat) + group('Base models', base)
+      + kinds.map((k) => {
+        const cs = other.filter((c) => c.kind === k);
+        const e = cs[0].elsewhere || {};
+        return group(`Not text — ${e.what || k}${e.tab ? ` (${e.tab} tab)` : ''}`, cs,
+          (c) => `${c.rel}`);
+      }).join('');
     if (!d.checkpoints.length) {
       $('#play-meta').innerHTML = '<p class="hint">No checkpoints under <code>checkpoints/'
         + '</code> yet. Start a run from the Dashboard; the first one lands after '
@@ -510,7 +584,7 @@ async function openPlayTab() {
       return;
     }
     const want = localStorage.getItem('aksharallm-play-ckpt');
-    const pick = d.checkpoints.some((c) => c.rel === want) ? want : d.default;
+    const pick = text.some((c) => c.rel === want) ? want : (d.default || d.checkpoints[0].rel);
     sel.value = pick;
     selectCkpt(pick);
 
@@ -566,6 +640,13 @@ export function wirePlay() {
   });
 
   $('#play-suite').addEventListener('click', runSuite);
+  $('#play-tools').addEventListener('change', () => {
+    try { localStorage.setItem('aksharallm-play-tools', $('#play-tools').checked ? '1' : '0'); }
+    catch { /* a private window: the default is fine */ }
+    renderModes();
+  });
+  try { $('#play-tools').checked = localStorage.getItem('aksharallm-play-tools') !== '0'; }
+  catch { /* keep the default */ }
   $('#play-compare').addEventListener('change', loadHistory);
 
   $('#play-unload').addEventListener('click', async () => {

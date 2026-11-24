@@ -5,6 +5,9 @@
     python -m aksharallm.infer.cli small-code --probes   the fixed prose suite
     python -m aksharallm.infer.cli small-code --tasks    the Python tasks, actually executed
     python -m aksharallm.infer.cli --compare fluency     one probe, across every step so far
+    python -m aksharallm.infer.cli small-code-py-tools-v3 --mode chat --tools
+                                                         chat, running its Python tool calls
+    python -m aksharallm.infer.cli --list --all          every checkpoint, text models or not
 
 Modes:
     complete  raw text continuation — what a *base* model does, and all it can do
@@ -95,20 +98,45 @@ def describe(info: dict) -> str:
     bits.append(f"val {info['best_val']:.4f}" if info["best_val"] is not None else "val      ?")
     bits.append(f"{human(info['params'])} params")
     bits.append(f"{human(info['tokens_seen'])} tok seen")
+    if info.get("notes"):
+        # One word per fact: the full sentences are in the Playground card.
+        bits.append("[" + ", ".join(n.split(":")[0] for n in info["notes"]) + "]")
     if info["error"]:
         bits.append(f"!! {info['error']}")
     return "  ".join(bits)
 
 
-def print_checkpoints(store: CheckpointStore) -> int:
+def print_checkpoints(store: CheckpointStore, show_all: bool = False) -> int:
     rows = store.list()
     if not rows:
         print("no checkpoints yet — nothing under checkpoints/*/ has been trained.")
         print("start a run with scripts/phase2.sh, or scripts/portal.sh for a browser.")
         return 1
-    print(f"{len(rows)} checkpoint(s) under {store.root / 'checkpoints'}:\n")
-    for info in rows:
+    # Text models are what this command can talk to; the rest (codecs, recognisers, picture
+    # and world models) are summarised by kind with the tab that uses them, unless --all.
+    text = [c for c in rows if c.kind == "text"]
+    other = [c for c in rows if c.kind != "text"]
+    print(f"{len(text)} text model checkpoint(s) under {store.root / 'checkpoints'}:\n")
+    for info in text:
         print("  " + describe(info.as_dict()))
+    if other:
+        print(f"\n{len(other)} other checkpoint(s) — not text models, so not playable here:")
+        by_kind: dict[str, list] = {}
+        for c in other:
+            by_kind.setdefault(c.kind, []).append(c)
+        for kind, cs in sorted(by_kind.items()):
+            where = cs[0].elsewhere or {}
+            tab = f"{where['tab']} tab" if where.get("tab") else "no tab"
+            runs = sorted({c.run for c in cs})
+            if show_all:
+                print(f"  {where.get('what', kind)} ({tab}):")
+                for c in cs:
+                    print(f"    {c.rel}")
+            else:
+                shown = ", ".join(runs[:4]) + (f", +{len(runs) - 4} more" if len(runs) > 4 else "")
+                print(f"  {where.get('what', kind):<26} {tab:<16} {shown}")
+        if not show_all:
+            print("  (--list --all names every file)")
     default = store.default()
     if default:
         print(f"\ndefault: {default.rel}   (a bare run name also works: "
@@ -157,6 +185,11 @@ def stream_to_stdout(pg: Playground, **kw) -> dict:
             if kind == "delta":
                 sys.stdout.write(payload)
                 sys.stdout.flush()
+            elif kind == "tool":
+                # The model called Python; show what ran and what came back, then the
+                # model's next turn streams on after it.
+                print(f"\n  [tool call {payload['call']}: {payload['status']}] "
+                      f"-> {payload['output']}", file=sys.stderr)
             elif kind == "test":
                 # Printed before `done` because that is the order it happened in.
                 mark = "PASS" if payload["ok"] else payload["status"].upper()
@@ -246,11 +279,14 @@ def interactive(pg: Playground, ckpt_id: str, mode: str, args,
 
         if mode == "chat":
             stats = stream_to_stdout(pg, ckpt_id=ckpt_id, mode="chat", prompt=text,
-                                     adapter=adapter,
+                                     adapter=adapter, tools=args.tools,
                                      messages=messages, system=args.system,
                                      params=sampling(args), device=args.device)
-            messages.append({"role": "user", "content": text})
-            messages.append({"role": "assistant", "content": stats.get("text", "")})
+            # With --tools the exchange may include tool calls and their outputs; keep
+            # exactly what the model saw, so the next turn reads the same history.
+            messages += stats.get("turns") or [
+                {"role": "user", "content": text},
+                {"role": "assistant", "content": stats.get("text", "")}]
             # Keep the transcript from outgrowing a 1024-token window: the engine truncates
             # from the left anyway, but dropping old turns here keeps the prompt honest.
             if len(messages) > 20:
@@ -375,6 +411,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="a run name (small-code), an id (small-code/ckpt_best.pt) or a "
                          "path. Omit to list what has been trained.")
     ap.add_argument("--list", action="store_true", help="list checkpoints and exit")
+    ap.add_argument("--all", action="store_true",
+                    help="with --list: name every non-text checkpoint too, not only a "
+                         "summary by kind")
+    ap.add_argument("--tools", action="store_true",
+                    help="chat mode: run the model's <tool>…</tool> Python calls in the "
+                         "sandbox and hand it the output (what the tool-use models learned)")
     ap.add_argument("--mode", choices=["complete", "chat", "code"], default="complete")
     ap.add_argument("--prompt", default=None, help="one-shot prompt; omit for interactive")
     ap.add_argument("--probes", action="store_true",
@@ -439,7 +481,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.list_adapters:
             return print_adapters(pg)
         if args.list or not args.checkpoint:
-            return print_checkpoints(pg.store)
+            return print_checkpoints(pg.store, show_all=args.all)
 
         try:
             ckpt_id = pg.store.identify(args.checkpoint)
@@ -477,7 +519,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.prompt is not None:
             stream_to_stdout(pg, ckpt_id=ckpt_id, mode=args.mode, prompt=args.prompt,
-                             system=args.system, params=sampling(args),
+                             system=args.system, params=sampling(args), tools=args.tools,
                              device=args.device, adapter=adapter_id,
                              record=not args.no_record)
             return 0

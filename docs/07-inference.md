@@ -274,6 +274,12 @@ python -m aksharallm.infer.cli small-code
 # chat (needs an SFT'd model; refused on a base one, with the reason)
 python -m aksharallm.infer.cli checkpoints/small-sft/sft_best.pt --mode chat
 
+# chat with a tool-use model, running the Python it writes (see "Tool calls" below)
+python -m aksharallm.infer.cli small-code-py-tools-v3 --mode chat --tools
+
+# every checkpoint on disk, including the ones that are not text models
+python -m aksharallm.infer.cli --list --all
+
 # deterministic, for comparing two checkpoints on one prompt
 python -m aksharallm.infer.cli small-code --prompt "Hello" --temperature 0
 ```
@@ -288,6 +294,7 @@ python -m aksharallm.infer.cli small-code --prompt "Hello" --temperature 0
 | `--seed` | random | fixes sampling, so two checkpoints are comparable |
 | `--mode` | complete | `complete`, `chat` or `code` |
 | `--device` | auto | the GPU, unless a run is training — then the CPU |
+| `--tools` | off | chat: run `<tool>…</tool>` calls in the sandbox and hand back the output |
 
 The checkpoint argument accepts three shapes: a run name (`small-code`), an id
 (`small-code/ckpt_best.pt`), or a path (what tab completion gives you).
@@ -336,6 +343,73 @@ instruction-tuned, `dpo_*` has been preference-aligned. This matters more than i
 > noise. That is not a bug to debug, it is Phase 3 not having run yet — so chat is
 > **disabled** on a base checkpoint, with that sentence, rather than letting you conclude
 > the model is broken.
+
+### Not every checkpoint is a text model
+
+The first version of the Playground was written when everything under `checkpoints/` was a
+language model. Since then the repo has grown speech codecs, recognisers, picture models,
+world models and recall models, and today they are about two thirds of the files on disk.
+Each one is either not a `Transformer` at all (a codec has no `model_config`, so building
+one dies on a `KeyError`), or worse, *is* one and samples happily: a world model prints
+grid cells and moves, a recall model prints `K12 ? K7`, and both read as a broken language
+model rather than an error.
+
+So every checkpoint carries a **kind**, decided from what is inside the file and never from
+its name:
+
+```mermaid
+flowchart TD
+    F[(a .pt)] --> S{"a `stage` key, or a trainer's<br/>config section?<br/>(codec, asr, flow, clip…)"}
+    S -->|yes| K1[that kind]
+    S -->|no| M{model_config?}
+    M -->|no| K2[other]
+    M -->|yes| D{"bidirectional + [MASK]?<br/>tag classes?"}
+    D -->|yes| K3[diffusion / tagger]
+    D -->|no| T{"tokenizer's meta.json<br/>says world or recall?"}
+    T -->|yes| K4[world / recall]
+    T -->|no| K5[text — playable]
+```
+
+The picker groups the text models (chat models first, then base models) apart from the
+rest, which are listed by kind with the tab that uses them. Choosing one shows what it is
+and an **Open the … tab** button instead of a Generate button, and asking for text from one
+through the API or the CLI is refused *before* any stream starts, with the same sentence.
+The Playground's default is always a text model, because the most recently written file is
+often a picture or audio run. `python -m aksharallm.infer.cli --list` prints the same
+grouping.
+
+The card also lists the architecture facts that change what happens when you sample:
+
+| note | why it matters here |
+|---|---|
+| hybrid (Gated DeltaNet in N of M blocks, [doc 4](04-model.md)) | decodes with a fixed-size recurrent state, which cannot rewind — the **draft** control is ignored |
+| mixture of experts ([doc 15](15-moe.md)) | the parameter count is the total; a token uses only its experts |
+| quantized ([doc 11](11-quantization.md)) | not the bf16 weights; expect slightly different text |
+| context extended / sliding window ([doc 19](19-long-context.md)) | the context it can address is not the one it trained on |
+
+### Tool calls
+
+The tool-use models ([doc 6](06-posttraining.md) § Tool use) learned to answer a sum by
+writing `<tool>print(48271 * 3917)</tool>`, ending their turn, and reading the output back
+as a `tool` turn. Chat mode has a **run the model's Python tool calls** switch (on by
+default; `--tools` in the CLI) that does exactly what the Tools tab's agent does:
+
+```mermaid
+sequenceDiagram
+    participant You
+    participant Model
+    participant Sandbox
+    You->>Model: What is 48271 times 3917?
+    Model->>Sandbox: <tool> print(48271 * 3917) </tool>
+    Sandbox-->>Model: tool turn: 189077507
+    Model->>You: The answer is 189077507.
+```
+
+The call and the tool turn are rendered exactly as `tools/problems.conversation` writes
+them for training, the code runs in the same sandbox as the graded tasks, and at most three
+calls are made before the next turn counts as the answer. The chat history keeps the call
+and its output, so the model's next turn sees what it actually saw. A chat model that never
+learned the format never writes the tag, so the switch costs nothing on any other model.
 
 ### 2. Where it runs is not your problem
 
@@ -519,16 +593,17 @@ it usable on a machine that is also training.
 | 3 | [`aksharallm/infer/speculative.py`](../aksharallm/infer/speculative.py) | `accept_or_correct` and `residual_distribution` first — the rule is four lines and the whole guarantee. Then `NgramDrafter` (a draft with no model in it) and the round loop in `speculative_generate` |
 | 4 | [`aksharallm/infer/tasks.py`](../aksharallm/infer/tasks.py) | `Probe` — the fixed prompts and, on each, what *good* looks like at 300M. Then `CodeTask`, `extract_code` and `assemble` |
 | 5 | [`aksharallm/infer/sandbox.py`](../aksharallm/infer/sandbox.py) | `run_program` — `-I` isolated subprocess, `RLIMIT_CPU`, throwaway cwd. The docstring is honest about it not being a container; read that before pointing it anywhere else |
-| 6 | [`aksharallm/infer/checkpoints.py`](../aksharallm/infer/checkpoints.py) | `Checkpoint` and `CheckpointStore` — describing a 1.2 GB file in milliseconds with `mmap=True`, and `stage_for`, where the `ckpt_`/`sft_`/`dpo_` prefix becomes the chat gate |
+| 6 | [`aksharallm/infer/checkpoints.py`](../aksharallm/infer/checkpoints.py) | `Checkpoint` and `CheckpointStore` — describing a 1.2 GB file in milliseconds with `mmap=True`, and `stage_for`, where the `ckpt_`/`sft_`/`dpo_` prefix becomes the chat gate. Then `KINDS` and `kind_of` — what a file *is* when it is not a text model — and `_notes` |
 | 7 | [`aksharallm/infer/engine.py`](../aksharallm/infer/engine.py) | `plan_device` — the "a run is training, so use the CPU and say so" policy, all in one function — then `Engine`, which holds one model warm and unloads it when idle |
-| 8 | [`aksharallm/infer/playground.py`](../aksharallm/infer/playground.py) | `Playground` — the one object the CLI, the portal tab and the eval harness all drive |
+| 8 | [`aksharallm/infer/playground.py`](../aksharallm/infer/playground.py) | `Playground` — the one object the CLI, the portal tab and the eval harness all drive. `_tool_chat` is the tool loop |
 | 9 | [`aksharallm/infer/history.py`](../aksharallm/infer/history.py) | `record_from` — the kilobyte that outlives the checkpoint, and what `--compare` reads back |
 | 10 | [`aksharallm/infer/cli.py`](../aksharallm/infer/cli.py) | last, because by now it is only argument parsing: `stream_to_stdout`, `interactive`, `run_probes`, `show_compare` |
 
 What pins it: `tests/test_generate.py` — `test_top_p_keeps_the_nucleus`,
 `test_repetition_penalty_handles_negative_logits`, `test_temperature_zero_matches_argmax_of_the_model` —
 and `tests/test_model.py::test_kv_cache_matches_full_forward`, which is the one that would
-catch a silent decode bug. Break the nucleus on purpose in [lesson 7](lessons/07-sampling.md).
+catch a silent decode bug. `tests/test_playground_kinds.py` pins the kinds (read from the
+file, the default always a text model, refused before the stream) and the tool loop. Break the nucleus on purpose in [lesson 7](lessons/07-sampling.md).
 
 ---
 

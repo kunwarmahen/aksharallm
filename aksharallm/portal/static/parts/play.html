@@ -29,6 +29,13 @@
         <button class="ghost" type="button" data-mode="chat">Chat</button>
         <button class="ghost" type="button" data-mode="code">Python</button>
       </div>
+      <!-- Tool use (docs/06): a model trained on tool conversations writes <tool>code</tool>
+           and expects the code's output back as a `tool` turn. Harmless for any other chat
+           model, which never writes the tag. -->
+      <label class="play-check" id="play-tools-field" hidden>
+        <input id="play-tools" type="checkbox" checked>
+        <span>run the model's Python tool calls</span>
+      </label>
       <p class="play-modenote" id="play-modenote"></p>
 
       <div class="play-presets" id="play-presets"></div>

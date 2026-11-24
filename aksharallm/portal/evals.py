@@ -88,6 +88,8 @@ class EvalJobs:
         "what did int4 cost on MMLU" is a question perplexity cannot answer."""
         out = []
         for ck in self.store.list():
+            if ck.kind != "text":
+                continue        # not a text model (the benchmarks score text; a codec or world model only fails on load); see infer/checkpoints.KINDS
             out.append({
                 "id": ck.rel, "run": ck.run, "name": ck.name, "rel": ck.rel,
                 "size": ck.size, "step": ck.step, "best_val": ck.best_val,
