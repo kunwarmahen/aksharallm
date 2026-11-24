@@ -39,6 +39,31 @@ def psnr(a: np.ndarray, b: np.ndarray) -> float:
     return 99.0 if mse == 0 else 10 * math.log10(255.0 ** 2 / mse)
 
 
+def high_frequency(images: np.ndarray, cutoff: float = 0.25) -> np.ndarray:
+    """Per picture: the power above `cutoff` cycles per pixel (Nyquist is 0.5), per pixel.
+
+    What blur removes and PSNR barely notices. An autoencoder trained on L1+L2 learns that, when
+    unsure where an edge is, the average of the places it might be costs least, and an average
+    of edges is a ramp: the fine detail goes and the error that remains is small. The band above
+    a quarter of a cycle per pixel is fine texture and sharp edges; measuring it per picture lets
+    two models be paired photo by photo."""
+    x = np.asarray(images, np.float64) / 255.0
+    x = x - x.mean(axis=(1, 2), keepdims=True)                  # (N, H, W, C), no DC
+    f = np.fft.fft2(x, axes=(1, 2))
+    h, w = x.shape[1:3]
+    fy, fx = np.meshgrid(np.fft.fftfreq(h), np.fft.fftfreq(w), indexing="ij")
+    band = np.sqrt(fx ** 2 + fy ** 2) > cutoff
+    power = (np.abs(f) ** 2).sum(axis=3) / (h * w)              # summed over channels
+    return power[:, band].sum(axis=1) / (h * w)
+
+
+def sharpness(images: np.ndarray, reference: np.ndarray, cutoff: float = 0.25) -> float:
+    """High-frequency power of `images` against that of `reference` (mean over each set): 1.0 is
+    as much fine detail as the reference, below 1 is blurrier, above 1 is noisier. Ordered: the
+    reference is the denominator (gotcha 15)."""
+    return float(high_frequency(images, cutoff).mean() / high_frequency(reference, cutoff).mean())
+
+
 def _marks(pictures: np.ndarray, facts: list[dict]) -> dict:
     js = [judge(p, f) for p, f in zip(pictures, facts)]
     out = {k: "".join("1" if j[k] else "0" for j in js) for k in ("count", "colour", "shape", "all")}

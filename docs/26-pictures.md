@@ -17,8 +17,9 @@ circles" and writes those integers. The rest of the chapter goes the way real im
 | G4b | our own contrastive judge, and scenes that also say size and place | judge agrees with the reader at kappa ~0.9; scenes 91% seen (the autoencoder's ceiling), 85% held out at guidance 3 | [G4b](#g4b-a-judge-that-learned-2026-11-23) |
 | G4c | real COCO photos from people's captions | own caption in the top 5 of 1,000: 18% (g1) / 60% (g3), real photos 34%, chance 0.5% | [G4c](#g4c-real-photos-built-2026-11-23) |
 
-Lessons 29–35 break one piece each: the judge, guidance, the velocity, the latent's scale, a
-held-out phrasing, the contrastive targets, and the side the padding goes on.
+Lessons 29–36 break one piece each: the judge, guidance, the velocity, the latent's scale, a
+held-out phrasing, the contrastive targets, the side the padding goes on, and the sign of the
+adversary.
 
 ```mermaid
 flowchart LR
@@ -893,6 +894,82 @@ model that draws better than a camera. Two cautions not yet tested: the judge an
 the caption through the same frozen 300M, so their errors may agree; and the ceiling is the real
 photos as photographed, not through `ae-coco`, whose blur the drawings inherit.
 
+## Sharper photos (built 2026-11-23)
+
+The photos above are blurry, and the first question is where the blur comes from. A drawing is
+painted by `ae-coco`'s decoder, so it can be no sharper than that decoder. `pictures ae-report`
+passes the 1,000 val photos through an autoencoder and judges what comes back with the same
+contrastive model, so the autoencoder gets the same table as a drawing:
+
+| `ae-coco`, 1,000 val photos | match | top 1 / 5 / 10 | sharpness | PSNR |
+|---|---|---|---|---|
+| the real photos | 0.489 | 11.5 / 33.5 / 46.8% | 1.00 | |
+| through `ae-coco` | 0.455 | 9.3 / **25.0** / 37.1% | **0.54** | 27.75 dB |
+
+**Sharpness** (`measure.sharpness`) is the power above a quarter of a cycle per pixel (fine
+texture and sharp edges; Nyquist is half a cycle), against the real photos': 1.00 is as sharp,
+below 1 is blurrier. `ae-coco` keeps 54% of it, 38% of the finest band. And the autoencoder alone
+costs eight points of top 5 (33.5 → 25.0%). So the honest ceiling for a drawing through `ae-coco`
+is 25%, not the real photos' 34%, and `coco-report` now prints that row too ("real photos through
+its autoencoder").
+
+**Why L1 + L2 blurs.** When the decoder cannot tell exactly where an edge or a blade of grass
+falls, the average of the places it might be costs least, and an average of edges is a smear.
+To a pixel loss a sharp edge one pixel off is wrong twice, once where it is and once where it
+should have been. Nothing in the loss prefers it.
+
+**The fix: a patch discriminator** (`pictures/adversarial.py`). A second, small network looks at
+38-pixel patches of a photo and says whether each came from a real photo or from the decoder; the
+decoder is also trained to make its patches score as real. A smear does not: real photos have
+texture. This is how Stable Diffusion's autoencoder is trained (it also uses a pretrained
+perceptual network, which this repo does not have, since everything here is trained by us).
+
+```mermaid
+flowchart LR
+    X["photo"] --> E["encoder"] --> Z["latent 8x8x16"] --> D["decoder"] --> R["reconstruction"]
+    R --> L["L1 + L2 + KL<br/>(as before)"]
+    R --> P["patch discriminator:<br/>8x8 real/fake scores"]
+    X --> P
+    P --> G["decoder: make R's<br/>patches read as real"]
+    P --> H["discriminator: tell<br/>X from R (hinge)"]
+```
+
+Four details, each pinned by a test (`tests/test_sharper.py`):
+
+* **Hinge losses.** The discriminator pushes real scores above +1 and fake ones below −1 and then
+  stops, so it cannot run away from a decoder still learning. The decoder's loss is *minus* the
+  score of its own patches; drop the minus and it learns to look more fake while every curve
+  still moves ([lesson 36](lessons/36-adversary.md)).
+* **An adaptive weight.** The adversarial gradient at the decoder's last layer is scaled to the
+  size of the reconstruction gradient there, times `weight` (0.5). A fixed weight is either too
+  weak early or, once the discriminator is confident, strong enough to paint texture that is not
+  in the photo.
+* **A late start.** The discriminator switches on at step 10,000 of 40,000, once the autoencoder
+  already reconstructs (`ae-coco` was at 26.3 dB by then).
+* **Best is chosen after the start.** The pixel loss rises a little once the decoder trades
+  averages for texture, so "lowest val loss" would keep the blurry checkpoint from before the
+  adversary, and hand it to the flow model under the sharp run's name.
+
+**The experiment** is two controlled pairs, each one change apart (a test asserts it):
+`ae-coco` → `ae-coco-gan` (the `adversarial:` section), and `flow-coco` → `flow-coco-gan` (the
+latent it draws in). The question is whether the detail the adversary adds survives being
+*drawn* rather than reconstructed: a flow model learns the latent's distribution, and fine texture
+is the part of it least determined by the caption.
+
+```bash
+python -m aksharallm.pictures ae-report ae-coco                      # the blurry one, measured
+scripts/audio.sh ae-coco-gan                                         # + the discriminator
+python -m aksharallm.pictures ae-report ae-coco-gan --against ae-coco   # paired per photo
+scripts/audio.sh flow-coco-gan                                       # flow on its latent
+python -m aksharallm.pictures coco-report flow-coco-gan --clip clip-coco --guidance 3
+python -m aksharallm.pictures coco-compare A.json B.json             # same captions, paired
+```
+
+**Status**: built and tested on the CPU. Queued for the night windows from 2026-11-24 00:30
+(`logs/queue/sharp-1124.sh`): `ae-coco-gan` (~50 min), its report against `ae-coco`'s,
+`flow-coco`'s reports again with the new columns, then `flow-coco-gan` (two nights) and its
+reports, paired.
+
 ## Traps to keep
 
 1. **A score that borrows a name it does not earn.** There is no FID here: FID needs a
@@ -936,7 +1013,8 @@ photos as photographed, not through `ae-coco`, whose blur the drawings inherit.
 | 17 | [`pictures/scenes.py`](../aksharallm/pictures/scenes.py) → `render`, `HELD_OUT` | G4b's second corpus: size and place in one column, two held-out combinations; the reader's `size_of` and `where_of` read them back |
 | 18 | [`pictures/clip.py`](../aksharallm/pictures/clip.py) → `clip_loss`, `ClipModel`, `rank`, `agreement` · [`train_clip.py`](../aksharallm/pictures/train_clip.py) | G4b: every same-fact caption a match, padding masked out of the text head, a picture's closest caption among every caption its corpus can say, Cohen's kappa against the reader |
 | 19 | [`pictures/coco.py`](../aksharallm/pictures/coco.py) → `pack`, `square` · [`pictures/photos.py`](../aksharallm/pictures/photos.py) → `score`, `frechet` | G4c: COCO packed from the archives in order with its captions; the photo report, every number beside the real photos' and chance, the Fréchet distance by two `eigh` calls |
-| 20 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
+| 20 | [`pictures/adversarial.py`](../aksharallm/pictures/adversarial.py) → `PatchDiscriminator`, `d_loss`, `g_loss`, `adaptive_weight` · [`measure.py`](../aksharallm/pictures/measure.py) → `sharpness` · [`photos.py`](../aksharallm/pictures/photos.py) → `recon_report`, `through` | sharper photos: the discriminator beside the pixel loss, its late start and adaptive weight in `train_ae.py`, and the fine-detail measure that says whether it worked |
+| 21 | [`portal/pictures.py`](../aksharallm/portal/pictures.py) · [`static/js/pictures.js`](../aksharallm/portal/static/js/pictures.js) | the Pictures tab: reports with the gallery inlined (paths re-checked to sit inside `logs/pictures/`), compare, inline Draw, jobs through `portal/jobs.py` |
 
 Tests: `tests/test_pictures.py`. They cover the reader on every count × colour × shape, the
 reader seeing blur and recolouring, the codebook prefix ignoring later codebooks, batch
@@ -992,7 +1070,16 @@ and the trainer's save and resume. Sixteen mutants were checked red. G4c adds
 captions as one match, a padded batch encoding each caption exactly as alone (and the cache
 bounded), the Fréchet distance against its closed form, the photo report's ceiling and floor,
 the flow trainer reading one of a photo's own captions, and the photo autoencoder's PSNR-only
-report. Eight mutants were checked red.
+report. Eight mutants were checked red. Sharper photos add `tests/test_sharper.py` (11): sharpness
+is 1 for the same photos, far below 1 for a blur, and ordered; the hinge losses point the right
+way; one decoder step on the adversarial loss raises the discriminator's score on its patches;
+the adaptive weight matches the two gradients and cancels a louder adversary; with the adversary
+off nothing about a run changes; it starts on its step and best is chosen after it; a resume
+carries the discriminator on and refuses to restart it; two reconstruction reports pair photo by
+photo; both new configs are one change from their controls; the portal lists reconstruction
+reports. Ten mutants were checked red (one, the rule for best, only after a test was added for
+it; and the decoder-step check first passed with its sign flipped, on a flat test picture where
+GroupNorm had no variance to work with).
 
 G4a adds five: every phrasing says its facts and the held-out phrasings are never drawn for
 training; a text model reads vectors and its empty caption is zeros; the text encoder pads with

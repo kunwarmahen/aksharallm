@@ -395,7 +395,10 @@ python -m aksharallm.infer.cli small-code --probes   # a terminal playground
 scripts/serve.sh small-code --bg                     # an OpenAI-shaped HTTP API on :8770
 ```
 
-In the portal: the **Playground** tab, and the **Serve** panel.
+In the portal: the **Playground** tab, and the **Serve** panel. The Playground lists only
+text models as things to talk to; a codec, recogniser, picture or world model is shown with
+the tab that uses it. With a tool-use model, Chat runs the Python it writes
+(`python -m aksharallm.infer.cli small-code-py-tools-v3 --mode chat --tools`).
 
 📖 [chapter 7 — inference](07-inference.md) · [chapter 17 — serving](17-serving.md)
 
@@ -809,6 +812,21 @@ features shrinks toward what two halves of the real photos score. Measured 2026-
 bear, the stop sign and the kitchen are recognisable at 64 px. Past the real photos' row the
 judge is rewarding typical drawings, not better ones ([doc 26](26-pictures.md) § Measured: real
 photos).
+
+The eighth is **sharper photos**: the drawings are no sharper than the autoencoder that paints
+them, and `ae-coco` keeps only 54% of a photo's fine detail. A patch discriminator beside its
+pixel loss (`ae-coco-gan`), then the same flow model on its latent:
+
+```bash
+python -m aksharallm.pictures ae-report ae-coco                         # how sharp is it now?
+scripts/audio.sh ae-coco-gan                                            # then flow-coco-gan
+python -m aksharallm.pictures ae-report ae-coco-gan --against ae-coco      # paired per photo
+python -m aksharallm.pictures coco-report flow-coco-gan --clip clip-coco --guidance 3
+```
+
+**How you know it worked:** sharpness moves toward 1.00 for the reconstructions *and* for the
+drawings, and the reconstructions' top 5 does not fall (texture that is not in the photo would
+cost it).
 
 **How you know G2 worked:** first run, 56 minutes on the card: 99% of seen captions and 100% of
 the never-seen purple triangles drawn right, against 89% / 70% for the best G1, no copies.

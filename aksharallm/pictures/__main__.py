@@ -460,23 +460,96 @@ def cmd_coco_report(args) -> int:
     gallery(r, root / RESULTS / f"{stem}.png")
     print(f"{d.path} (step {d.step}): {args.n} COCO val captions, one drawing each, guidance "
           f"{args.guidance:g}, {r['seconds']}s; judged by {cp}")
-    print(f"\n  {'':<16} {'match':>7} {'mismatch':>9} {'top-1':>7} {'top-5':>7} {'top-10':>7}")
-    for name in ("real", "drawn"):
-        x = r[name]
-        print(f"  {name + (' photo' if name == 'real' else ''):<16} {x['match']:>7.3f} "
-              f"{x['mismatch']:>9.3f} {x['top1'] * 100:>6.1f}% {x['top5'] * 100:>6.1f}% "
-              f"{x['top10'] * 100:>6.1f}%")
+    _photo_table(r)
     c = r["chance"]
     print(f"  {'chance':<16} {'':>7} {'':>9} {c['top1'] * 100:>6.1f}% {c['top5'] * 100:>6.1f}% "
           f"{c['top10'] * 100:>6.1f}%")
-    dist = r["distance"]
-    print(f"\n  distance to real photos in our features (Frechet, NOT FID): drawings "
-          f"{dist['drawn_vs_real']:.4f}; two halves of the real photos {dist['real_half_vs_half']:.4f}")
+    _distance(r, "drawings")
     out = public(r) | {"checkpoint": str(d.path), "run": run, "step": d.step,
                        "gallery": [f"{stem}.png"]}
     f = root / RESULTS / f"{stem}.json"
     f.write_text(json.dumps(out, indent=1))
     print(f"\nwrote {f}  (gallery {stem}.png: real photos above, drawings below)")
+    return 0
+
+
+_ROWS = {"real": "real photo", "coded": "real, coded", "drawn": "drawn"}
+
+
+def _photo_table(r: dict, drawn: str = "drawn") -> None:
+    print(f"\n  {'':<16} {'match':>7} {'mismatch':>9} {'top-1':>7} {'top-5':>7} {'top-10':>7} "
+          f"{'sharpness':>10}")
+    for name in ("real", "coded", "drawn"):
+        if name not in r:
+            continue
+        x = r[name]
+        label = drawn if name == "drawn" else _ROWS[name]
+        print(f"  {label:<16} {x['match']:>7.3f} {x['mismatch']:>9.3f} {x['top1'] * 100:>6.1f}% "
+              f"{x['top5'] * 100:>6.1f}% {x['top10'] * 100:>6.1f}% {x.get('sharpness', 1.0):>10.2f}")
+
+
+def _distance(r: dict, what: str) -> None:
+    d = r["distance"]
+    extra = (f"; the real photos through its autoencoder {d['coded_vs_real']:.4f}"
+             if "coded_vs_real" in d else "")
+    print(f"\n  distance to real photos in our features (Frechet, NOT FID): {what} "
+          f"{d['drawn_vs_real']:.4f}{extra}; two halves of the real photos "
+          f"{d['real_half_vs_half']:.4f}")
+    print("  sharpness = fine detail (power above 1/4 cycle per pixel) against the real photos': "
+          "1.00 as sharp, below blurrier")
+
+
+def cmd_ae_report(args) -> int:
+    """Sharper photos: an autoencoder on the first N val photos, judged as drawings would be."""
+    from .clip import load_clip
+    from .photos import gallery, public, recon_compare, recon_report
+    from .train import load_coder
+    root = _root()
+    device = _device(args.device)
+    path = find_checkpoint(args.checkpoint, root)
+    coder, blob = load_coder(path, device)
+    cp = find_checkpoint(args.clip, root)
+    clip, _ = load_clip(cp, device, root)
+    r = recon_report(coder, clip, root / args.corpus, n=args.n, device=device,
+                     clip_path=str(cp.relative_to(root) if cp.is_relative_to(root) else cp))
+    run, step = path.parent.name, int(blob.get("step", -1))
+    stem = f"recon-{run}-step{step}-n{args.n}"
+    gallery(r, root / RESULTS / f"{stem}.png")
+    print(f"{path} (step {step}): {args.n} COCO val photos through the autoencoder, "
+          f"{r['seconds']}s; judged by {cp}")
+    print(f"\n  PSNR {r['psnr']:.2f} dB   sharpness {r['sharpness']:.3f}")
+    _photo_table(r, "reconstructed")
+    _distance(r, "reconstructions")
+    out = public(r) | {"checkpoint": str(path), "run": run, "step": step,
+                       "gallery": [f"{stem}.png"]}
+    f = root / RESULTS / f"{stem}.json"
+    f.write_text(json.dumps(out, indent=1))
+    print(f"\nwrote {f}  (gallery {stem}.png: real photos above, reconstructions below)")
+    if args.against:
+        other = Path(args.against)
+        if not other.is_file():
+            hits = sorted((root / RESULTS).glob(f"recon-{args.against}-step*-n{args.n}.json"))
+            if not hits:
+                raise SystemExit(f"no ae-report for {args.against} at n {args.n}: run "
+                                 f"pictures ae-report {args.against} first")
+            other = hits[-1]
+        _print_recon_compare(recon_compare(json.loads(other.read_text()), out), other, f)
+    return 0
+
+
+def _print_recon_compare(c: dict, a, b) -> None:
+    for k, label in (("psnr", "PSNR"), ("sharpness", "closer sharpness")):
+        x = c[k]
+        p = "–" if x["p"] is None else f"{x['p']:.3g}"
+        print(f"  {label:<17} n {c['n']}   a {x['a']:.3f}   b {x['b']:.3f}   b better "
+              f"{x['b_better']}   a better {x['a_better']}   p {p}")
+    print(f"\na = {a}\nb = {b}")
+
+
+def cmd_ae_compare(args) -> int:
+    from .photos import recon_compare
+    a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
+    _print_recon_compare(recon_compare(a, b), args.a, args.b)
     return 0
 
 
@@ -580,6 +653,21 @@ def main(argv=None) -> int:
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--device", default="cpu")
     s.set_defaults(fn=cmd_coco_report)
+    s = sub.add_parser("ae-report", help="sharper photos: an autoencoder on COCO val photos "
+                                         "(PSNR, sharpness, judged by clip-coco)")
+    s.add_argument("checkpoint", help="a photo autoencoder (.pt or run name, e.g. ae-coco-gan)")
+    s.add_argument("--clip", default="clip-coco", help="the contrastive model that judges")
+    s.add_argument("--corpus", default="data/vision/coco64-val")
+    s.add_argument("--n", type=int, default=1000, help="photos")
+    s.add_argument("--against", default=None,
+                   help="pair with another autoencoder's report (a .json, or a run name whose "
+                        "ae-report at the same --n exists)")
+    s.add_argument("--device", default="cpu")
+    s.set_defaults(fn=cmd_ae_report)
+    s = sub.add_parser("ae-compare", help="two ae-reports on the same photos, paired per photo")
+    s.add_argument("a")
+    s.add_argument("b")
+    s.set_defaults(fn=cmd_ae_compare)
     s = sub.add_parser("coco-compare", help="G4c: two coco-reports on the same captions, paired")
     s.add_argument("a")
     s.add_argument("b")

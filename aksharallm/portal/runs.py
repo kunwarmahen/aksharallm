@@ -149,6 +149,9 @@ LAUNCHERS: dict[str, dict] = {
     "ae-coco": {"script": "scripts/audio.sh", "args": ["ae-coco"]},
     "clip-coco": {"script": "scripts/audio.sh", "args": ["clip-coco"]},
     "flow-coco": {"script": "scripts/audio.sh", "args": ["flow-coco"]},
+    # Sharper photos: ae-coco plus a patch discriminator, and flow-coco on its latent.
+    "ae-coco-gan": {"script": "scripts/audio.sh", "args": ["ae-coco-gan"]},
+    "flow-coco-gan": {"script": "scripts/audio.sh", "args": ["flow-coco-gan"]},
     # The speech recogniser (Phase 7, docs/23): same launcher, an `asr:` config.
     "asr-synth": {"script": "scripts/audio.sh", "args": ["asr-synth"]},
     "asr-libri100": {"script": "scripts/audio.sh", "args": ["asr-libri100"]},
@@ -1104,6 +1107,9 @@ class RunStore:
             a = cfg.autoencoder
             arch = (f"continuous picture autoencoder: {a.image_size}px -> {a.grid}x{a.grid}x"
                     f"{a.latent_dim} latent, KL weight {a.kl_weight:g}")
+            if cfg.adversarial.weight > 0:
+                arch += (f", patch discriminator (weight {cfg.adversarial.weight:g}, adaptive) "
+                         f"from step {cfg.adversarial.start_step:,}")
             batch = f"{cfg.train.batch_size} pictures"
             sources = [cfg.data.corpus, f"held out: {cfg.data.holdout}"]
         elif kind == "flow":

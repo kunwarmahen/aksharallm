@@ -38,7 +38,7 @@ from ..audio.ttsreports import finite
 from .jobs import CliJobs, JobError
 
 RESULTS = Path("logs/pictures")
-_NAME = re.compile(r"^(report|gen|clip|coco)-[A-Za-z0-9_.-]+\.json$")
+_NAME = re.compile(r"^(report|gen|clip|coco|recon)-[A-Za-z0-9_.-]+\.json$")
 
 
 class PicturesError(RuntimeError):
@@ -141,15 +141,36 @@ class Pictures:
                 continue
         return out
 
-    def coco_reports(self) -> list[dict]:
+    def photo_coders(self) -> list[dict]:
+        """Autoencoders trained on photos (an `ae-report` measures how sharp they are)."""
+        from ..vision.image import manifest_kind
         out = []
-        for p in sorted((self.root / RESULTS).glob("coco-*.json"),
-                        key=lambda p: p.stat().st_mtime, reverse=True):
+        for c in self.coders():
+            try:
+                blob = torch.load(self.root / c["rel"], map_location="cpu", weights_only=False,
+                                  mmap=True)
+                corpus = ((blob.get("config") or {}).get("data") or {}).get("corpus")
+                if blob.get("stage") == "autoencoder" and corpus and \
+                        manifest_kind(self.root / corpus) == "coco":
+                    adv = (blob.get("config") or {}).get("adversarial") or {}
+                    out.append(c | {"adversarial": float(adv.get("weight") or 0) > 0})
+            except Exception:
+                continue
+        return out
+
+    def coco_reports(self) -> list[dict]:
+        """Photo reports (`coco-*`, drawings) and autoencoder reports (`recon-*`, the real photos
+        through an autoencoder): the same table, so a drawing is read against its ceiling."""
+        out = []
+        files = [*(self.root / RESULTS).glob("coco-*.json"), *(self.root / RESULTS).glob("recon-*.json")]
+        for p in sorted(files, key=lambda p: p.stat().st_mtime, reverse=True):
             try:
                 d = json.loads(p.read_text())
                 out.append({"name": p.name, "run": d.get("run"), "step": d.get("step"),
                             "n": d.get("n"), "guidance": d.get("guidance"),
-                            "top5": d["drawn"]["top5"], "real_top5": d["real"]["top5"]})
+                            "kind": "recon" if p.name.startswith("recon-") else "draw",
+                            "top5": d["drawn"]["top5"], "real_top5": d["real"]["top5"],
+                            "sharpness": d["drawn"].get("sharpness")})
             except (OSError, ValueError, KeyError):
                 continue
         return out
@@ -206,6 +227,7 @@ class Pictures:
                        "generators": self.generators(), "gen_reports": self.gen_reports(),
                        "clips": self.clips(), "clip_reports": self.clip_reports(),
                        "coco_reports": self.coco_reports(),
+                       "photo_coders": self.photo_coders(),
                        "coco": {"train": (self.root / "data/vision/coco64/manifest.json").is_file(),
                                 "val": (self.root / "data/vision/coco64-val/manifest.json").is_file()},
                        "coders": [c["rel"] for c in self.coders()],
@@ -370,6 +392,19 @@ class Pictures:
             return self.jobs.start(["coco-report", rel, "--clip", clip, "--n", str(n),
                                     "--guidance", f"{guidance:g}", "--device", "cpu"],
                                    f"photo report on {rel}, {n} captions, guidance {guidance:g}")
+        if kind == "ae-report":
+            rel = str(spec.get("checkpoint") or "")
+            if rel not in {c["rel"] for c in self.photo_coders()}:
+                raise JobError(f"not a photo autoencoder: {rel!r}")
+            clip = str(spec.get("clip") or "")
+            if clip not in {c["rel"] for c in self.clips()}:
+                raise JobError(f"not a contrastive model checkpoint: {clip!r}")
+            n = int(spec.get("n") or 1000)
+            if not 20 <= n <= 5000:
+                raise JobError("photos 20–5,000")
+            return self.jobs.start(["ae-report", rel, "--clip", clip, "--n", str(n),
+                                    "--device", "cpu"],
+                                   f"how sharp is {rel}: {n} val photos through it")
         if kind == "clip-calibrate":
             rel = str(spec.get("checkpoint") or "")
             if rel not in {c["rel"] for c in self.clips()}:

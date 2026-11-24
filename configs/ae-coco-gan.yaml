@@ -1,0 +1,49 @@
+# Sharper photos (docs/26 § "Sharper photos"): ae-coco with one section added, a patch
+# discriminator from step 10,000 (pictures/adversarial.py). Everything else is ae-coco's, so the
+# two are a controlled pair: same data, seed, steps and latent (8x8x16). Compare with
+#   python -m aksharallm.pictures ae-report ae-coco-gan --against ae-coco
+#
+#   scripts/audio.sh ae-coco-gan
+#   python -m aksharallm.pictures latents ae-coco-gan --corpus data/vision/coco64 \
+#       --out data/pictures/latents-ae-coco-gan
+
+name: ae-coco-gan
+
+autoencoder:
+  image_size: 64
+  channels: [64, 128, 256]
+  latent_dim: 16
+  kl_weight: 1.0e-3
+
+adversarial:
+  weight: 0.5             # times the adaptive factor: half as strong as the pixel loss
+  start_step: 10000       # once the autoencoder reconstructs (ae-coco: ~26 dB by then)
+  channels: [64, 128, 256]
+  lr: 2.0e-4
+
+data:
+  corpus: data/vision/coco64
+  holdout: data/vision/none          # photos have no held-out combination
+
+optim:
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 500
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.99
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/ae-coco-gan
+  batch_size: 64
+  max_steps: 40000
+  eval_every: 2000
+  eval_batches: 8
+  sample_every: 5000
+  sample_images: 256
+  ckpt_every: 2000
+  log_every: 100
+  seed: 1337
+  resume: auto

@@ -110,7 +110,7 @@ grep is one line away from the prose. `tests/test_docs.py` fails if either point
 | 13 | [Evaluation](docs/13-eval.md) | Is the model actually any good? MMLU/ARC/HellaSwag/PIQA scored by log-likelihood, GSM8K, HumanEval executed for real, an LLM-judge — and why 25% on MMLU is not a failure |
 | 14 | [Synthetic data](docs/14-synthetic-data.md) | Making the training set with a local teacher instead of downloading it: a seed grid instead of a temperature, tests that are **executed twice**, near-duplicate detection, and why the rejection tally is the quality signal |
 | 15 | [Mixture of experts](docs/15-moe.md) | More parameters than you compute with: a router, N experts, top-k per token — the load-balancing loss, why upcycling is an identity at init, and the collapse that is invisible in the loss curve |
-| 16 | [The learning path](docs/16-learning-path.md) | The repo as a course: thirty-five lessons that each end in breaking real code and watching a real test go red — and why a lesson only counts once the check has been red *and then* green |
+| 16 | [The learning path](docs/16-learning-path.md) | The repo as a course: thirty-six lessons that each end in breaking real code and watching a real test go red — and why a lesson only counts once the check has been red *and then* green |
 | 17 | [Serving](docs/17-serving.md) | Turning a checkpoint into something you use: a paged KV cache so memory is bounded by what is *used*, continuous batching so thirty conversations share one pass over the weights (50 → 272 tok/s), and an OpenAI-shaped API so existing clients work |
 | 18 | [Looking inside](docs/18-interpretability.md) | Attention maps recomputed from the layer's own inputs, the logit lens (*when* did it decide?), activation patching (which activation actually carries the fact), and a sparse autoencoder that pulls apart superposition |
 | 19 | [Long context](docs/19-long-context.md) | Reading further than the weights were trained for, without retraining anything: RoPE scaling (linear/NTK/YaRN), sliding windows and why they need attention sinks, and the two measurements — loss by position and needle-in-a-haystack — that disagree |
@@ -219,6 +219,7 @@ aksharallm/
 │   │   ├── scenes.py         G4b: captions that also say size and place, two held out
 │   │   ├── clip.py           G4b: our own contrastive model, scored against the reader
 │   │   ├── coco.py           G4c: COCO 2017 packed at 64x64 with its five captions
+│   │   ├── adversarial.py    sharper photos: a patch discriminator beside the pixel loss
 │   │   ├── photos.py         G4c: the photo report, beside the real photos and chance
 │   │   └── drawer.py         one door for G1 and G2: draw, score, report
 │   ├── quant/            int8/int4/NF4 from scratch — see docs/11
@@ -1062,7 +1063,9 @@ judge and a flow model trained on it, every score beside the real photo's. Measu
 own caption is in the top 5 of 1,000 for 18% of captions at guidance 1 and 60% at guidance 3
 (the real photos: 34%, chance 0.5%); recognisable bears, stop signs and kitchens at 64 px, faces
 and lettering smeared. The scenes model draws 91% of seen scene captions right and 85% of held-out
-ones at guidance 3.
+ones at guidance 3. **Sharper photos** (built, queued for the night): the photo autoencoder keeps
+only 54% of a photo's fine detail and alone costs eight points of top 5, so `ae-coco-gan` adds a
+patch discriminator of our own beside its pixel loss, and `flow-coco-gan` draws in its latent.
 - **The next four, built 2026-11-22 and queued for the 11-23 night**: recall capacity (the
   wide models hold all 64 keys the vocabulary has; narrow arms with 16-wide heads ask where a
   DeltaNet memory runs out, docs/19); the hybrid at ~101M against small-student-muon, with the

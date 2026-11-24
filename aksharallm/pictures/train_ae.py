@@ -6,6 +6,11 @@ an `autoencoder:` section. **What to watch:** `kl` should settle small but not a
 means the latent ignores the picture), and the reader's `all` on the val pictures and on the
 held-out purple triangles should reach 100%, as the tokenizer's did.
 
+For photos, an `adversarial:` section adds a patch discriminator from `start_step` on
+(adversarial.py): the line then also shows its loss and how often it is right about real and
+reconstructed patches, the report shows `sharpness`, and "best" is chosen only among checkpoints
+the adversary has trained.
+
 Read with: docs/26-pictures.md -- the chapter this implements; it ends with the order to read
 these files in.
 """
@@ -29,8 +34,9 @@ from ..train import stopfile
 from ..train.pretrain import claim_pid_file
 from ..train.schedule import get_lr
 from ..vision.image import ImageCaptions
+from . import adversarial as adv
 from .autoencoder import AEConfig, PictureAutoencoder
-from .measure import _marks, psnr
+from .measure import _marks, psnr, sharpness
 from .tokenizer import reconstruction_loss
 
 
@@ -63,6 +69,8 @@ class PictureTrainConfig:
 class AERunConfig:
     name: str = "ae-shapes"
     autoencoder: AEConfig = field(default_factory=AEConfig)
+    #: Sharper photos (adversarial.py): weight 0 = off, the default, as every earlier run.
+    adversarial: adv.AdversarialConfig = field(default_factory=adv.AdversarialConfig)
     data: PictureDataConfig = field(default_factory=PictureDataConfig)
     optim: OptimConfig = field(default_factory=OptimConfig)
     train: PictureTrainConfig = field(default_factory=PictureTrainConfig)
@@ -105,7 +113,8 @@ def judge_set(model, ds, n: int, device) -> dict:
     orig = np.asarray(ds.images[idx])
     recon = from_tensor(model(torch.from_numpy(to_tensor(orig)).to(device))[0]
                         .float().clamp(-1, 1).cpu().numpy())
-    out = {"n": n, "psnr": float(np.mean([psnr(a, b) for a, b in zip(orig, recon, strict=True)]))}
+    out = {"n": n, "psnr": float(np.mean([psnr(a, b) for a, b in zip(orig, recon, strict=True)])),
+           "sharpness": sharpness(recon, orig)}
     if getattr(ds.manifest, "kind", "shapes") == "coco":
         return out | {"all": None}       # a photo has no facts to read back: PSNR only
     m = _marks(recon, [ds.manifest.facts[j] for j in idx])
@@ -145,8 +154,20 @@ def main(argv=None) -> int:
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.optim.lr,
                             betas=(cfg.optim.beta1, cfg.optim.beta2),
                             weight_decay=cfg.optim.weight_decay)
+    ad = cfg.adversarial
+    disc = d_opt = None
+    if ad.weight > 0:
+        disc = adv.PatchDiscriminator(ad.channels).to(device)
+        # beta1 0.5, as GAN discriminators are usually trained: momentum lags a moving target.
+        d_opt = torch.optim.AdamW(disc.parameters(), lr=ad.lr, betas=(0.5, 0.9), weight_decay=0.0)
+        print(f"adversary  patch discriminator {disc.n_params() / 1e6:.2f}M params, weight "
+              f"{ad.weight:g} (adaptive), from step {ad.start_step:,}")
 
-    start_step, best = 0, float("inf")
+    start_step, best, best_step = 0, float("inf"), -1
+    # With an adversary, "best" is chosen only among checkpoints it has trained: the pixel loss
+    # rises a little once the decoder trades exact averages for texture, so the plain rule would
+    # keep the blurry checkpoint from before the adversary started, forever.
+    best_from = cfg.adversarial.start_step if cfg.adversarial.weight > 0 else 0
     ckpt_last = out_dir / "ckpt_last.pt"
     resume = str(ckpt_last) if cfg.train.resume == "auto" and ckpt_last.is_file() else (
         cfg.train.resume if cfg.train.resume != "auto" else None)
@@ -157,8 +178,15 @@ def main(argv=None) -> int:
             opt.load_state_dict(saved["optimizer"])
         if "data_rng" in saved:
             train_ds.rng.bit_generator.state = saved["data_rng"]
+        if disc is not None and "disc" in saved:
+            disc.load_state_dict(saved["disc"])
+            d_opt.load_state_dict(saved["disc_optimizer"])
+        elif disc is not None and int(saved.get("step", -1)) >= ad.start_step:
+            raise SystemExit(f"{resume} has no discriminator but is past adversarial.start_step: "
+                             "its adversary would restart from nothing mid-run")
         start_step = int(saved.get("step", -1)) + 1
         best = float(saved.get("best_val", float("inf")))
+        best_step = int(saved.get("best_step", -1))
         del saved
         print(f"resumed {resume} at step {start_step}")
 
@@ -193,12 +221,15 @@ def main(argv=None) -> int:
     def save(path: Path, step: int, **extra):
         torch.save({"model": model.state_dict(), "autoencoder": asdict(cfg.autoencoder),
                     "config": config_to_dict(cfg), "step": step, "best_val": best,
+                    "best_step": best_step,
                     "stage": "autoencoder", "data_rng": train_ds.rng.bit_generator.state,
+                    **({"disc": disc.state_dict(), "disc_optimizer": d_opt.state_dict()}
+                       if disc is not None and "optimizer" in extra else {}),
                     **extra}, path)
 
     def sample(step: int) -> dict:
         s = {"val": judge_set(model, val_ds, cfg.train.sample_images, device)}
-        line = f"val {s['val']['psnr']:.1f}dB" + ("" if s["val"]["all"] is None
+        line = (f"val {s['val']['psnr']:.1f}dB sharpness {s['val']['sharpness']:.2f}") + ("" if s["val"]["all"] is None
                                                   else f" all {s['val']['all'] * 100:.0f}%")
         if holdout:
             s["holdout"] = judge_set(model, holdout, 64, device)
@@ -220,10 +251,28 @@ def main(argv=None) -> int:
         recon, kl = model(x)
         rec = reconstruction_loss(recon, x)
         loss = rec + cfg.autoencoder.kl_weight * kl
+        a_stats = {}
+        adversary_on = disc is not None and step >= ad.start_step
+        if adversary_on:
+            g = adv.g_loss(disc(recon))
+            lam = adv.adaptive_weight(rec, g, adv.last_layer(model), ad.max_adaptive)
+            loss = loss + ad.weight * lam * g
+            a_stats = {"g_loss": float(g.detach()), "adaptive": float(lam)}
         opt.zero_grad(set_to_none=True)
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.optim.grad_clip)
         opt.step()
+        if adversary_on:
+            # The discriminator's own step, on the reconstruction as it was (detached: this
+            # loss must not move the autoencoder).
+            real_l, fake_l = disc(x), disc(recon.detach())
+            dl = adv.d_loss(real_l, fake_l)
+            d_opt.zero_grad(set_to_none=True)
+            dl.backward()
+            d_opt.step()
+            a_stats |= {"d_loss": float(dl.detach()),
+                        "d_real": float((real_l > 0).float().mean()),
+                        "d_fake": float((fake_l < 0).float().mean())}
         r = float(rec.detach())
         ema = r if ema is None else 0.9 * ema + 0.1 * r
 
@@ -232,21 +281,24 @@ def main(argv=None) -> int:
             dt = time.time() - t0
             n_steps = max(cfg.train.log_every, 1) if step > start_step else 1
             rec_ = {"step": step, "loss": float(loss.detach()), "recon": r, "ema": ema,
-                    "kl": float(kl.detach()), "lr": lr, "grad_norm": float(grad_norm),
+                    "kl": float(kl.detach()), "lr": lr, "grad_norm": float(grad_norm), **a_stats,
                     "s_per_step": dt / n_steps,
                     "img_per_sec": n_steps * cfg.train.batch_size / max(dt, 1e-9),
                     "time": time.time(), "elapsed": time.time() - run_t0}
             logf.write(json.dumps(rec_) + "\n")
             logf.flush()
             print(f"step {step:>6}  loss {float(loss.detach()):.4f}  recon {r:.4f} "
-                  f"(ema {ema:.4f})  kl {float(kl.detach()):.4f}  lr {lr:.2e}")
+                  f"(ema {ema:.4f})  kl {float(kl.detach()):.4f}  lr {lr:.2e}"
+                  + (f"  | adv g {a_stats['g_loss']:+.3f} x{a_stats['adaptive']:.3g} "
+                     f"d {a_stats['d_loss']:.3f} (real {a_stats['d_real'] * 100:.0f}% "
+                     f"fake {a_stats['d_fake'] * 100:.0f}% right)" if a_stats else ""))
             t0 = time.time()
 
         if cfg.train.eval_every and step > start_step and step % cfg.train.eval_every == 0:
             val = evaluate(model, val_ds, device, cfg.train.batch_size, cfg.train.eval_batches)
-            improved = val < best
+            improved = step >= best_from and (val < best or best_step < best_from)
             if improved:
-                best = val
+                best, best_step = val, step
                 save(out_dir / "ckpt_best.pt", step)
             logf.write(json.dumps({"step": step, "time": time.time(), "val_loss": val}) + "\n")
             logf.flush()
@@ -277,8 +329,8 @@ def main(argv=None) -> int:
 
     save(ckpt_last, step, optimizer=opt.state_dict())
     val = evaluate(model, val_ds, device, cfg.train.batch_size, cfg.train.eval_batches)
-    if val < best:
-        best = val
+    if step >= best_from and (val < best or best_step < best_from):
+        best, best_step = val, step
         save(out_dir / "ckpt_best.pt", step)
     final = sample(step) if cfg.train.sample_images else None
     reason = why or "max_steps"

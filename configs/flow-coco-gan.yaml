@@ -1,0 +1,56 @@
+# Sharper photos (docs/26 § "Sharper photos"): flow-coco on ae-coco-gan's latent in place of
+# ae-coco's. Nothing else differs, so a coco-report of each on the same 1,000 captions pairs per
+# caption (`pictures coco-compare`), and the sharpness column says whether the adversary's
+# detail survives being drawn rather than reconstructed.
+#
+#   scripts/audio.sh flow-coco-gan          # needs ae-coco-gan and its latents first
+#   python -m aksharallm.pictures coco-report flow-coco-gan --clip clip-coco --guidance 3
+
+name: flow-coco-gan
+
+flow:
+  space: latent
+  image_size: 8           # set from the latents' shape at launch (8x8x16)
+  channels: 16
+  patch: 1                # one token per latent cell: 64 tokens
+  d_model: 512
+  n_layers: 12
+  n_heads: 8
+  dropout: 0.0
+  cfg_drop: 0.1
+  sample_steps: 50
+  tokenizer: checkpoints/ae-coco-gan/ckpt_best.pt
+  books: 2
+  text: checkpoints/small-code-py/ckpt_best.pt
+  text_tokenizer: data/blend/tokenizer.json
+  text_len: 32
+  text_device: auto
+  text_cache: 30000
+
+data:
+  corpus: data/vision/coco64
+  latents: data/pictures/latents-ae-coco-gan
+  codes: data/pictures/none              # no VQ codes for photos: no copy check
+
+optim:
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  warmup_steps: 1000
+  weight_decay: 0.0
+  beta1: 0.9
+  beta2: 0.99
+  grad_clip: 1.0
+  schedule: cosine
+
+train:
+  out_dir: checkpoints/flow-coco-gan
+  batch_size: 128
+  max_steps: 60000
+  eval_every: 2000
+  eval_batches: 8
+  sample_every: 0
+  sample_k: 0
+  ckpt_every: 2000
+  log_every: 50
+  seed: 1337
+  resume: auto

@@ -17,6 +17,15 @@ drawn. Then:
   photos beside it (what "indistinguishable" scores here). Our features, so **not FID**,
   which is the same formula in an Inception network's features (gotcha 12).
 
+* **sharpness**: the drawings' fine detail (power above a quarter cycle per pixel,
+  `measure.sharpness`) against the real photos'; 1.0 is as sharp, below 1 is blurrier. And a
+  third row, **the real photos through the drawer's own autoencoder**: no drawing can be sharper
+  or closer than that, so it is the ceiling a drawing should be read against, where the real
+  photos are the ceiling the autoencoder is read against.
+
+`recon_report` is the autoencoder's own version (`pictures ae-report`): every val photo through
+it, PSNR, sharpness and the same judge, per photo, so two autoencoders pair photo by photo.
+
 Per-caption verdicts (`top5` as one character each) are kept, so two reports on the same
 captions pair with a sign test (`coco-compare`).
 
@@ -50,16 +59,31 @@ def frechet(a: np.ndarray, b: np.ndarray) -> float:
 
 
 @torch.no_grad()
+def through(coder, pictures: np.ndarray, device: str = "cpu", batch: int = 250) -> np.ndarray:
+    """Pictures encoded and decoded by an autoencoder (its latent mean, as a drawing's is)."""
+    from ..vision.image import from_tensor, to_tensor
+    out = []
+    for i in range(0, len(pictures), batch):
+        x = torch.from_numpy(to_tensor(pictures[i:i + batch])).to(device)
+        out.append(from_tensor(coder.decoder(coder.latent(x)).float().clamp(-1, 1).cpu().numpy()))
+    return np.concatenate(out)
+
+
+@torch.no_grad()
 def score(clip, drawn: np.ndarray, real: np.ndarray, captions: list[str], *,
-          device: str = "cpu") -> dict:
-    """Every number of the report, for drawings and for the real photos of the same captions."""
+          device: str = "cpu", coded: np.ndarray | None = None) -> dict:
+    """Every number of the report, for drawings and for the real photos of the same captions
+    (and, given `coded`, for the real photos through the drawer's autoencoder)."""
     from .clip import picture_vectors
+    from .measure import high_frequency
     txt = torch.cat([clip.embed_texts(captions[i:i + 512], device).float().cpu()
                      for i in range(0, len(captions), 512)])
     out = {"n": len(captions)}
     vecs = {}
     shift = np.roll(np.arange(len(captions)), 1)          # caption i paired with photo i-1's
-    for name, pics in (("drawn", drawn), ("real", real)):
+    hf_real = high_frequency(real).mean()
+    sets = [("drawn", drawn), ("real", real)] + ([("coded", coded)] if coded is not None else [])
+    for name, pics in sets:
         img = picture_vectors(clip, pics, device)
         vecs[name] = img.numpy()
         sims = img @ txt.t()
@@ -69,10 +93,13 @@ def score(clip, drawn: np.ndarray, real: np.ndarray, captions: list[str], *,
                      "mismatch": float(sims[np.arange(len(own)), shift].mean()),
                      "top1": float(np.mean(rank < 1)), "top5": float(np.mean(rank < 5)),
                      "top10": float(np.mean(rank < 10)),
-                     "correct": "".join("1" if r < 5 else "0" for r in rank)}
+                     "correct": "".join("1" if r < 5 else "0" for r in rank),
+                     "sharpness": float(high_frequency(pics).mean() / hf_real)}
     half = len(captions) // 2
     out["distance"] = {"drawn_vs_real": frechet(vecs["drawn"], vecs["real"]),
                        "real_half_vs_half": frechet(vecs["real"][:half], vecs["real"][half:])}
+    if coded is not None:
+        out["distance"]["coded_vs_real"] = frechet(vecs["coded"], vecs["real"])
     out["chance"] = {"top1": 1 / len(captions), "top5": 5 / len(captions),
                      "top10": 10 / len(captions)}
     return out
@@ -89,10 +116,61 @@ def report(drawer, clip, corpus, *, n: int = 1000, guidance: float = 3.0, seed: 
     t0 = time.time()
     drawn = np.concatenate([drawer.draw(captions[i:i + 250], guidance=guidance, seed=seed + i,
                                         steps=steps) for i in range(0, len(captions), 250)])
-    out = score(clip, drawn, real, captions, device=device)
+    coder = getattr(drawer, "tokenizer", None)
+    coded = through(coder, real, device) if hasattr(coder, "latent") else None
+    out = score(clip, drawn, real, captions, device=device, coded=coded)
     return out | {"captions": captions, "corpus": str(corpus), "guidance": guidance,
                   "seed": seed, "steps": steps, "clip": clip_path,
                   "seconds": round(time.time() - t0, 1), "_drawn": drawn, "_real": real}
+
+
+@torch.no_grad()
+def recon_report(coder, clip, corpus, *, n: int = 1000, device: str = "cpu",
+                 clip_path: str = "") -> dict:
+    """An autoencoder on the first `n` val photos: PSNR and sharpness per photo, and our judge's
+    numbers for the reconstructions beside the real photos' (`score` with them as "drawn")."""
+    from ..vision.image import ImageCaptions
+    from .measure import high_frequency, psnr
+    ds = ImageCaptions(corpus, split="val", val_frac=1.0)
+    idx = ds.index[:n]
+    real = np.asarray(ds.images[idx])
+    captions = [ds.manifest.facts[int(i)]["captions"][0] for i in idx]
+    t0 = time.time()
+    recon = through(coder, real, device)
+    out = score(clip, recon, real, captions, device=device) if clip is not None else {"n": n}
+    hf_r, hf_x = high_frequency(real), high_frequency(recon)
+    out["per_photo"] = {"psnr": [round(psnr(a, b), 3) for a, b in zip(real, recon, strict=True)],
+                        "sharpness": [round(float(x / max(r, 1e-12)), 4)
+                                      for x, r in zip(hf_x, hf_r, strict=True)]}
+    out["psnr"] = float(np.mean(out["per_photo"]["psnr"]))
+    out["sharpness"] = float(hf_x.mean() / hf_r.mean())
+    return out | {"captions": captions, "corpus": str(corpus), "clip": clip_path,
+                  "seconds": round(time.time() - t0, 1), "_drawn": recon, "_real": real}
+
+
+def _closer(x: float, y: float) -> int:
+    """+1 if `y` is closer to 1 than `x` on a log scale (as sharp as the real photo), -1 if
+    farther, 0 if as close: half the detail and twice the detail are equally wrong."""
+    dx, dy = abs(float(np.log(max(x, 1e-9)))), abs(float(np.log(max(y, 1e-9))))
+    return (dy < dx) - (dy > dx)
+
+
+def recon_compare(a: dict, b: dict) -> dict:
+    """Two autoencoders on the same photos, paired: on which photo is each one's PSNR higher,
+    and whose fine detail is closer to the real photo's (|log sharpness| smaller)."""
+    from ..eval.versus import sign_test
+    if a["captions"] != b["captions"]:
+        raise ValueError("the reports reconstructed different photos; they cannot be paired")
+    out = {"n": len(a["captions"])}
+    pa, pb = a["per_photo"], b["per_photo"]
+    wins = {"psnr": [(y > x) - (y < x) for x, y in zip(pa["psnr"], pb["psnr"], strict=True)],
+            "sharpness": [_closer(x, y) for x, y in zip(pa["sharpness"], pb["sharpness"],
+                                                         strict=True)]}
+    for k, w in wins.items():
+        b_only, a_only = w.count(1), w.count(-1)
+        out[k] = {"a": a[k], "b": b[k], "b_better": b_only, "a_better": a_only,
+                  "p": sign_test(b_only, a_only)}
+    return out
 
 
 def compare(a: dict, b: dict) -> dict:

@@ -214,6 +214,19 @@
         <label class="field">Guidance <input id="pc-coco-g" type="number" min="0" max="10" step="0.5" value="3"></label>
         <button id="pc-coco-run" type="button">Make a photo report</button>
       </div>
+      <div class="row">
+        <label class="field">Photo autoencoder <select id="pc-ae-coder"></select></label>
+        <label class="field">Photos <input id="pc-ae-n" type="number" min="20" max="5000" value="1000"></label>
+        <button id="pc-ae-run" type="button">How sharp is it?</button>
+      </div>
+      <p class="panel-note">
+        <strong>Sharper photos.</strong> A drawing can be no sharper than the autoencoder that
+        paints it, so “How sharp is it?” passes the real photos through an autoencoder and
+        judges what comes back, in the same table (its reports are the <code>recon-…</code>
+        ones). <code>ae-coco</code> was trained on pixel error alone and keeps about half the
+        fine detail; <code>ae-coco-gan</code> adds a discriminator that tells real patches from
+        reconstructed ones, so a smear stops being the cheapest guess.
+      </p>
       <p class="panel-note">
         Train with the dashboard's <strong>Start</strong>: <code>ae-coco</code> (the photo
         autoencoder), <code>clip-coco</code> (the judge), then <code>flow-coco</code>. From this

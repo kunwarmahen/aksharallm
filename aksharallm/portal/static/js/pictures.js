@@ -209,15 +209,25 @@ async function showCocoReport(name) {
   try { r = await api(`/api/pictures/report?name=${encodeURIComponent(name)}`); } catch (e) {
     flash(`pictures: ${e.message}`, 'error'); return;
   }
+  const recon = name.startsWith('recon-');
   const row = (label, x) => `<tr><td>${label}</td><td>${fmt.num(x.match, 3)}</td><td>${fmt.num(x.mismatch, 3)}</td>`
-    + `<td>${pct(x.top1)}</td><td><b>${pct(x.top5)}</b></td><td>${pct(x.top10)}</td></tr>`;
+    + `<td>${pct(x.top1)}</td><td><b>${pct(x.top5)}</b></td><td>${pct(x.top10)}</td>`
+    + `<td>${x.sharpness == null ? '–' : fmt.num(x.sharpness, 2)}</td></tr>`;
+  const d = r.distance || {};
   $('#pc-coco-table').innerHTML = '<thead><tr><th></th><th>match</th><th>another photo’s caption</th>'
-    + '<th>top-1</th><th>top-5</th><th>top-10</th></tr></thead><tbody>'
-    + row('real photos', r.real) + row('<b>drawn</b>', r.drawn)
-    + `<tr class="dim"><td>chance</td><td>–</td><td>–</td><td>${pct(r.chance.top1)}</td><td>${pct(r.chance.top5)}</td><td>${pct(r.chance.top10)}</td></tr></tbody>`;
-  $('#pc-coco-note').innerHTML = `${fmt.int(r.n)} captions, guidance ${fmt.num(r.guidance, 1)}, step ${fmt.int(r.step)}, `
-    + `judged by <code>${escHtml(r.clip || '')}</code>. Distance to the real photos in our features: drawings `
-    + `<b>${fmt.num(r.distance.drawn_vs_real, 4)}</b>, two halves of the real photos ${fmt.num(r.distance.real_half_vs_half, 4)}.`;
+    + '<th>top-1</th><th>top-5</th><th>top-10</th><th>sharpness</th></tr></thead><tbody>'
+    + row('real photos', r.real)
+    + (r.coded ? row('real photos through its autoencoder', r.coded) : '')
+    + row(recon ? '<b>reconstructed</b>' : '<b>drawn</b>', r.drawn)
+    + `<tr class="dim"><td>chance</td><td>–</td><td>–</td><td>${pct(r.chance.top1)}</td><td>${pct(r.chance.top5)}</td><td>${pct(r.chance.top10)}</td><td>–</td></tr></tbody>`;
+  $('#pc-coco-note').innerHTML = (recon
+    ? `${fmt.int(r.n)} val photos through the autoencoder <code>${escHtml(r.run || '')}</code> (step ${fmt.int(r.step)}), PSNR ${fmt.num(r.psnr, 2)} dB, `
+    : `${fmt.int(r.n)} captions, guidance ${fmt.num(r.guidance, 1)}, step ${fmt.int(r.step)}, `)
+    + `judged by <code>${escHtml(r.clip || '')}</code>. Distance to the real photos in our features: ${recon ? 'reconstructions' : 'drawings'} `
+    + `<b>${fmt.num(d.drawn_vs_real, 4)}</b>`
+    + (d.coded_vs_real != null ? `, the real photos through its autoencoder ${fmt.num(d.coded_vs_real, 4)}` : '')
+    + `, two halves of the real photos ${fmt.num(d.real_half_vs_half, 4)}. `
+    + '<b>Sharpness</b> is fine detail against the real photos’: 1.00 as sharp, below 1 blurrier.';
   $('#pc-coco-gallery').innerHTML = (r.gallery_png || []).map((src) => `<figure><img src="${src}" loading="lazy" `
     + 'alt="real photos above, drawings of their captions below"><figcaption>real photos above, drawings of the same captions below: '
     + (r.captions || []).slice(0, 16).map((c, i) => `${i + 1}. ${escHtml(c)}`).join(' · ') + '</figcaption></figure>').join('');
@@ -299,6 +309,10 @@ async function load() {
   const cc = clips.find((x) => x.rel.includes('clip-coco'));
   if (cc) $('#pc-coco-clip').value = cc.rel;
   $('#pc-coco-run').disabled = !cocoGens.length || !clips.length;
+  const pcoders = res.photo_coders || [];
+  $('#pc-ae-coder').innerHTML = pcoders.map((c) => `<option value="${escHtml(c.rel)}">${escHtml(c.rel)} — step ${fmt.int(c.step)}`
+    + `${c.adversarial ? ' (with a discriminator)' : ''}</option>`).join('');
+  $('#pc-ae-run').disabled = !pcoders.length || !clips.length;
   const cd = res.coco || {};
   $('#pc-coco-data').textContent = cd.train && cd.val
     ? 'data/vision/coco64 and coco64-val are packed.'
@@ -340,6 +354,10 @@ registerTab('pictures', {
     });
     $('#pc-scenes').onclick = () => pc.job.start({ kind: 'scenes' });
     $('#pc-coco-report').onchange = (e) => showCocoReport(e.target.value);
+    $('#pc-ae-run').onclick = () => pc.job.start({
+      kind: 'ae-report', checkpoint: $('#pc-ae-coder').value, clip: $('#pc-coco-clip').value,
+      n: Number($('#pc-ae-n').value) || 1000,
+    });
     $('#pc-coco-run').onclick = () => pc.job.start({
       kind: 'coco-report', checkpoint: $('#pc-coco-gen').value, clip: $('#pc-coco-clip').value,
       n: Number($('#pc-coco-n').value) || 200, guidance: Number($('#pc-coco-g').value),
